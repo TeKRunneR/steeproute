@@ -55,7 +55,8 @@ dev = [
 
 [project.scripts]
 # Add script entry points here:
-steeproute = "steeproute:main"
+steeproute = "steeproute.cli.query:main"
+steeproute-setup = "steeproute.cli.setup:main"
 
 
 # ---- Build system ----
