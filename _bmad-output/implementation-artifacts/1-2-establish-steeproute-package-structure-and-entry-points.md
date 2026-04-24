@@ -299,4 +299,4 @@ Claude Opus 4.7 (`claude-opus-4-7`), via Claude Code CLI on Windows 11.
 
 | Date | Change | Commit |
 |---|---|---|
-| 2026-04-24 | Establish `src/steeproute/` package structure: create `cli/`, `pipeline/`, `solver/` sub-packages; add 7 flat-module placeholders (`validator`, `cache`, `output`, `progress`, `errors`, `models`, `provenance`); wire `steeproute` and `steeproute-setup` console-script entry points; delete template residue (`main.py`, `steeproute.py`). Story 1.2 ready for review. | (pending) |
+| 2026-04-24 | Establish `src/steeproute/` package structure: create `cli/`, `pipeline/`, `solver/` sub-packages; add 7 flat-module placeholders (`validator`, `cache`, `output`, `progress`, `errors`, `models`, `provenance`); wire `steeproute` and `steeproute-setup` console-script entry points; delete template residue (`main.py`, `steeproute.py`). Story 1.2 ready for review. | `d997d3d` |
