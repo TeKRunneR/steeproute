@@ -1,0 +1,96 @@
+# generated: 2026-04-24
+# last_updated: 2026-04-24
+# project: bmad-test
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: {project-root}/_bmad-output/implementation-artifacts
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog → in-progress: Automatically when first story is created (via create-story)
+#   - in-progress → done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - Developer typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+
+generated: 2026-04-24
+last_updated: 2026-04-24
+project: bmad-test
+project_key: NOKEY
+tracking_system: file-system
+story_location: "{project-root}/_bmad-output/implementation-artifacts"
+
+development_status:
+  epic-1: in-progress
+  1-1-scaffold-project-via-simple-modern-uv-copier-template: ready-for-dev
+  1-2-establish-steeproute-package-structure-and-entry-points: backlog
+  1-3-customize-ci-workflow-and-establish-three-layer-test-structure: backlog
+  1-4-implement-shared-error-hierarchy-and-run-entry-point-wrapper: backlog
+  1-5-define-full-click-option-decorator-surface-for-both-clis: backlog
+  1-6-validate-area-specification-at-cli-boundary: backlog
+  1-7-write-cli-smoke-tests-covering-help-version-and-exit-code-paths: backlog
+  epic-1-retrospective: optional
+
+  epic-2: backlog
+  2-1-implement-pipeline-stages-1-2-osm-ingestion-trail-filtering-and-commit-real-osm-test-fixture: backlog
+  2-2-implement-pipeline-stages-3-4-2d-polyline-smoothing-and-resampling: backlog
+  2-3-implement-pipeline-stage-5-dem-elevation-sampling-and-commit-real-dem-test-fixture: backlog
+  2-4-implement-pipeline-stages-6-7-elevation-smoothing-and-per-edge-metrics: backlog
+  2-5-implement-pipeline-orchestrator-and-integration-test-stages-1-7-end-to-end-on-real-fixture: backlog
+  2-6-implement-cache-key-hashing-manifest-schema-and-provenance-helpers: backlog
+  2-7-implement-atomic-cache-write-read-and-index-maintenance: backlog
+  2-8-wire-steeproute-setup-end-to-end-with-force-refresh-semantics-on-real-fixture: backlog
+  2-9-handle-source-unavailable-errors-and-emit-osm-age-warnings: backlog
+  2-10-implement-query-side-fail-fast-on-unprepared-area: backlog
+  epic-2-retrospective: optional
+
+  epic-3: backlog
+  3-1-core-query-side-data-models: backlog
+  3-2-pipeline-stage-8-climb-detection: backlog
+  3-3-pipeline-stage-9-contracted-climb-graph-construction: backlog
+  3-4-topntracker-with-jaccard-distinctness: backlog
+  3-5-exhaustive-enumerator-oracle-with-its-own-correctness-tests: backlog
+  3-6-grasp-solver-main-loop: backlog
+  3-7-grasp-vs-exhaustive-ci-quality-gate: backlog
+  3-8-metamorphic-invariants-test-suite: backlog
+  3-9-runtime-route-validation: backlog
+  3-10-html-json-output-rendering-with-vendored-assets: backlog
+  3-11-wire-query-cli-end-to-end-with-validation-driven-exit-code: backlog
+  epic-3-retrospective: optional
+
+  epic-4: backlog
+  4-1-progressevent-throttled-callback-cli-renderer-with-quiet-verbose: backlog
+  4-2-time-budget-and-stagnation-termination: backlog
+  4-3-interrupt-handling-with-best-so-far-preservation: backlog
+  4-4-graceful-degradation-messaging-for-sparse-areas: backlog
+  4-5-run-summary-on-stdout: backlog
+  epic-4-retrospective: optional
+
+  epic-5: backlog
+  5-1-regression-golden-test-harness-and-update-regression-workflow: backlog
+  5-2-pin-2-3-grenoble-regression-fixtures-with-zero-tolerance-ci-gate: backlog
+  5-3-readme-gallery-with-3-5-pre-computed-example-reports: backlog
+  5-4-readme-known-limitations-quickstart-sections: backlog
+  5-5-final-ci-threshold-tightening-and-linux-best-effort-job: backlog
+  epic-5-retrospective: optional
