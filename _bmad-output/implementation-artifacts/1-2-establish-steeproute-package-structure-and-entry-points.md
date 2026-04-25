@@ -1,6 +1,6 @@
 # Story 1.2: Establish steeproute package structure and entry points
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -295,8 +295,20 @@ Claude Opus 4.7 (`claude-opus-4-7`), via Claude Code CLI on Windows 11.
 - `main.py` (repo-root `uv init` stub; disposable per story AC #1)
 - `src/steeproute/steeproute.py` (simple-modern-uv template stub; disposable per story AC #1)
 
+### Review Findings
+
+Code review ran 2026-04-25 across three layers (Blind Hunter, Edge Case Hunter, Acceptance Auditor). 17 raw findings raised (Blind: 15, Edge: 4 with 2 overlaps), 0 actionable. All dismissed after verification:
+
+- **Spec-sanctioned scaffolding** (placeholder modules, no tests, two-binary architecture, forward-reference docstrings) — explicitly mandated by epic AC and architecture; Story 1.7 owns smoke tests.
+- **False positives from missing context** — `py.typed` exists (preserved from Story 1.1); `review` is in the sprint-status STATUS DEFINITIONS schema; hatchling DOES wrap `sys.exit(main())` (verified empirically).
+- **Verified non-issues** — `grep` across `Makefile`, `.github/`, `devtools/`, `docs/`, `README.md`, `pyproject.toml` confirmed zero orphan references to deleted `main.py` and `steeproute.py`.
+- **Out-of-scope concerns** — `print()` stream-discipline matches architecture §Logging conventions; cp1252 encoding risk speculative (current strings are pure ASCII).
+
+Acceptance Auditor subagent hit a rate limit; re-run in main context with full spec/architecture/diff loaded → 0 AC violations, 0 scope creep, File List matches diff.
+
 ### Change Log
 
 | Date | Change | Commit |
 |---|---|---|
 | 2026-04-24 | Establish `src/steeproute/` package structure: create `cli/`, `pipeline/`, `solver/` sub-packages; add 7 flat-module placeholders (`validator`, `cache`, `output`, `progress`, `errors`, `models`, `provenance`); wire `steeproute` and `steeproute-setup` console-script entry points; delete template residue (`main.py`, `steeproute.py`). Story 1.2 ready for review. | `d997d3d` |
+| 2026-04-25 | Code review complete; 17 findings raised across 3 layers, all dismissed after verification. Status → `done`. | (this commit) |
