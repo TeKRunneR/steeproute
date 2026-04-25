@@ -1,6 +1,6 @@
 # Story 1.3: Customize CI workflow and establish three-layer test structure
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -425,4 +425,4 @@ uv run pytest --cov=src/steeproute --cov-report=xml --cov-report=term
 
 | Date | Change | Commit |
 |---|---|---|
-| 2026-04-25 | Customize CI workflow (Windows-only, Python 3.13 only, explicit check-only steps replacing `devtools/lint.py`); establish three-layer test structure (`tests/{unit,integration,e2e}/` with `conftest.py` per layer + top-level); add `pytest-cov` + coverage scaffolding (`fail_under=0`); tighten pytest discovery globs; add `[tool.ruff] extend-exclude` for `.claude`/`_bmad`/`_bmad-output`; delete Unix-only `Makefile`; mark all 6 Story-1.1 deferred items resolved. Story 1.3 complete. | _(pending commit)_ |
+| 2026-04-25 | Customize CI workflow (Windows-only, Python 3.13 only, explicit check-only steps replacing `devtools/lint.py`); establish three-layer test structure (`tests/{unit,integration,e2e}/` with `conftest.py` per layer + top-level); add `pytest-cov` + coverage scaffolding (`fail_under=0`); tighten pytest discovery globs; add `[tool.ruff] extend-exclude` for `.claude`/`_bmad`/`_bmad-output`; delete Unix-only `Makefile`; mark all 6 Story-1.1 deferred items resolved. Story 1.3 complete. | `b977ce7` |
