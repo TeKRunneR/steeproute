@@ -1,6 +1,6 @@
 # Story 1.4: Implement shared error hierarchy and run_entry_point wrapper
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -394,6 +394,20 @@ uv run steeproute-setup      → "steeproute-setup (data preparation CLI) - stub
 
 ### Change Log
 
-| Date | Author | Description |
-|---|---|---|
-| 2026-04-25 | Yann (Claude Opus 4.7) | Story 1.4 implemented: `SteeprouteError` hierarchy in `errors.py`; `run_entry_point` wrapper + `set_verbose` hook in `cli/_shared.py`; both CLI `main` functions wrapped via `_main`/`main` split; 16 new unit tests. All four CI gates green on Windows (ruff, ruff format, basedpyright 0/0/0, pytest 17 passed). |
+| Date | Author | Description | Commit |
+|---|---|---|---|
+| 2026-04-25 | Yann (Claude Opus 4.7) | Story 1.4 implemented: `SteeprouteError` hierarchy in `errors.py`; `run_entry_point` wrapper + `set_verbose` hook in `cli/_shared.py`; both CLI `main` functions wrapped via `_main`/`main` split; 16 new unit tests. All four CI gates green on Windows (ruff, ruff format, basedpyright 0/0/0, pytest 17 passed). | `b21e315` |
+| 2026-04-25 | Yann (Claude Sonnet 4.6) | Lightweight inline review: 3 findings raised, all dismissed (D1: hyphen vs em-dash in `SolverError` docstring — non-functional; D2: mild test redundancy with documentary value for Story 1.5 — kept; D3: bare-exception fallthrough is intentional per Architecture §Cat 10 anti-pattern rule). No code changes. | — |
+| 2026-04-25 | Yann (Claude Opus 4.7) | Close-out: status review → done. | (this commit) |
+
+### Review Findings
+
+**Reviewer:** Claude Sonnet 4.6 (light inline review at user request, given small surface — 2 implementation files, 2 test files, ~180 lines total).
+**Date:** 2026-04-25.
+**Verdict:** 0 blockers, 0 requested changes. All 3 findings dismissed.
+
+| # | Severity | File | Finding | Resolution |
+|---|---|---|---|---|
+| D1 | Trivial | `src/steeproute/errors.py:37` | `SolverError` docstring uses plain hyphen `-` instead of em-dash `—` as quoted in Architecture §Cat 10. | **Dismissed** — docstrings are not user-facing strings; functionally identical; not worth a touch-up commit. |
+| D2 | Trivial | `tests/unit/test_run_entry_point.py:79` | `test_run_entry_point_omits_detail_when_verbose_is_false` exercises the same code path as the basic exit-2 test (no detail in either). Mild redundancy. | **Dismissed** — explicit framing ("verbose=False → no detail") forms a natural pair with the verbose=True test and provides documentary value when Story 1.5 wires `--verbose`. Removing it would weaken the spec-as-tests. |
+| D3 | Info | `src/steeproute/cli/_shared.py:20-29` | If `main_fn` raises an exception other than `PreExecutionError` or `KeyboardInterrupt`, `code` is never assigned and the exception unwinds the stack with a real traceback. | **Dismissed** — correct and intentional per Architecture §Cat 10 ("bugs should crash loudly with a real traceback") and the story's anti-pattern rule ("Do NOT add a bare `except Exception`"). The behavior is the design.
