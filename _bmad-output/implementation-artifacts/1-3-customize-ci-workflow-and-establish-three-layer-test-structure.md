@@ -1,6 +1,6 @@
 # Story 1.3: Customize CI workflow and establish three-layer test structure
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -421,8 +421,19 @@ uv run pytest --cov=src/steeproute --cov-report=xml --cov-report=term
 - `.gitignore` — already covers `coverage.xml`, `.coverage*`, `htmlcov/` (per template); no edits needed.
 - `LICENSE`, `README.md`, `.copier-answers.yml`, `.python-version`, `docs/**` — out of scope.
 
+### Review Findings
+
+Lightweight inline review on 2026-04-25 (config/scaffolding-only diff; full multi-layer adversarial review skipped per per-story judgment). All 14 ACs satisfied; no blockers.
+
+- [x] [Review][Decision] AC #14 ("one atomic commit") landed as two commits — impl (`b977ce7`) + status/changelog (`a24ad02`). Spirit of the AC (no fragmentation) satisfied; the bookkeeping commit is a chicken-and-egg artifact of recording your own SHA in the change log.
+- [x] [Review][Defer] Coverage `omit` list missing — `[tool.coverage.run]` has only `source = ["src/steeproute"]`. Architecture §11e excludes `templates/` and `cli/` from coverage targets. Doesn't matter at `fail_under=0`; deferred to Story 5.5 before threshold raise (see `deferred-work.md`).
+- [x] [Review][Decision] `actions/checkout@v6` ref unverified — inherited from template, accepted in Story 1.1 review with "template-author-maintains" rationale. CI fails loudly on first push if the ref is wrong; not 1.3's call.
+- [x] [Review][Decision] `norecursedirs` includes `.git` defensively — pytest never traverses there anyway. Harmless redundancy; not worth a follow-up commit.
+- [x] [Review][Decision] `CoverageWarning: No data was collected` on every test run — benign; resolves naturally when Story 1.4+ adds tests that import `src/steeproute`. Don't silence.
+
 ### Change Log
 
 | Date | Change | Commit |
 |---|---|---|
 | 2026-04-25 | Customize CI workflow (Windows-only, Python 3.13 only, explicit check-only steps replacing `devtools/lint.py`); establish three-layer test structure (`tests/{unit,integration,e2e}/` with `conftest.py` per layer + top-level); add `pytest-cov` + coverage scaffolding (`fail_under=0`); tighten pytest discovery globs; add `[tool.ruff] extend-exclude` for `.claude`/`_bmad`/`_bmad-output`; delete Unix-only `Makefile`; mark all 6 Story-1.1 deferred items resolved. Story 1.3 complete. | `b977ce7` |
+| 2026-04-25 | Lightweight inline review complete — no blockers; 1 finding deferred to Story 5.5 (coverage `omit` list before threshold raise). Status → done. | _(this commit)_ |
