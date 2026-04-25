@@ -27,7 +27,6 @@ classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.13",
-    "Programming Language :: Python :: 3.14",
     "Typing :: Typed",
     # Include this to avoid accidentally publishing to PyPI:
     # "Private :: Do Not Upload",
@@ -45,6 +44,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
+    "pytest-cov>=6.0.0",
     "pytest-sugar>=1.1.1",
     "ruff>=0.15.1",
     "codespell>=2.4.1",
@@ -89,6 +89,12 @@ packages = ["src/steeproute"]
 [tool.ruff]
 # Set as desired, typically 88 (black standard) or 100 (wide).
 line-length = 100
+# Ruff's default exclude covers .git, .venv, dist, etc. but not these
+# project-specific non-source dirs:
+#   .claude/        — Claude Code config + skills (Python files inside, not ours)
+#   _bmad/          — BMAD workflow state
+#   _bmad-output/   — planning artifacts (markdown only, defensive)
+extend-exclude = [".claude", "_bmad", "_bmad-output"]
 
 [tool.ruff.lint]
 select = [
@@ -161,12 +167,27 @@ reportUnreachable = false
 # skip = "foo.py,bar.py"
 
 [tool.pytest.ini_options]
-python_files = ["*.py"]
+python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 testpaths = [
-    "src",
     "tests",
 ]
-norecursedirs = []
+norecursedirs = [
+    "_bmad",
+    "_bmad-output",
+    ".claude",
+    ".venv",
+    ".git",
+    "node_modules",
+    "dist",
+    ".pytest_cache",
+    "__pycache__",
+]
 filterwarnings = []
+
+[tool.coverage.run]
+source = ["src/steeproute"]
+
+[tool.coverage.report]
+fail_under = 0
