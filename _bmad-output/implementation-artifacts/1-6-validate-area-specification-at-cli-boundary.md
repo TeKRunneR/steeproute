@@ -1,6 +1,6 @@
 # Story 1.6: Validate area specification at CLI boundary (FR1, FR2)
 
-Status: review
+Status: done
 
 ## Story
 
@@ -144,4 +144,19 @@ uv run pytest --cov                → 117 passed in 0.61s; coverage 95% overall
 
 | Date | Author | Description | Commit |
 |---|---|---|---|
-| 2026-05-04 | Yann (Claude Opus 4.7) | Story 1.6 implemented: `LatLonParamType` now raises `BadCLIArgError` on parse + range failure (lat ∈ [-90,90], lon ∈ [-180,180]); new `validate_area_size` helper enforces `π·r² ≤ --area-cap` from `cli/query.py` body; `verbose_option` promoted to `is_eager=True` with named callback so `BadCLIArgError` from `LatLonParamType.convert` still triggers `run_entry_point`'s `detail` line under `--verbose`. 14 new unit tests in `test_area_parsing.py` + 2 updated assertions in `test_cli_options.py`. All four CI gates green on Windows (ruff, ruff format, basedpyright 0/0/0, pytest 117 passed, 95% coverage; `cli/_shared.py` 100%). | (this commit) |
+| 2026-05-04 | Yann (Claude Opus 4.7) | Story 1.6 implemented: `LatLonParamType` now raises `BadCLIArgError` on parse + range failure (lat ∈ [-90,90], lon ∈ [-180,180]); new `validate_area_size` helper enforces `π·r² ≤ --area-cap` from `cli/query.py` body; `verbose_option` promoted to `is_eager=True` with named callback so `BadCLIArgError` from `LatLonParamType.convert` still triggers `run_entry_point`'s `detail` line under `--verbose`. 14 new unit tests in `test_area_parsing.py` + 2 updated assertions in `test_cli_options.py`. All four CI gates green on Windows (ruff, ruff format, basedpyright 0/0/0, pytest 117 passed, 95% coverage; `cli/_shared.py` 100%). | `7046736` |
+| 2026-05-04 | Yann (Claude Opus 4.7) | Lightweight inline review: 4 findings raised, all dismissed or deferred. D1 (negative `--radius` silently accepted) deferred to whichever epic first consumes `--radius` (see deferred-work.md). D2 (raw ValueError on wrong-length tuple input) dismissed — not user-reachable. D3 (substring-only assertion in area-cap test) dismissed — intentional looseness for format evolution. D4 (NaN/Inf not explicitly tested) dismissed — behavior correct by code reasoning. No code changes. | — |
+| 2026-05-04 | Yann (Claude Opus 4.7) | Close-out: status review → done. | (this commit) |
+
+### Review Findings
+
+**Reviewer:** Claude Opus 4.7 (lightweight inline review at user request, given small surface — `LatLonParamType` extension + `validate_area_size` helper + eager `--verbose` callback; ~50 line production diff + 1 new test file).
+**Date:** 2026-05-04.
+**Verdict:** 0 blockers, 0 requested changes. 4 findings (3 dismissed, 1 deferred to a future story).
+
+| # | Severity | File | Finding | Resolution |
+|---|---|---|---|---|
+| D1 | Low | `cli/_shared.py::validate_area_size` | Negative `--radius` is silently accepted: `π·(-10)² = 314 km² < 500 km²`, so `steeproute --center 45,6 --radius -10` exits 0 today. | **Deferred** to whichever epic first consumes `--radius` as a real geometric value (Epic 2 setup-side area polygon, or Epic 3 query-side area resolution). Out of strict AC #2 scope (cap-exceeding semantics, not radius validity). Logged in `deferred-work.md`. |
+| D2 | Low | `cli/_shared.py::LatLonParamType.convert` (tuple branch) | A wrong-length tuple input would raise raw `ValueError` instead of `BadCLIArgError`, bypassing our error contract. | **Dismissed** — click only feeds tuples back through `convert` for default round-tripping, and we never declare an out-of-range or wrong-length default. Not user-reachable. |
+| D3 | Low | `tests/unit/test_area_parsing.py::test_validate_area_size_rejects_above_cap` | Loose assertions (substring-only on `--radius`/`--area-cap`/`30`/`500`/`km`) won't catch format drift on `~`, `²`, or message structure. AC #2 spells out the exact format. | **Dismissed** — intentional looseness lets the message phrasing evolve (e.g. better radius rounding) without churning tests. Exact format verified manually + visible in Completion Notes smoke output. |
+| D4 | Low | (no test) | NaN/Inf in lat/lon are correctly rejected by the chained range comparison (NaN comparisons are always False → `not False` → True → raise) but no test asserts this explicitly. | **Dismissed** — behavior correct by code reasoning; an explicit test would be belt-and-suspenders for inputs the typical user can't produce. |

@@ -28,3 +28,13 @@ Items deferred during code review that are owned by a future story.
 | # | Finding | File | Detail |
 |---|---------|------|--------|
 | 1 | Coverage `omit` list missing | `pyproject.toml` `[tool.coverage.run]` | Story 1.3 set `source = ["src/steeproute"]` and `fail_under = 0` as scaffolding. Architecture §Category 11e excludes `src/steeproute/templates/` and `src/steeproute/cli/` (beyond smoke tests) from coverage targets. When Story 5.5 raises `fail_under` to 80%/95%, it must add `omit = ["src/steeproute/templates/*", "src/steeproute/cli/*"]` to `[tool.coverage.run]` so the threshold is computed against pure-logic modules only. Threshold-raise without omit-list = false-fail on cli/templates. |
+
+---
+
+## Deferred from: lightweight review of 1-6-validate-area-specification-at-cli-boundary.md (2026-05-04)
+
+**Target story: whichever epic first consumes `--radius` as a real value** (likely Epic 2 — `steeproute-setup` area-polygon construction, or Epic 3 — query-side area resolution).
+
+| # | Finding | File | Detail |
+|---|---------|------|--------|
+| 1 | Negative `--radius` silently accepted | `src/steeproute/cli/_shared.py` (`validate_area_size`) | `click.FLOAT` does not enforce non-negativity, and `validate_area_size` checks `π·r² > area_cap` which is symmetric in `r` (negative radius → positive area, may be < cap). So `steeproute --center 45,6 --radius -10` exits 0 today. Out of scope for Story 1.6 (AC #2 is strictly about cap-exceeding, not radius validity). The right enforcement site is wherever `--radius` first becomes a real geometric value (area polygon construction). Either: (a) add `radius > 0` check to `validate_area_size` and rename/split, or (b) reject in the consuming code with a context-specific error. Pick once we know the consumer. |
