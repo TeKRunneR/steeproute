@@ -1,0 +1,170 @@
+"""Unit tests for FR1/FR2 area-spec validation at the CLI boundary (Story 1.6)."""
+
+import math
+import sys
+from unittest import mock
+
+import pytest
+from click.testing import CliRunner
+
+from steeproute.cli._shared import LAT_LON, is_verbose, validate_area_size
+from steeproute.cli.query import cli as query_cli
+from steeproute.cli.query import main as query_main
+from steeproute.cli.setup import cli as setup_cli
+from steeproute.errors import BadCLIArgError
+
+# --- LatLonParamType: range validation + BadCLIArgError surfacing (AC #1) ---
+
+
+@pytest.mark.parametrize(
+    ("value", "violation_token"),
+    [
+        ("abc,def", "LAT,LON"),  # syntactic: non-numeric
+        ("45.07", "LAT,LON"),  # syntactic: missing comma
+        ("45.07,6.11,extra", "LAT,LON"),  # syntactic: too many fields
+        ("95.0,0.0", "latitude"),  # range: lat > 90
+        ("-95.0,0.0", "latitude"),  # range: lat < -90
+        ("45.0,181.0", "longitude"),  # range: lon > 180
+        ("45.0,-181.0", "longitude"),  # range: lon < -180
+    ],
+)
+def test_lat_lon_convert_raises_bad_cli_arg_error(value: str, violation_token: str) -> None:
+    """convert() raises BadCLIArgError naming --center and the violation."""
+    with pytest.raises(BadCLIArgError) as exc_info:
+        LAT_LON.convert(value, None, None)
+    msg = exc_info.value.user_message
+    assert "--center" in msg
+    assert violation_token in msg
+
+
+def test_lat_lon_convert_accepts_boundary_values() -> None:
+    """The [-90, 90] x [-180, 180] envelope is inclusive at the boundary."""
+    assert LAT_LON.convert("90.0,180.0", None, None) == (90.0, 180.0)
+    assert LAT_LON.convert("-90.0,-180.0", None, None) == (-90.0, -180.0)
+
+
+# --- validate_area_size: AC #2 message format ---
+
+
+def test_validate_area_size_passes_below_cap() -> None:
+    """Area strictly below the cap is silently accepted."""
+    validate_area_size(radius_km=10.0, area_cap_km2=500.0)
+
+
+def test_validate_area_size_passes_just_below_cap() -> None:
+    """Values strictly below the cap are accepted; the comparison is exact (no FP slack)."""
+    radius = math.sqrt(500.0 / math.pi) * 0.999
+    validate_area_size(radius_km=radius, area_cap_km2=500.0)
+
+
+def test_validate_area_size_rejects_above_cap() -> None:
+    """Area exceeding the cap raises BadCLIArgError naming --radius and --area-cap."""
+    with pytest.raises(BadCLIArgError) as exc_info:
+        validate_area_size(radius_km=30.0, area_cap_km2=500.0)
+    msg = exc_info.value.user_message
+    assert "--radius" in msg
+    assert "30" in msg
+    assert "--area-cap" in msg
+    assert "500" in msg
+    assert "km" in msg
+
+
+# --- Query CLI end-to-end (CliRunner): area-cap + happy path (AC #2, #5) ---
+
+
+def test_query_cli_happy_path_proceeds_to_stub() -> None:
+    """Valid args reach the Story 1.5 stub body and exit 0."""
+    runner = CliRunner()
+    result = runner.invoke(query_cli, ["--center", "45.0716,6.1079", "--radius", "10"])
+    assert result.exit_code == 0
+
+
+def test_query_cli_rejects_radius_exceeding_area_cap() -> None:
+    """π·r² > --area-cap surfaces BadCLIArgError."""
+    runner = CliRunner()
+    result = runner.invoke(query_cli, ["--center", "45.0716,6.1079", "--radius", "30"])
+    assert isinstance(result.exception, BadCLIArgError)
+    assert "--area-cap" in result.exception.user_message
+
+
+def test_query_cli_accepts_radius_just_below_custom_cap() -> None:
+    """User-overridden --area-cap is honored; radius producing area below cap passes."""
+    runner = CliRunner()
+    radius = math.sqrt(100.0 / math.pi) * 0.999
+    result = runner.invoke(
+        query_cli,
+        ["--center", "45.0716,6.1079", "--radius", f"{radius:.6f}", "--area-cap", "100"],
+    )
+    assert result.exit_code == 0
+
+
+def test_query_cli_rejects_malformed_center() -> None:
+    """Malformed --center bubbles BadCLIArgError out past click.standalone_mode."""
+    runner = CliRunner()
+    result = runner.invoke(query_cli, ["--center", "abc,def", "--radius", "10"])
+    assert isinstance(result.exception, BadCLIArgError)
+    assert "--center" in result.exception.user_message
+
+
+def test_query_cli_rejects_out_of_range_latitude() -> None:
+    """Range check fires from inside LatLonParamType during parse."""
+    runner = CliRunner()
+    result = runner.invoke(query_cli, ["--center", "95.0,0.0", "--radius", "10"])
+    assert isinstance(result.exception, BadCLIArgError)
+    assert "latitude" in result.exception.user_message
+
+
+# --- Setup CLI: lat/lon range applies; area-cap does not (AC #6) ---
+
+
+def test_setup_cli_inherits_lat_lon_range_validation() -> None:
+    """Range validation lives in LatLonParamType; setup CLI inherits it."""
+    runner = CliRunner()
+    result = runner.invoke(setup_cli, ["--center", "95.0,0.0", "--radius", "10"])
+    assert isinstance(result.exception, BadCLIArgError)
+    assert "latitude" in result.exception.user_message
+
+
+def test_setup_cli_does_not_enforce_area_cap() -> None:
+    """Setup CLI has no --area-cap flag and does not call validate_area_size.
+
+    A 30 km radius (~2827 km²) would be rejected by the query CLI's default cap of 500 km²,
+    but setup accepts it because area-cap enforcement is query-only.
+    """
+    runner = CliRunner()
+    result = runner.invoke(setup_cli, ["--center", "45.0716,6.1079", "--radius", "30"])
+    assert result.exit_code == 0
+
+
+# --- --verbose ordering with BadCLIArgError from convert (AC #4) ---
+
+
+def test_verbose_state_is_set_before_lat_lon_convert_runs() -> None:
+    """--verbose is eager: state flips before LatLonParamType.convert can raise.
+
+    Without is_eager=True, the malformed --center would raise BadCLIArgError during
+    click's parse pass before --verbose's body wiring ever ran, so is_verbose() would
+    stay False and run_entry_point's `detail` line would be suppressed in the real CLI.
+    """
+    runner = CliRunner()
+    result = runner.invoke(query_cli, ["--verbose", "--center", "abc,def", "--radius", "10"])
+    assert isinstance(result.exception, BadCLIArgError)
+    assert is_verbose() is True
+
+
+def test_verbose_with_malformed_center_renders_detail_via_main(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """End-to-end: --verbose + malformed --center → run_entry_point prints the detail line.
+
+    Goes through main() (not just CliRunner) so the run_entry_point exit-code wrapper runs.
+    """
+    argv = ["steeproute", "--verbose", "--center", "abc,def", "--radius", "10"]
+    with mock.patch.object(sys, "argv", argv), pytest.raises(SystemExit) as exc_info:
+        query_main()
+    assert exc_info.value.code == 2
+    err = capsys.readouterr().err
+    assert err.startswith("error: ")
+    # run_entry_point indents the detail line with 8 spaces; presence of that prefix
+    # on a non-first line proves verbose state was set BEFORE convert raised.
+    assert "\n        " in err

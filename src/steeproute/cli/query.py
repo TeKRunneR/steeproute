@@ -21,11 +21,11 @@ from steeproute.cli._shared import (
     radius_option,
     run_entry_point,
     seed_option,
-    set_verbose,
     stagnation_iters_option,
     theta_option,
     time_budget_option,
     untagged_trails_option,
+    validate_area_size,
     verbose_option,
 )
 
@@ -76,8 +76,7 @@ def cli(
     quiet: bool,
     cache_dir: pathlib.Path | None,
 ) -> int:
-    if verbose:
-        set_verbose(True)
+    validate_area_size(radius_km=radius, area_cap_km2=area_cap)
 
     # Stub: full flag consumption lands in Epics 2-4. Acknowledge all click-bound kwargs so
     # basedpyright doesn't flag them as unused.
@@ -98,6 +97,7 @@ def cli(
         stagnation_iters,
         progress_interval,
         output_dir,
+        verbose,
         quiet,
         cache_dir,
     )

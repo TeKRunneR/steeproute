@@ -1,6 +1,5 @@
 """Unit tests for the click option decorator surface in cli/_shared.py."""
 
-import click
 import pytest
 from click.testing import CliRunner
 
@@ -34,6 +33,7 @@ from steeproute.cli._shared import (
 )
 from steeproute.cli.query import cli as query_cli
 from steeproute.cli.setup import cli as setup_cli
+from steeproute.errors import BadCLIArgError
 
 # --- LatLonParamType ---
 
@@ -43,12 +43,12 @@ def test_lat_lon_param_type_parses_valid_input() -> None:
 
 
 def test_lat_lon_param_type_rejects_no_comma() -> None:
-    with pytest.raises(click.BadParameter):
+    with pytest.raises(BadCLIArgError):
         LAT_LON.convert("45.07", None, None)
 
 
 def test_lat_lon_param_type_rejects_non_numeric() -> None:
-    with pytest.raises(click.BadParameter):
+    with pytest.raises(BadCLIArgError):
         LAT_LON.convert("abc,def", None, None)
 
 

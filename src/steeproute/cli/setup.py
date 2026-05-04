@@ -15,7 +15,6 @@ from steeproute.cli._shared import (
     quiet_option,
     radius_option,
     run_entry_point,
-    set_verbose,
     untagged_trails_option,
     verbose_option,
 )
@@ -49,15 +48,13 @@ def cli(
     dem_path: pathlib.Path | None,
     osm_age_warn_days: int,
 ) -> int:
-    if verbose:
-        set_verbose(True)
-
     # Stub: full flag consumption lands in Epic 2. Acknowledge all click-bound kwargs so
     # basedpyright doesn't flag them as unused.
     _ = (
         center,
         radius,
         untagged_trails,
+        verbose,
         quiet,
         cache_dir,
         force_refresh,

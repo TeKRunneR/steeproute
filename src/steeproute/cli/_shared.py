@@ -1,5 +1,6 @@
 """Shared CLI plumbing: verbose flag state, exit-code wrapper, and reusable click option decorators."""
 
+import math
 import pathlib
 import sys
 from collections.abc import Callable
@@ -7,7 +8,7 @@ from typing import NoReturn, override
 
 import click
 
-from steeproute.errors import PreExecutionError
+from steeproute.errors import BadCLIArgError, PreExecutionError
 
 _verbose: bool = False
 
@@ -41,7 +42,13 @@ def run_entry_point(main_fn: Callable[[], int]) -> NoReturn:
 
 
 class LatLonParamType(click.ParamType):
-    """Parses 'LAT,LON' strings into (lat, lon) float tuples. Range validation: Story 1.6."""
+    """Parses 'LAT,LON' strings into (lat, lon) float tuples; rejects out-of-range values.
+
+    On any failure (syntactic or range), raises BadCLIArgError so run_entry_point
+    formats the error as `error: {user_message}` and exits 2 (vs click's multi-line
+    Usage/Error formatting). Range envelope is inclusive at the boundary:
+    lat in [-90, 90], lon in [-180, 180].
+    """
 
     name: str = "lat,lon"
 
@@ -53,19 +60,47 @@ class LatLonParamType(click.ParamType):
         ctx: click.Context | None,
     ) -> tuple[float, float]:
         if isinstance(value, tuple):
-            return value
-        try:
-            lat_str, lon_str = value.split(",")
-            return (float(lat_str), float(lon_str))
-        except ValueError:
-            self.fail(
-                f"{value!r} is not in LAT,LON format (e.g. '45.0716,6.1079')",
-                param,
-                ctx,
+            lat, lon = value
+        else:
+            try:
+                lat_str, lon_str = value.split(",")
+                lat, lon = float(lat_str), float(lon_str)
+            except ValueError as e:
+                raise BadCLIArgError(
+                    f"--center {value!r} is not in LAT,LON format",
+                    detail="Expected '<latitude>,<longitude>' as decimal degrees, "
+                    "e.g. '45.0716,6.1079'.",
+                ) from e
+        if not -90.0 <= lat <= 90.0:
+            raise BadCLIArgError(
+                f"--center latitude {lat} is outside [-90, 90]",
             )
+        if not -180.0 <= lon <= 180.0:
+            raise BadCLIArgError(
+                f"--center longitude {lon} is outside [-180, 180]",
+            )
+        return (lat, lon)
 
 
 LAT_LON = LatLonParamType()
+
+
+def validate_area_size(radius_km: float, area_cap_km2: float) -> None:
+    """Enforce FR2: reject radii whose disk area exceeds --area-cap.
+
+    Raises BadCLIArgError with a user-facing message in the format:
+        --radius {r} produces ~{area} km², exceeds --area-cap of {cap} km²
+
+    Used by cli/query.py only; cli/setup.py has no --area-cap flag (per Architecture
+    §FR mapping; setup is "prepare what you'll later query", cap enforcement is
+    sufficient at query time).
+    """
+    area_km2 = math.pi * radius_km * radius_km
+    if area_km2 > area_cap_km2:
+        raise BadCLIArgError(
+            f"--radius {radius_km:g} produces ~{area_km2:.0f} km², "
+            f"exceeds --area-cap of {area_cap_km2:g} km²",
+        )
 
 
 # --- Area ---
@@ -200,10 +235,30 @@ output_dir_option = click.option(
 
 # --- Shared meta ---
 
+
+def _verbose_callback(
+    ctx: click.Context,
+    param: click.Parameter,
+    value: bool,
+) -> bool:
+    """Eager callback: flip _verbose state during click's first parse pass.
+
+    Eager processing runs before any non-eager option's ParamType.convert, so a
+    BadCLIArgError raised from LatLonParamType.convert still reaches run_entry_point
+    with verbose state already set — meaning the optional `detail` line is rendered.
+    """
+    _ = (ctx, param)
+    if value:
+        set_verbose(True)
+    return value
+
+
 verbose_option = click.option(
     "--verbose",
     is_flag=True,
     default=False,
+    is_eager=True,
+    callback=_verbose_callback,
     help="Increase log verbosity (also prints PreExecutionError detail lines).",
 )
 
