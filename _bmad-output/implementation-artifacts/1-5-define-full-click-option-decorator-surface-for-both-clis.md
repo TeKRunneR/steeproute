@@ -1,6 +1,6 @@
 # Story 1.5: Define full click option decorator surface for both CLIs
 
-Status: review
+Status: done
 
 ## Story
 
@@ -164,6 +164,27 @@ uv run pytest --cov                → 97 passed in 0.51s; coverage 91% (139 stm
 
 | Date | Author | Description | Commit |
 |---|---|---|---|
-| 2026-05-04 | Yann (Claude Opus 4.7) | Story 1.5 implemented: click 8.3.3 added as runtime dep; `LatLonParamType` + 23 reusable click-option decorators in `cli/_shared.py`; both CLIs restructured around the decorator stack with `cli` (click command) + `_invoke_command` (SystemExit bridge) + `main` (run_entry_point wrapper); `is_verbose()` getter added; 80 new unit tests (32 options + 48 help/version). All four CI gates green on Windows (ruff, ruff format, basedpyright 0/0/0, pytest 97 passed, 91% coverage). | (this commit) |
+| 2026-05-04 | Yann (Claude Opus 4.7) | Story 1.5 implemented: click 8.3.3 added as runtime dep; `LatLonParamType` + 23 reusable click-option decorators in `cli/_shared.py`; both CLIs restructured around the decorator stack with `cli` (click command) + `_invoke_command` (SystemExit bridge) + `main` (run_entry_point wrapper); `is_verbose()` getter added; 80 new unit tests (32 options + 48 help/version). All four CI gates green on Windows (ruff, ruff format, basedpyright 0/0/0, pytest 97 passed, 91% coverage). | `8f68fe5` |
+| 2026-05-04 | Yann (Claude Opus 4.7) | Lightweight inline review: 4 findings raised, all dismissed (D1 unreachable str-code path in `_invoke_command`; D2 weak `test_decorator_is_callable` covered indirectly by `test_cli_help.py` parametrized tests; D3 weak `"steeproute" in output` query-version assertion; D4 `_ = (...)` ceremony — kept as visible "unused on purpose" marker). 2 informational items recorded (I1 `is_verbose()` getter divergence from Story 1.4's "no getter"; I2 `_main → cli` rename divergence from spec). No code changes. | — |
+| 2026-05-04 | Yann (Claude Opus 4.7) | Close-out: status review → done. | (this commit) |
 
+### Review Findings
+
+**Reviewer:** Claude Opus 4.7 (lightweight inline review at user request, given small surface — 1 runtime dep + decorator surface + 2 mostly-mechanical CLI restructures + 2 new test files; ~440 line diff total).
+**Date:** 2026-05-04.
+**Verdict:** 0 blockers, 0 requested changes. All 4 findings dismissed.
+
+| # | Severity | File | Finding | Resolution |
+|---|---|---|---|---|
+| D1 | Low | `cli/query.py:114`, `cli/setup.py:78` | `int(exc.code) if isinstance(exc.code, int) else 0` silently swallows non-int `SystemExit` codes (e.g. `str` from `sys.exit("msg")`); fallback returns 0 (success) for an unknown failure. | **Dismissed** — click 8.x `Command.main()` only ever calls `sys.exit(int)` in standalone mode; the fallback is unreachable in practice. |
+| D2 | Low | `tests/unit/test_cli_options.py:93–95` | `test_decorator_is_callable` is a weak assertion (every Python function is callable). | **Dismissed** — satisfies the AC literally; real coverage of decorator validity comes from `test_cli_help.py` parametrized `--help`-token-presence tests. |
+| D3 | Low | `tests/unit/test_cli_help.py:93` | Query-version assertion `"steeproute" in result.output` would also pass for setup-CLI output (since "steeproute-setup" contains "steeproute"). | **Dismissed** — test functions and `cli` objects are separate; a failure already pinpoints the right CLI. Could tighten to `"steeproute, version"` later. |
+| D4 | Low | `cli/query.py:84–103`, `cli/setup.py:57–67` | `_ = (...)` consumption tuple (~20 lines) silences `reportUnusedParameter`; needs piecemeal deletion in Epics 2-4. | **Dismissed** — explicit "unused on purpose, wired up in Epic X" marker. Alternative: per-file `executionEnvironments` rule disable in pyproject — defensible if the ceremony bites later. |
+
+**Informational (no action this story):**
+
+| # | Note |
+|---|---|
+| I1 | **Public `is_verbose()` getter** added in `_shared.py` — divergence from Story 1.4 §Completion Notes #1's deliberate "no getter" decision. Driven by Story 1.5's verbose-wiring tests; forward-compatible with Story 1.6's likely `is_eager=True` callback work on `--verbose`. Asymmetric API (`set_verbose` public write, `_verbose` private state, `is_verbose()` public read) is consistent enough not to warrant a revert. |
+| I2 | **Renamed `_main → cli`** in both CLI files — divergence from the Story 1.5 spec (which called it `_main`). Eliminates a `reportPrivateUsage` warning storm in tests and aligns with click-app conventions. Mildly awkward against the `cli/` package name in `from steeproute.cli.query import cli as query_cli`; aliased on import in tests for readability. Future stories may rename to `query_command`/`setup_command` if the shadowing becomes a problem. |
 
