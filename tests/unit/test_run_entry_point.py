@@ -1,19 +1,9 @@
 """Unit tests for cli/_shared.run_entry_point exit-code wrapper."""
 
-from collections.abc import Iterator
-
 import pytest
 
 from steeproute.cli._shared import run_entry_point, set_verbose
 from steeproute.errors import PreExecutionError
-
-
-@pytest.fixture(autouse=True)
-def reset_verbose_flag() -> Iterator[None]:
-    """Ensure the module-level _verbose state never leaks between tests."""
-    set_verbose(False)
-    yield
-    set_verbose(False)
 
 
 def _main_returns_zero() -> int:

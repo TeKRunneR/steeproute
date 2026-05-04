@@ -1,9 +1,12 @@
 # generated: 2026-04-24
-# last_updated: 2026-04-25
+# last_updated: 2026-05-04
 # 2026-04-25: Story 1.4 → ready-for-dev (create-story workflow)
 # 2026-04-25: Story 1.4 → in-progress (dev-story workflow)
 # 2026-04-25: Story 1.4 → review (dev-story workflow complete; awaiting code-review)
 # 2026-04-25: Story 1.4 → done after lightweight inline review (small pure-Python surface; no blockers); 3 findings raised, all dismissed (D1 docstring trivial, D2 test-redundancy with documentary value, D3 bare-exception fallthrough intentional per Architecture §Cat 10)
+# 2026-05-04: Story 1.5 → ready-for-dev (create-story workflow)
+# 2026-05-04: Story 1.5 → in-progress (dev-story workflow)
+# 2026-05-04: Story 1.5 → review (dev-story workflow complete; awaiting code-review)
 # project: bmad-test
 # project_key: NOKEY
 # tracking_system: file-system
@@ -39,7 +42,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-04-25
+last_updated: 2026-05-04
 # 2026-04-24: Story 1.1 → done after code review; D1 accepted as-is, D2:3 applied, P1 gitignore restored; 6 findings deferred to Story 1.3 (see deferred-work.md)
 # 2026-04-24: Story 1.2 → ready-for-dev (create-story workflow)
 # 2026-04-24: Story 1.2 → in-progress (dev-story workflow)
@@ -60,7 +63,7 @@ development_status:
   1-2-establish-steeproute-package-structure-and-entry-points: done
   1-3-customize-ci-workflow-and-establish-three-layer-test-structure: done
   1-4-implement-shared-error-hierarchy-and-run-entry-point-wrapper: done
-  1-5-define-full-click-option-decorator-surface-for-both-clis: backlog
+  1-5-define-full-click-option-decorator-surface-for-both-clis: review
   1-6-validate-area-specification-at-cli-boundary: backlog
   1-7-write-cli-smoke-tests-covering-help-version-and-exit-code-paths: backlog
   epic-1-retrospective: optional
