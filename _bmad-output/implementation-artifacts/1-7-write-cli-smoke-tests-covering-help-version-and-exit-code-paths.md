@@ -1,6 +1,6 @@
 # Story 1.7: Write CLI smoke tests covering help, version, and exit-code paths
 
-Status: review
+Status: done
 
 ## Story
 
@@ -144,4 +144,19 @@ uv run pytest --cov                → 156 passed in 10.70s; coverage 95% overal
 
 | Date | Author | Description | Commit |
 |---|---|---|---|
-| 2026-05-04 | Yann (Claude Opus 4.7) | Story 1.7 implemented: new `tests/e2e/test_cli_smoke.py` with 39 subprocess-based smoke tests covering both CLIs' `--help` (parametrized over every flag from Story 1.5 — 21 query + 12 setup), `--version` exit 0, `BadCLIArgError` exit-2 paths from Story 1.6 (malformed `--center` + area-cap exceeded), and happy-path stub invocations (Architecture §Category 11e structural requirement). All four CI gates green on Windows: ruff, ruff format, basedpyright 0/0/0, pytest 156 passed (39 new + 117 prior), 95% coverage. Test-only story — no production code changes. | (this commit) |
+| 2026-05-04 | Yann (Claude Opus 4.7) | Story 1.7 implemented: new `tests/e2e/test_cli_smoke.py` with 39 subprocess-based smoke tests covering both CLIs' `--help` (parametrized over every flag from Story 1.5 — 21 query + 12 setup), `--version` exit 0, `BadCLIArgError` exit-2 paths from Story 1.6 (malformed `--center` + area-cap exceeded), and happy-path stub invocations (Architecture §Category 11e structural requirement). All four CI gates green on Windows: ruff, ruff format, basedpyright 0/0/0, pytest 156 passed (39 new + 117 prior), 95% coverage. Test-only story — no production code changes. | `deade3c` |
+| 2026-05-06 | Yann (Claude Opus 4.7) | Lightweight inline review: 4 findings raised, all dismissed. D1 (`tokens[0]` IndexError-vs-AssertionError) cosmetic. D2 (`"steeproute"` substring also matches `"steeproute-setup,"`) covered by other tests against same binary. D3 (no e2e exclusion test) redundant with unit-layer `test_setup_help_excludes_query_only_flag`. D4 (no setup-side exit-2 test) redundant — structurally identical to query-side path which is already exercised. No code changes. | — |
+| 2026-05-06 | Yann (Claude Opus 4.7) | Close-out: status review → done. | (this commit) |
+
+### Review Findings
+
+**Reviewer:** Claude Opus 4.7 (lightweight inline review at user request, given small surface — single new ~140-line e2e test file, no production changes).
+**Date:** 2026-05-06.
+**Verdict:** 0 blockers, 0 requested changes. 4 findings (all dismissed).
+
+| # | Severity | File | Finding | Resolution |
+|---|---|---|---|---|
+| D1 | Low | `tests/e2e/test_cli_smoke.py` (`test_*_version_exits_zero`) | `tokens[0]` indexed without first asserting `tokens` is non-empty. Empty stdout would raise `IndexError` instead of an `AssertionError`. | **Dismissed** — pytest still reports the failure clearly (traceback names the line); the inverted `len(tokens) >= 2` check that follows would have failed second anyway. Belt-and-suspenders for a regression mode without a plausible cause. |
+| D2 | Low | `tests/e2e/test_cli_smoke.py::test_query_version_exits_zero` | `assert "steeproute" in tokens[0]` is also satisfied by `"steeproute-setup,"` (substring match). | **Dismissed** — each test invokes a different binary directly; `[project.scripts]` collisions would manifest in the 33 parametrized `--help` flag-set tests. The substring tolerance is intentional (handles click's "steeproute, version 0.1.0" trailing-comma formatting). |
+| D3 | Low | (no test) | No subprocess-layer equivalent of `tests/unit/test_cli_help.py::test_setup_help_excludes_query_only_flag` (which asserts query-only flags don't leak into setup's help). | **Dismissed** — inclusion at the e2e layer (the 33 parametrized tests) catches divergence in either direction; exclusion is structurally redundant. Subprocess-form would add 13 invocations (~3 s wall) for zero new structural signal beyond the unit-layer assertion. |
+| D4 | Low | (no test) | No e2e exit-2 test for `steeproute-setup` (e.g., setup with out-of-range lat). The query-side malformed-`--center` test is the only exit-2 e2e check. | **Dismissed** — setup CLI's `BadCLIArgError → _invoke_command → run_entry_point` path is structurally identical to query's. The query-side exit-2 test proves the shim works end-to-end; setup's `test_setup_happy_path_exits_0` (exit 0 through the same shim) and `test_setup_help_lists_flag` (--help through the same shim) prove setup's shim is wired identically. Epic AC for 1.7 doesn't require it. |
