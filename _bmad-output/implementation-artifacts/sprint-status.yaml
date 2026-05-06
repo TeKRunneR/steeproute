@@ -1,5 +1,8 @@
 # generated: 2026-04-24
 # last_updated: 2026-05-04
+# 2026-05-04: Story 1.7 → ready-for-dev (create-story workflow)
+# 2026-05-04: Story 1.7 → in-progress (dev-story workflow)
+# 2026-05-04: Story 1.7 → review (dev-story workflow complete; awaiting code-review)
 # 2026-04-25: Story 1.4 → ready-for-dev (create-story workflow)
 # 2026-04-25: Story 1.4 → in-progress (dev-story workflow)
 # 2026-04-25: Story 1.4 → review (dev-story workflow complete; awaiting code-review)
@@ -70,7 +73,7 @@ development_status:
   1-4-implement-shared-error-hierarchy-and-run-entry-point-wrapper: done
   1-5-define-full-click-option-decorator-surface-for-both-clis: done
   1-6-validate-area-specification-at-cli-boundary: done
-  1-7-write-cli-smoke-tests-covering-help-version-and-exit-code-paths: backlog
+  1-7-write-cli-smoke-tests-covering-help-version-and-exit-code-paths: review
   epic-1-retrospective: optional
 
   epic-2: backlog
