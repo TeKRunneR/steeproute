@@ -4,6 +4,7 @@
 # 2026-05-04: Story 1.7 → in-progress (dev-story workflow)
 # 2026-05-04: Story 1.7 → review (dev-story workflow complete; awaiting code-review)
 # 2026-05-06: Story 1.7 → done after lightweight inline review (small surface — single new ~140-line e2e test file, no production changes); 4 findings raised, all dismissed (D1 IndexError-vs-AssertionError cosmetic, D2 substring-match against sibling-binary name covered by other tests, D3 exclusion-test redundant with unit layer, D4 setup-side exit-2 redundant — structurally identical to query-side)
+# 2026-05-06: Epic 1 → done (all 7 stories done) and epic-1-retrospective → done (streamlined retro saved to epic-1-retro-2026-05-06.md; main lesson: story-file bloat drift through 1.1-1.4 corrected at 1.5, lean ~100-200 line target now standing rule)
 # 2026-04-25: Story 1.4 → ready-for-dev (create-story workflow)
 # 2026-04-25: Story 1.4 → in-progress (dev-story workflow)
 # 2026-04-25: Story 1.4 → review (dev-story workflow complete; awaiting code-review)
@@ -67,7 +68,7 @@ tracking_system: file-system
 story_location: "{project-root}/_bmad-output/implementation-artifacts"
 
 development_status:
-  epic-1: in-progress
+  epic-1: done
   1-1-scaffold-project-via-simple-modern-uv-copier-template: done
   1-2-establish-steeproute-package-structure-and-entry-points: done
   1-3-customize-ci-workflow-and-establish-three-layer-test-structure: done
@@ -75,7 +76,7 @@ development_status:
   1-5-define-full-click-option-decorator-surface-for-both-clis: done
   1-6-validate-area-specification-at-cli-boundary: done
   1-7-write-cli-smoke-tests-covering-help-version-and-exit-code-paths: done
-  epic-1-retrospective: optional
+  epic-1-retrospective: done
 
   epic-2: backlog
   2-1-implement-pipeline-stages-1-2-osm-ingestion-trail-filtering-and-commit-real-osm-test-fixture: backlog
