@@ -1,5 +1,9 @@
 # generated: 2026-04-24
-# last_updated: 2026-05-06
+# last_updated: 2026-05-07
+# 2026-05-06: Story 2.1 → ready-for-dev (create-story workflow); epic-2 → in-progress (first story of epic created)
+# 2026-05-06: Story 2.1 → in-progress (dev-story workflow)
+# 2026-05-06: Story 2.1 → review (dev-story workflow complete; awaiting code-review). Adds osmnx/networkx/shapely runtime deps; commits real-OSM fixture at tests/fixtures/grenoble_small/ (Le Sappey-en-Chartreuse 2 km, 723 KB, T1-T5 SAC variety incl. list-valued sac_scale). osmnx footgun discovered: sac_scale is NOT in default useful_tags_way — extended in both regenerate.py and osm_load. filter_trails handles list-valued sac_scale via max-rank (conservative). Carry-forward from Epic 1 retro (negative --radius validation) resolved in osm_load. basedpyright config relaxed for five reportUnknown*/reportMissingTypeArgument rules (networkx/osmnx have partial stubs; pre-commented in pyproject.toml for exactly this case). Live integration test executed locally and passed (corporate-proxy SSL handled cleanly via the OS trust store using the `truststore` dev dep, gated on STEEPROUTE_USE_OS_TRUSTSTORE=1; no verify=False anywhere).
+# 2026-05-07: Story 2.1 → done after bmad-code-review (full 3-layer parallel review: Blind Hunter, Edge Case Hunter, Acceptance Auditor). 3 decisions resolved (D1 keep dist_type=bbox + redocument Area as bbox half-side; D2 scope basedpyright relaxations per-file; D3 accept osmnx settings mutation). 13 patches applied (P1+P2 area validation incl. NaN/Inf/center-range; P3 sac_scale whitespace normalization; P4 BadCLIArgError for filter_trails arg-validation; P5 live-test zero-guard; P6 live test imports fixture constants from regenerate.py via importlib; P7 parse_difficulty_cap made public; P8 truststore symmetric across conftest+regenerate; P9 fixture-size CI assertion <5MB; P10 doc-inconsistency cleanup; P11 cache/+.review-tmp/ gitignored; P12 Area redocumented as bbox half-side; P13 basedpyright relaxations moved from global to per-file pragmas). 8 items deferred (recorded in deferred-work.md). All four CI gates green: ruff, ruff format, basedpyright 0/0/0, pytest 202 passed (46 unit + 156 prior, +1 live deselected) at 93% coverage. Live test re-verified post-refactor.
 # 2026-05-04: Story 1.7 → ready-for-dev (create-story workflow)
 # 2026-05-04: Story 1.7 → in-progress (dev-story workflow)
 # 2026-05-04: Story 1.7 → review (dev-story workflow complete; awaiting code-review)
@@ -52,7 +56,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-05-06
+last_updated: 2026-05-07
 # 2026-04-24: Story 1.1 → done after code review; D1 accepted as-is, D2:3 applied, P1 gitignore restored; 6 findings deferred to Story 1.3 (see deferred-work.md)
 # 2026-04-24: Story 1.2 → ready-for-dev (create-story workflow)
 # 2026-04-24: Story 1.2 → in-progress (dev-story workflow)
@@ -78,8 +82,8 @@ development_status:
   1-7-write-cli-smoke-tests-covering-help-version-and-exit-code-paths: done
   epic-1-retrospective: done
 
-  epic-2: backlog
-  2-1-implement-pipeline-stages-1-2-osm-ingestion-trail-filtering-and-commit-real-osm-test-fixture: backlog
+  epic-2: in-progress
+  2-1-implement-pipeline-stages-1-2-osm-ingestion-trail-filtering-and-commit-real-osm-test-fixture: done
   2-2-implement-pipeline-stages-3-4-2d-polyline-smoothing-and-resampling: backlog
   2-3-implement-pipeline-stage-5-dem-elevation-sampling-and-commit-real-dem-test-fixture: backlog
   2-4-implement-pipeline-stages-6-7-elevation-smoothing-and-per-edge-metrics: backlog

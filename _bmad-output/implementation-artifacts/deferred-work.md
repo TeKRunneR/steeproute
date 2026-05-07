@@ -35,6 +35,23 @@ Items deferred during code review that are owned by a future story.
 
 **Target story: whichever epic first consumes `--radius` as a real value** (likely Epic 2 — `steeproute-setup` area-polygon construction, or Epic 3 — query-side area resolution).
 
+**Status: ✅ Resolved in Story 2.1 (2026-05-06).** `osm_load(area)` now raises `BadCLIArgError` for `radius_km <= 0`. CLI wiring in Story 2.8 inherits the guard.
+
 | # | Finding | File | Detail |
 |---|---------|------|--------|
 | 1 | Negative `--radius` silently accepted | `src/steeproute/cli/_shared.py` (`validate_area_size`) | `click.FLOAT` does not enforce non-negativity, and `validate_area_size` checks `π·r² > area_cap` which is symmetric in `r` (negative radius → positive area, may be < cap). So `steeproute --center 45,6 --radius -10` exits 0 today. Out of scope for Story 1.6 (AC #2 is strictly about cap-exceeding, not radius validity). The right enforcement site is wherever `--radius` first becomes a real geometric value (area polygon construction). Either: (a) add `radius > 0` check to `validate_area_size` and rename/split, or (b) reject in the consuming code with a context-specific error. Pick once we know the consumer. |
+
+---
+
+## Deferred from: code review of 2-1-implement-pipeline-stages-1-2-osm-ingestion-trail-filtering-and-commit-real-osm-test-fixture.md (2026-05-07)
+
+| # | Finding | Target | Detail |
+|---|---------|--------|--------|
+| 1 | No error handling around `osmnx.graph_from_point` — raw `requests`/`osmnx` exceptions leak past `osm_load` | Story 2.9 | Story 2.9 ACs explicitly cover the `DataSourceUnavailableError` → exit-2 mapping for both OSM and DEM source failures. |
+| 2 | Empty-graph result from osmnx (no trails in area) — currently silent | Story 2.9 / Story 2.5 | Either Story 2.9's source-unavailable handling can expand to "empty result", or Story 2.5's orchestrator asserts non-empty before downstream stages. |
+| 3 | Concurrent test runs mutate shared `osmnx.settings.useful_tags_way` | Future (test-infra) | Not running parallel tests today; revisit if/when `pytest-xdist` or similar is adopted. Mitigation: a session-scoped autouse fixture that restores `useful_tags_way` after each test. |
+| 4 | Zero-length `LineString` when `u==v` or coincident endpoints in `normalize_edges` geometry synthesis | Story 2.2 | Stages 3-4 do polyline math (smoothing + resampling) where zero-length input may divide-by-zero or produce empty output. Decide there whether to skip self-loop edges, error out, or substitute a Point. |
+| 5 | `filter_trails` returns `graph.copy()` then removes edges → isolated/orphan nodes retained in output | Story 2.5 | Node-pruning policy is an orchestrator-level call (some downstream stages may want orphans for diagnostic context, others want a clean subgraph). Decide once stages 3-7 are wired. |
+| 6 | `out.copy()` in `filter_trails` may OOM on very large input graphs | Future (perf) | Premature optimization until benchmarks surface it. `--area-cap` mitigates indirectly by bounding input size. Could switch to `nx.subgraph_view` or `edge_subgraph` for streaming filtering if it becomes an issue. |
+| 7 | Live-test drift tolerance ±10% on a 1208-edge fixture (~120 edges) may flap on bulk-edits in Le Sappey | Future (live-test maintenance) | Empirical — defer until observed. Mitigation if it flaps: widen the band, switch to a less-active area, or pin against a snapshot of Overpass's last-known-good state instead of live. |
+| 8 | `radius_km` exceeding Overpass query limits → opaque osmnx error | Story 2.8 | Setup-side `--area-cap` (or an equivalent radius cap) hasn't landed yet. Wire a sanity ceiling when the setup CLI gains its area-cap option in 2.8. |

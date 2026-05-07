@@ -5,6 +5,12 @@ tmp/
 trash/
 attic/
 .kash/
+.review-tmp/
+
+# osmnx default cache directory (set explicitly to a temp dir in our code,
+# but keep this fallback in case a future caller forgets — runtime artifact,
+# never commit).
+cache/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

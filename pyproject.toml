@@ -37,6 +37,9 @@ classifiers = [
 
 dependencies = [
     "click>=8,<9",
+    "osmnx>=2.0,<3",
+    "networkx>=3.4,<4",
+    "shapely>=2.0,<3",
 ]
 
 
@@ -52,6 +55,7 @@ dev = [
     "rich>=14.3.2",
     "basedpyright>=1.38.0",
     "funlog>=0.2.1",
+    "truststore>=0.10.4",
 ]
 
 [project.scripts]
@@ -161,6 +165,11 @@ reportUnreachable = false
 # reportUnnecessaryIsInstance = false
 # reportUnknownVariableType = false
 # reportUnknownArgumentType = false
+# Note: networkx + osmnx have partial / no type stubs, which fires the five
+# `reportUnknown*` and `reportMissingTypeArgument` rules in any file that
+# touches them. We scope the relaxation per-file (header pragma in
+# pipeline/osm.py + tests/unit/test_osm.py + tests/integration/test_osm_live.py)
+# rather than globally, so the strictness is preserved everywhere else.
 
 [tool.codespell]
 # Add here as needed:
@@ -186,6 +195,13 @@ norecursedirs = [
     "__pycache__",
 ]
 filterwarnings = []
+markers = [
+    "live: tests that hit external services; skipped in default CI (run with `uv run pytest -m live`)",
+]
+# Default collection excludes live-marked tests so CI stays offline. Override
+# locally with `uv run pytest -m live` to run only the live tests, or
+# `uv run pytest -m ""` to run everything including live.
+addopts = ["-m", "not live"]
 
 [tool.coverage.run]
 source = ["src/steeproute"]
