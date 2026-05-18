@@ -56,6 +56,7 @@ dev = [
     "basedpyright>=1.38.0",
     "funlog>=0.2.1",
     "truststore>=0.10.4",
+    "hypothesis>=6.0",
 ]
 
 [project.scripts]
@@ -193,6 +194,7 @@ norecursedirs = [
     "dist",
     ".pytest_cache",
     "__pycache__",
+    ".hypothesis",
 ]
 filterwarnings = []
 markers = [
