@@ -63,3 +63,12 @@ Items deferred during code review that are owned by a future story.
 | # | Finding | Target | Detail |
 |---|---------|--------|--------|
 | 1 | No upper bound on `n_intervals` in `_resample_meters` — pathological `total / spacing_m` could blow memory/CPU | Story 2.5 / 2.8 | For a hypothetical 1000-km polyline at 0.001-m spacing, `n_intervals ≈ 10⁹`. Today: `--area-cap` bounds polyline length upstream, spacing is the internal default constant — combination not reachable. Add a sanity ceiling when CLI exposes a spacing override (Story 2.8) or in the orchestrator (Story 2.5). [src/steeproute/pipeline/smoothing.py:190] |
+
+---
+
+## Deferred from: code review of 2-3-implement-pipeline-stage-5-dem-elevation-sampling-and-commit-real-dem-test-fixture.md (2026-05-18)
+
+| # | Finding | Target | Detail |
+|---|---------|--------|--------|
+| 1 | `0.0`-as-void on a user-supplied DEM with `nodata=None` is silently accepted as a legitimate elevation | Story 2.9 (DEM source / setup-time sanity) or `--dem-path` docs | A DEM whose author left nodata undeclared but used `0.0` as a void marker would yield bogus sea-level elevations for void cells. The contract "no silent NaN" doesn't promise to catch this. The production fixture has `nodata=None` but is fully covered; the failure mode is latent for user-supplied DEMs. Either Story 2.9 should add a setup-time DEM-coverage assertion, or document on `--dem-path` that nodata must be properly declared. [src/steeproute/pipeline/dem.py:109-117] |
+| 2 | Inverted-bounds GeoTIFF (`bounds.left > bounds.right`, flipped origin) produces a wall of unhelpful `DEMCoverageError`s | Story 2.8 (CLI consumer of `--dem-path`) | A malformed DEM with negative pixel width or N/S-flipped origin would cause every vertex to fail the OOB guard with no hint that the raster is upside-down. Add a one-time sanity check at `rasterio.open` time: `assert bounds.right > bounds.left and bounds.top > bounds.bottom` else raise a clearer error. [src/steeproute/pipeline/dem.py:73-98] |

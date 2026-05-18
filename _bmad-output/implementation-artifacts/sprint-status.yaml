@@ -1,5 +1,9 @@
 # generated: 2026-04-24
-# last_updated: 2026-05-07
+# last_updated: 2026-05-18
+# 2026-05-18: Story 2.3 → ready-for-dev (create-story workflow)
+# 2026-05-18: Story 2.3 → in-progress (dev-story workflow)
+# 2026-05-18: Story 2.3 → review (dev-story workflow complete; awaiting code-review). Adds pipeline/dem.py::sample_elevation (stage 5) using rasterio + pyproj; CRS read from raster, WGS84→DEM-CRS via pyproj.Transformer(always_xy=True). vertices_resampled tuples are (lat, lon, elev_m) — explicit swap from shapely's (lon, lat). New DEMCoverageError(PreExecutionError) for OOB or nodata vertices (fail-fast, names offending edge + DEM bounds). DEM fixture at tests/fixtures/grenoble_small/dem.tif (754 KB, 840×840 float32 WGS84, padded 100 m beyond OSM bbox so trail-edge vertices land inside). regenerate_dem.py uses IGN Géoplateforme WMS image/x-bil;bits=32 (little-endian, verified empirically) — fully automated, no API key. 16 unit tests; pipeline/dem.py at 100% coverage. New runtime dep rasterio>=1.4,<2. All four CI gates green: ruff, ruff format, basedpyright 0/0/0, pytest 243 passed at 95% overall coverage. Live OSM test re-verified — no regression.
+# 2026-05-18: Story 2.3 → done after bmad-code-review (full 3-layer parallel review: Blind Hunter, Edge Case Hunter, Acceptance Auditor). Auditor: 0 findings — all ACs satisfied. After dedupe + triage: 5 patches landed (P1 HIGH bounds check tightened to half-open on east/north edges per rasterio's pixel convention — closed-closed silently sampled nodata-fill at exact `bounds.right`/`bounds.top`; P2 HIGH `dataset.crs is None` guard raises `DEMCoverageError` instead of bubbling `pyproj.CRSError` past `run_entry_point`; P3 MED nodata check refactored — NaN-nodata handled via `not math.isfinite(elev)`, finite sentinels via precomputed `nodata_finite` exact equality; P4 LOW dead `isinstance(xs, float)` defensive branch removed — shapely.LineString enforces ≥2 coords so pyproj never returns scalars; P5 LOW tautological `"1.000" in msg` assertion dropped from OOB test). 2 items deferred (0-as-void on `nodata=None` user-supplied DEM → Story 2.9 or `--dem-path` docs; inverted-bounds GeoTIFF diagnostic → Story 2.8 — both recorded in deferred-work.md). 12 dismissed inline in story Review Findings. 3 new tests added (`test_sample_elevation_raises_dem_coverage_error_when_dem_has_no_crs`, `test_sample_elevation_raises_dem_coverage_error_for_nan_nodata`, `test_sample_elevation_rejects_vertex_at_exact_east_edge_of_bounds`). All four CI gates green post-review: ruff, ruff format, basedpyright 0/0/0, pytest 246 passed (+3 from review) at 95% overall coverage; pipeline/dem.py 100%.
 # 2026-05-07: Story 2.2 → ready-for-dev (create-story workflow)
 # 2026-05-07: Story 2.2 → in-progress (dev-story workflow)
 # 2026-05-07: Story 2.2 → review (dev-story workflow complete; awaiting code-review). Adds pipeline/smoothing.py with smooth_polylines (stage 3) + resample_edges (stage 4). Per-edge local equirectangular projection (cos(mean_lat) lon scaling, WGS84 equatorial radius lat scaling) for meter-aware spacing without pyproj/project_graph round-trips. Endpoints pinned exactly across both stages — node coords don't drift. Degenerate edges (zero-length, all-identical coords, non-finite coords) dropped — closes deferred item 4 from Story 2.1's review (zero-length LineString handling). 22 unit tests including 1 hypothesis property test (50 examples) for endpoint exactness. New dev dep hypothesis>=6.0; no new runtime deps. .hypothesis added to pytest norecursedirs to silence the hypothesis plugin's shadowed-default-ignores warning. All four CI gates green: ruff, ruff format, basedpyright 0/0/0, pytest 224 passed at 95% overall coverage (smoothing.py 98%, 2 lines uncovered are defensive guards against contract violations).
@@ -60,7 +64,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-05-07
+last_updated: 2026-05-18
 # 2026-04-24: Story 1.1 → done after code review; D1 accepted as-is, D2:3 applied, P1 gitignore restored; 6 findings deferred to Story 1.3 (see deferred-work.md)
 # 2026-04-24: Story 1.2 → ready-for-dev (create-story workflow)
 # 2026-04-24: Story 1.2 → in-progress (dev-story workflow)
@@ -89,7 +93,7 @@ development_status:
   epic-2: in-progress
   2-1-implement-pipeline-stages-1-2-osm-ingestion-trail-filtering-and-commit-real-osm-test-fixture: done
   2-2-implement-pipeline-stages-3-4-2d-polyline-smoothing-and-resampling: done
-  2-3-implement-pipeline-stage-5-dem-elevation-sampling-and-commit-real-dem-test-fixture: backlog
+  2-3-implement-pipeline-stage-5-dem-elevation-sampling-and-commit-real-dem-test-fixture: done
   2-4-implement-pipeline-stages-6-7-elevation-smoothing-and-per-edge-metrics: backlog
   2-5-implement-pipeline-orchestrator-and-integration-test-stages-1-7-end-to-end-on-real-fixture: backlog
   2-6-implement-cache-key-hashing-manifest-schema-and-provenance-helpers: backlog

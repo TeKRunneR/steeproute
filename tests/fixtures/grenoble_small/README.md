@@ -1,9 +1,8 @@
 # grenoble_small — committed real-data test fixture
 
-Captured OSM graph for a small Grenoble-area cutout, used by the unit and integration
-tests for `pipeline/osm.py` (Story 2.1) and downstream pipeline stages (Story 2.2+).
-
-DEM raster (`dem.tif`) lands here in Story 2.3.
+Captured OSM graph + IGN RGE ALTI DEM raster for a small Grenoble-area cutout,
+used by the unit and integration tests for `pipeline/osm.py` (Story 2.1),
+`pipeline/smoothing.py` (Story 2.2), and `pipeline/dem.py` (Story 2.3).
 
 ## osm_graph.graphml
 
@@ -55,3 +54,51 @@ fix is to repair the trust chain — not to skip verification.
 
 The fixture content is sanity-checked by `tests/unit/test_osm.py` on every CI
 run, so a tampered or empty download would fail there.
+
+## dem.tif
+
+IGN RGE ALTI 5 m extract covering the same bbox as `osm_graph.graphml`.
+
+| Parameter | Value |
+|---|---|
+| Source | IGN Géoplateforme WMS, layer `ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES` (RGE ALTI HIGHRES) |
+| Endpoint | `https://data.geopf.fr/wms-r/wms` (open, no API key) |
+| Format requested | `image/x-bil;bits=32` (raw IEEE-754 float32, little-endian — verified empirically) |
+| Bbox (WGS84) | Le Sappey ± 2100 m (OSM 2 km bbox + 100 m padding ring) |
+| Grid | `840 × 840` pixels ≈ 5 m east-west / 5 m north-south (close to RGE ALTI's 5 m native) |
+| CRS on disk | `EPSG:4326` (WGS84 lon/lat) — IGN reprojects on the fly per request |
+| dtype | `float32` |
+| Elevation range | 356.4 m to 1637.4 m (Chartreuse Massif) |
+| nodata | None (the bbox is fully covered) |
+| Captured | 2026-05-18 |
+| File size | ~754 KB on disk (deflate + float predictor) |
+
+The 100 m padding ring extends the DEM beyond the OSM fixture's 2 km bbox
+half-side because `osmnx`'s `dist_type="bbox"` includes ways whose simplified
+geometries can extend slightly past the fetch bbox. `sample_elevation` is
+strict-bounds-fail-fast by AC contract — padding is the calmer fix than
+loosening the check.
+
+### Why WGS84 on disk
+
+We request the grid directly in WGS84 so the committed `dem.tif` is trivial
+to inspect against the OSM fixture's bounds without a reprojection pass. The
+production `sample_elevation` does *not* care about this choice — it reads
+the CRS from the raster header and transforms WGS84 graph coords on the fly.
+The CRS-transformation correctness test in `tests/unit/test_dem.py` uses a
+synthetic Lambert-93 (EPSG:2154) in-memory GeoTIFF specifically so the non-
+WGS84 code path stays exercised on every CI run, even though this fixture
+ships in WGS84.
+
+### Regenerating
+
+```
+python regenerate_dem.py
+```
+
+`regenerate_dem.py` uses the OS certificate store via `truststore` (same
+pattern as `regenerate.py`) so it works behind corporate TLS-intercepting
+proxies. Endpoint is open data — no API key needed.
+
+The fixture content is sanity-checked by `tests/unit/test_dem.py` (size cap
++ Alpine-plausibility band) on every CI run.

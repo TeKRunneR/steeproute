@@ -33,5 +33,9 @@ class DataSourceUnavailableError(PreExecutionError):
     """steeproute-setup: Overpass/IGN down or unreachable."""
 
 
+class DEMCoverageError(PreExecutionError):
+    """A graph vertex falls outside the DEM raster's coverage (or lands on a nodata cell)."""
+
+
 class SolverError(PreExecutionError):
     """Unexpected solver-internal failure - best-so-far may be empty; treat as pre-exec tier."""
