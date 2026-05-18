@@ -1,15 +1,23 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
 # Reason: networkx + shapely operations surface as Unknown; same osmnx-boundary pattern as pipeline/osm.py.
-"""Pipeline stages 3-4: 2D polyline smoothing and uniform meter-spaced resampling.
+"""Pipeline stages 3-4 + 6: 2D polyline smoothing, resampling, and elevation moving-median.
 
-Each edge's `geometry` (a `shapely.LineString` in WGS84 lon/lat from stages 1-2)
-is smoothed via a symmetric moving average and resampled to a uniform ground-meter
-spacing. Operations use a per-edge local equirectangular projection (cosine-of-mean-
-latitude correction) so spacing_m is honoured in real meters; we keep the graph in
-WGS84 throughout (Story 2.3 handles CRS at the DEM boundary, not here).
+Stages 3-4 operate on each edge's `geometry` (a `shapely.LineString` in WGS84
+lon/lat from stages 1-2). The polyline is smoothed via a symmetric moving
+average then resampled to a uniform ground-meter spacing. Operations use a
+per-edge local equirectangular projection (cosine-of-mean-latitude correction)
+so spacing_m is honoured in real meters; we keep the graph in WGS84 throughout
+(Story 2.3 handles CRS at the DEM boundary, not here).
 
-Endpoints are preserved exactly across both stages: topology — node coordinates —
-must not drift. Edges with degenerate geometry (fewer than 2 distinct finite
+Stage 6 (`median_smooth_elevation`) is the cliff-bias mitigation: a moving
+median over the elevation component of `vertices_resampled` (set by stage 5)
+dampens spikes from single-pixel DEM artifacts without smearing legitimate
+relief. Only the elevation component is touched; `(lat, lon)` are passed
+through bit-for-bit unchanged. Endpoint elevations are pinned to input values
+(no drift at node coords).
+
+Endpoints are preserved exactly across stages 3-4: topology — node coordinates
+— must not drift. Edges with degenerate geometry (fewer than 2 distinct finite
 points) are dropped from the output graph; carry-forward policy from Story 2.1.
 Non-LineString geometry on a pipeline edge is treated as an upstream contract
 violation and raises `TypeError` (fail-fast).
@@ -22,6 +30,7 @@ Resample-spacing contract: vertex spacing is uniform within float roundoff —
 from __future__ import annotations
 
 import math
+import statistics
 
 import networkx as nx
 import shapely
@@ -32,6 +41,13 @@ SMOOTHING_WINDOW: int = 3
 
 # Default vertex spacing for stage 4, in ground meters along the polyline.
 RESAMPLE_SPACING_M: float = 10.0
+
+# Symmetric moving-median window for stage 6 (elevation smoothing), in vertices.
+# Window = 5 with a 10 m vertex spacing → smooths over a ~50 m run, enough to
+# absorb single-pixel DEM artifacts (the 5 m IGN RGE ALTI grid produces 1-2
+# cell-scale spikes near steep terrain) without smearing legitimate ridge crests.
+# Must be odd ≥ 1; endpoints pinned, boundary windows clamped asymmetric.
+ELEVATION_MEDIAN_WINDOW: int = 5
 
 # WGS84 equatorial radius for the local equirectangular projection.
 _EARTH_RADIUS_M: float = 6_378_137.0
@@ -108,6 +124,66 @@ def resample_edges(
     for u, v, k in edges_to_drop:
         out.remove_edge(u, v, k)
     return out
+
+
+def median_smooth_elevation(
+    graph: nx.MultiDiGraph,
+    window: int = ELEVATION_MEDIAN_WINDOW,
+) -> nx.MultiDiGraph:
+    """Stage 6: moving-median smooth each edge's `vertices_resampled` elevations.
+
+    Each interior vertex's elevation is replaced with the median of itself and
+    its `window // 2` neighbours on either side; near the polyline boundaries
+    the window is clamped (smaller, asymmetric). The first and last vertex
+    elevations are pinned to their input values exactly — node-elevation never
+    drifts.
+
+    Only the third component (`elevation_m`) of each `(lat, lon, elev)` triple
+    is touched; the `(lat, lon)` pair is passed through bit-for-bit unchanged
+    so the 2D position established by stages 3-4 stays intact.
+
+    Args:
+        graph: input MultiDiGraph; every edge must carry a non-empty
+            `vertices_resampled: list[tuple[float, float, float]]` from stage 5.
+        window: odd integer ≥ 1; the moving-median window size in vertices.
+            Default is `ELEVATION_MEDIAN_WINDOW`.
+
+    Returns:
+        A new MultiDiGraph; the input is never mutated. Upstream attributes
+        (`geometry`, `sac_scale`, `highway`, `osm_way_id`) are carried through
+        unchanged on every output edge.
+    """
+    assert window >= 1 and window % 2 == 1, "window must be odd and >= 1"
+    out: nx.MultiDiGraph = graph.copy()
+    for _u, _v, _k, data in out.edges(data=True, keys=True):
+        verts: list[tuple[float, float, float]] = data["vertices_resampled"]
+        elevs = [v[2] for v in verts]
+        smoothed_elevs = _moving_median(elevs, window)
+        data["vertices_resampled"] = [
+            (lat, lon, smoothed_elev)
+            for (lat, lon, _orig_elev), smoothed_elev in zip(verts, smoothed_elevs, strict=True)
+        ]
+    return out
+
+
+def _moving_median(values: list[float], window: int) -> list[float]:
+    """Moving-median smoothing with endpoints pinned to input values.
+
+    Boundary clamp mirrors `_moving_average`: near each end the window shrinks
+    asymmetrically rather than stepping out of bounds. First and last values
+    are returned exactly equal to the input's. `window` must be odd ≥ 1.
+    """
+    half = window // 2
+    n = len(values)
+    smoothed: list[float] = []
+    for i in range(n):
+        if i == 0 or i == n - 1:
+            smoothed.append(values[i])
+            continue
+        lo = max(0, i - half)
+        hi = min(n, i + half + 1)
+        smoothed.append(statistics.median(values[lo:hi]))
+    return smoothed
 
 
 def _extract_coords(geometry: object) -> list[tuple[float, float]]:

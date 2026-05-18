@@ -16,9 +16,11 @@ from hypothesis import strategies as st
 
 from steeproute.pipeline.osm import normalize_edges
 from steeproute.pipeline.smoothing import (
+    ELEVATION_MEDIAN_WINDOW,
     RESAMPLE_SPACING_M,
     SMOOTHING_WINDOW,
     is_valid_polyline,
+    median_smooth_elevation,
     resample_edges,
     smooth_polylines,
 )
@@ -409,3 +411,178 @@ def test_resample_edges_property_endpoints_exact(coords: list[tuple[float, float
     out_coords = list(out.edges[0, 1, 0]["geometry"].coords)
     assert out_coords[0] == coords[0]
     assert out_coords[-1] == coords[-1]
+
+
+# === Stage 6: median_smooth_elevation ===========================================
+
+
+def _single_edge_graph_with_elevation(
+    vertices_resampled: list[tuple[float, float, float]],
+) -> nx.MultiDiGraph:
+    """Build a one-edge MultiDiGraph carrying the stage-5 contract: `vertices_resampled`
+    as (lat, lon, elev) triples plus the source attributes from Story 2.1."""
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    first_lat, first_lon, _ = vertices_resampled[0]
+    last_lat, last_lon, _ = vertices_resampled[-1]
+    g.add_node(0, x=first_lon, y=first_lat)
+    g.add_node(1, x=last_lon, y=last_lat)
+    # Mirror stage 5 output: geometry is still (lon, lat) shapely convention.
+    geom = shapely.LineString([(lon, lat) for lat, lon, _ in vertices_resampled])
+    g.add_edge(
+        0,
+        1,
+        key=0,
+        geometry=geom,
+        vertices_resampled=vertices_resampled,
+        sac_scale="hiking",
+        highway="path",
+        osm_way_id=12345,
+    )
+    return g
+
+
+def test_elevation_median_window_is_module_constant() -> None:
+    """AC #1: window size lives at module scope as a named constant."""
+    assert isinstance(ELEVATION_MEDIAN_WINDOW, int)
+    assert ELEVATION_MEDIAN_WINDOW >= 3
+    assert ELEVATION_MEDIAN_WINDOW % 2 == 1
+
+
+def test_median_smooth_elevation_flat_unchanged() -> None:
+    """AC #3: constant elevation → output equals input bit-exactly.
+
+    The median of N identical floats is exactly that float; assertion uses raw `==`
+    (matches the strictness of the lat/lon-preservation test in the same suite).
+    """
+    verts = [
+        (45.0, 5.0, 1000.0),
+        (45.0001, 5.0, 1000.0),
+        (45.0002, 5.0, 1000.0),
+        (45.0003, 5.0, 1000.0),
+        (45.0004, 5.0, 1000.0),
+    ]
+    g = _single_edge_graph_with_elevation(verts)
+    out = median_smooth_elevation(g)
+    out_verts = out.edges[0, 1, 0]["vertices_resampled"]
+    assert len(out_verts) == len(verts)
+    for original, smoothed in zip(verts, out_verts, strict=True):
+        assert smoothed[0] == original[0]
+        assert smoothed[1] == original[1]
+        assert smoothed[2] == original[2]
+
+
+def test_median_smooth_elevation_monotone_output_is_bounded_by_window() -> None:
+    """AC #3: for monotone input, each interior output elevation is the median of its
+    window — bounded by [window_min, window_max] from the input. Endpoints pinned exactly.
+
+    This is the strong contract median smoothing actually gives. A `>=` non-decreasing
+    assertion would be tautological for monotone input: the median of a sorted window
+    is automatically order-preserving against its neighbours' medians. The window-bound
+    assertion catches a bug like "median returns a value outside the window" (the
+    fundamental implementation property of the median).
+    """
+    verts = [(45.0 + i * 1e-4, 5.0, 1000.0 + i * 10.0) for i in range(7)]
+    g = _single_edge_graph_with_elevation(verts)
+    out = median_smooth_elevation(g)  # window = ELEVATION_MEDIAN_WINDOW (= 5)
+    out_verts = out.edges[0, 1, 0]["vertices_resampled"]
+    # Endpoints pinned exactly.
+    assert out_verts[0][2] == verts[0][2]
+    assert out_verts[-1][2] == verts[-1][2]
+    # Interior: median is bounded by the input window's min/max.
+    half = ELEVATION_MEDIAN_WINDOW // 2
+    for i in range(1, len(verts) - 1):
+        lo = max(0, i - half)
+        hi = min(len(verts), i + half + 1)
+        window_input_elevs = [v[2] for v in verts[lo:hi]]
+        assert min(window_input_elevs) <= out_verts[i][2] <= max(window_input_elevs), (
+            f"i={i}: out {out_verts[i][2]} outside window-input bounds "
+            f"[{min(window_input_elevs)}, {max(window_input_elevs)}]"
+        )
+
+
+def test_median_smooth_elevation_spike_is_replaced_by_window_median() -> None:
+    """AC #3: a single spike in an otherwise flat run is replaced by the window median.
+
+    With ELEVATION_MEDIAN_WINDOW = 5, the median of any 5-window covering the
+    spike index is the flat baseline (4 flats + 1 spike → median is flat).
+    Endpoints (i=0, i=6) are pinned to input; spike at i=3 (deep interior).
+    """
+    verts = [
+        (45.0, 5.0, 1000.0),
+        (45.0001, 5.0, 1000.0),
+        (45.0002, 5.0, 1000.0),
+        (45.0003, 5.0, 9999.0),  # spike
+        (45.0004, 5.0, 1000.0),
+        (45.0005, 5.0, 1000.0),
+        (45.0006, 5.0, 1000.0),
+    ]
+    g = _single_edge_graph_with_elevation(verts)
+    out = median_smooth_elevation(g, window=5)
+    out_verts = out.edges[0, 1, 0]["vertices_resampled"]
+    # Every vertex (endpoints pinned, interior medians) lands at the flat baseline:
+    # - i=0, i=6: pinned to input (both 1000).
+    # - i=3: deep-interior symmetric window [1:6] = 4 flats + 1 spike → median 1000.
+    # - i=1, i=2: clamped windows [0:3]/[0:4] dominated by flats → median 1000.
+    # - i=4, i=5: clamped windows [2:7]/[3:7] dominated by flats → median 1000.
+    # Asserting every index — not just i=3 — covers the boundary-clamp branches in
+    # `_moving_median` (the most error-prone path; an off-by-one in `lo`/`hi`
+    # would silently slip past an i=3-only assertion).
+    for i in range(len(verts)):
+        assert out_verts[i][2] == 1000.0, (
+            f"vertex i={i} should be 1000.0 after spike-median smoothing, got {out_verts[i][2]}"
+        )
+
+
+def test_median_smooth_elevation_preserves_lat_lon_exactly() -> None:
+    """AC #1, AC #3: the (lat, lon) components of every vertex are bit-exact unchanged."""
+    verts = [
+        (45.260, 5.788, 1100.0),
+        (45.2601, 5.7881, 1120.0),
+        (45.2602, 5.7882, 1080.0),
+        (45.2603, 5.7883, 1150.0),
+        (45.2604, 5.7884, 1130.0),
+    ]
+    g = _single_edge_graph_with_elevation(verts)
+    out = median_smooth_elevation(g)
+    out_verts = out.edges[0, 1, 0]["vertices_resampled"]
+    for original, smoothed in zip(verts, out_verts, strict=True):
+        # lat/lon must be bit-exact equal (not just close): no projection drift,
+        # no float-roundtrip drift — stage 6 only touches the elevation component.
+        assert smoothed[0] == original[0]
+        assert smoothed[1] == original[1]
+
+
+def test_median_smooth_elevation_does_not_mutate_input() -> None:
+    """Pure-function discipline: input graph's vertices_resampled is unchanged."""
+    verts = [
+        (45.0, 5.0, 1000.0),
+        (45.0001, 5.0, 9999.0),
+        (45.0002, 5.0, 1000.0),
+    ]
+    g = _single_edge_graph_with_elevation(verts)
+    before = list(g.edges[0, 1, 0]["vertices_resampled"])
+    _ = median_smooth_elevation(g)
+    after = list(g.edges[0, 1, 0]["vertices_resampled"])
+    assert before == after
+
+
+def test_median_smooth_elevation_preserves_attribute_contract() -> None:
+    """Upstream attributes (geometry + source) carry through stage 6 unchanged."""
+    verts = [(45.0, 5.0, 1000.0), (45.0001, 5.0, 1010.0), (45.0002, 5.0, 1020.0)]
+    g = _single_edge_graph_with_elevation(verts)
+    out = median_smooth_elevation(g)
+    data = out.edges[0, 1, 0]
+    assert isinstance(data["geometry"], shapely.LineString)
+    assert data["sac_scale"] == "hiking"
+    assert data["highway"] == "path"
+    assert data["osm_way_id"] == 12345
+    assert len(data["vertices_resampled"]) == len(verts)
+
+
+def test_median_smooth_elevation_short_polyline_is_passthrough() -> None:
+    """A 2-vertex polyline has only endpoints (no interior) → output equals input exactly."""
+    verts = [(45.0, 5.0, 1000.0), (45.001, 5.0, 1050.0)]
+    g = _single_edge_graph_with_elevation(verts)
+    out = median_smooth_elevation(g)
+    out_verts = out.edges[0, 1, 0]["vertices_resampled"]
+    assert out_verts == verts
