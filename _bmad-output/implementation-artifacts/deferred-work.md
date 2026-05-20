@@ -83,6 +83,12 @@ Items deferred during code review that are owned by a future story.
 
 ---
 
+## Deferred from: lightweight review of 2-6-implement-cache-key-hashing-manifest-schema-and-provenance-helpers.md (2026-05-20)
+
+| # | Finding | Target | Detail |
+|---|---------|--------|--------|
+| 1 | `get_commit_short` treats untracked files as `-dirty` | Story 2.8 (CLI consumer of the commit string) | `git status --porcelain` includes untracked files by default. After a typical `bmad-dev-story` run that leaves story / planning artifacts in the working tree (or any local-only dev-tooling files outside `.gitignore`), the commit string flips to `-dirty` even though no tracked file was modified. Architecture's "dirty flag if working tree modified" is ambiguous on untracked. The right time to decide is Story 2.8, when the CLI surface starts emitting the commit string in user-visible places — either filter via `--untracked-files=no` (treat only tracked-file changes as dirty) or accept the current behavior with a docs note. [src/steeproute/provenance.py:48-54] |
+
 ## Deferred from: code review of 2-4-implement-pipeline-stages-6-7-elevation-smoothing-and-per-edge-metrics.md (2026-05-18)
 
 | # | Finding | Target | Detail |

@@ -51,7 +51,7 @@ development_status:
   2-3-implement-pipeline-stage-5-dem-elevation-sampling-and-commit-real-dem-test-fixture: done
   2-4-implement-pipeline-stages-6-7-elevation-smoothing-and-per-edge-metrics: done
   2-5-implement-pipeline-orchestrator-and-integration-test-stages-1-7-end-to-end-on-real-fixture: done
-  2-6-implement-cache-key-hashing-manifest-schema-and-provenance-helpers: review
+  2-6-implement-cache-key-hashing-manifest-schema-and-provenance-helpers: done
   2-7-implement-atomic-cache-write-read-and-index-maintenance: backlog
   2-8-wire-steeproute-setup-end-to-end-with-force-refresh-semantics-on-real-fixture: backlog
   2-9-handle-source-unavailable-errors-and-emit-osm-age-warnings: backlog
