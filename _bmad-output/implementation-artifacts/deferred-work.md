@@ -83,6 +83,13 @@ Items deferred during code review that are owned by a future story.
 
 ---
 
+## Deferred from: code review of 2-7-implement-atomic-cache-write-read-and-index-maintenance.md (2026-05-20)
+
+| # | Finding | Target | Detail |
+|---|---------|--------|--------|
+| 1 | KeyboardInterrupt between manifest commit and `rebuild_index` leaves stale `index.json` | Story 2.10 (`check_coverage` opportunistic rebuild) | Architecture §Cat 4d says manifest is the commit signal; the index is derived state. If a user `Ctrl-C`s after `manifest.json`'s `os.replace` lands but before `write_entry`'s final `rebuild_index` call runs, the entry is readable via `read_entry(cache_key)` but `index.json` doesn't list it. Next `write_entry` (any key) fixes it, but a `steeproute` query invocation before the next setup would hit the stale index — which is the coverage-check path. Right time to add an opportunistic `rebuild_index` call on the read path is Story 2.10's `check_coverage` (it already walks `areas/*/manifest.json` semantically; sharing the rebuild is cheap). [src/steeproute/cache.py:301-360] |
+| 2 | `rebuild_index` swallows `CacheCorruptedError` silently — no log, no counter | Story 2.8 (CLI verbose wiring) | A cache directory entirely full of corrupt manifests yields a successful empty-index rebuild indistinguishable from "no entries". A `logger.warning("skipping corrupt manifest at %s: %s", ...)` would surface this for `--verbose` users, but logging infrastructure isn't wired yet — same reason Story 2.5's `_drop_*` debug logs were deferred to Story 2.8. Add alongside the rest of the CLI verbose plumbing. [src/steeproute/cache.py:432-438] |
+
 ## Deferred from: lightweight review of 2-6-implement-cache-key-hashing-manifest-schema-and-provenance-helpers.md (2026-05-20)
 
 | # | Finding | Target | Detail |

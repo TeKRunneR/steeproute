@@ -41,6 +41,7 @@ dependencies = [
     "networkx>=3.4,<4",
     "shapely>=2.0,<3",
     "rasterio>=1.4,<2",
+    "platformdirs>=4,<5",
 ]
 
 
