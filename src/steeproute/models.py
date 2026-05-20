@@ -1,5 +1,6 @@
 """Route, Climb, ContractedGraph, and solver-side dataclasses. Implementation lands across Epics 2-3."""
 
+import pathlib
 from dataclasses import dataclass
 
 
@@ -22,3 +23,21 @@ class Area:
 
     center: tuple[float, float]
     radius_km: float
+
+
+@dataclass(frozen=True, slots=True)
+class PipelineConfig:
+    """Knobs for the setup-side pipeline orchestrator (`pipeline.run_setup_stages`).
+
+    Only fields that genuinely change the cached graph live here. `difficulty_cap`
+    is intentionally absent: stages 1-7 are parameter-independent over it per
+    Architecture §Cat 3b (the cache key omits it; see §Cat 4b), so the
+    orchestrator pins it to the most permissive value internally and query-side
+    re-filters at the user's chosen cap.
+
+    Smoothing / resample / elevation-median windows stay at their module-scope
+    constants in the relevant `pipeline/` modules — no per-call overrides today.
+    """
+
+    untagged_policy: str
+    dem_path: pathlib.Path

@@ -37,5 +37,9 @@ class DEMCoverageError(PreExecutionError):
     """A graph vertex falls outside the DEM raster's coverage (or lands on a nodata cell)."""
 
 
+class PipelineContractError(PreExecutionError):
+    """An inter-stage invariant in the setup-side pipeline orchestrator was violated."""
+
+
 class SolverError(PreExecutionError):
     """Unexpected solver-internal failure - best-so-far may be empty; treat as pre-exec tier."""

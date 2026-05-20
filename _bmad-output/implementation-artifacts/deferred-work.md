@@ -75,6 +75,14 @@ Items deferred during code review that are owned by a future story.
 
 ---
 
+## Deferred from: code review of 2-5-implement-pipeline-orchestrator-and-integration-test-stages-1-7-end-to-end-on-real-fixture.md (2026-05-20)
+
+| # | Finding | Target | Detail |
+|---|---------|--------|--------|
+| 1 | `_drop_short_edges` / `_drop_orphan_nodes` mutate topology with no debug log | Story 2.8 (CLI verbose wiring) | The orchestrator drops degenerate edges and orphan nodes silently — invisible until downstream behavior surprises. A `logger.debug("dropped %d short edges, %d orphan nodes", ...)` call would surface real OSM-fixture regressions. The right time to add this is when Story 2.8 wires the `--verbose` plumbing — `logging` configuration needs a sink first; adding logger calls now means they fire into the default `WARNING` root logger config and are invisible anyway. Add the debug logs alongside the CLI verbose wiring. [src/steeproute/pipeline/__init__.py:147-183] |
+
+---
+
 ## Deferred from: code review of 2-4-implement-pipeline-stages-6-7-elevation-smoothing-and-per-edge-metrics.md (2026-05-18)
 
 | # | Finding | Target | Detail |
