@@ -45,6 +45,8 @@ Items deferred during code review that are owned by a future story.
 
 ## Deferred from: code review of 2-1-implement-pipeline-stages-1-2-osm-ingestion-trail-filtering-and-commit-real-osm-test-fixture.md (2026-05-07)
 
+**Status:** D2 + D5 resolved in Story 2.5 (orchestrator non-empty + orphan-prune guards). D8 resolved in Story 2.8 (`validate_setup_radius` in `cli/_shared.py` rejects `r <= 0` or `r > 50 km`). D4 resolved in Story 2.2 (stage-3 invalid-polyline drop). The rest remain Future / Story 2.9.
+
 | # | Finding | Target | Detail |
 |---|---------|--------|--------|
 | 1 | No error handling around `osmnx.graph_from_point` — raw `requests`/`osmnx` exceptions leak past `osm_load` | Story 2.9 | Story 2.9 ACs explicitly cover the `DataSourceUnavailableError` → exit-2 mapping for both OSM and DEM source failures. |
@@ -54,47 +56,64 @@ Items deferred during code review that are owned by a future story.
 | 5 | `filter_trails` returns `graph.copy()` then removes edges → isolated/orphan nodes retained in output | Story 2.5 | Node-pruning policy is an orchestrator-level call (some downstream stages may want orphans for diagnostic context, others want a clean subgraph). Decide once stages 3-7 are wired. |
 | 6 | `out.copy()` in `filter_trails` may OOM on very large input graphs | Future (perf) | Premature optimization until benchmarks surface it. `--area-cap` mitigates indirectly by bounding input size. Could switch to `nx.subgraph_view` or `edge_subgraph` for streaming filtering if it becomes an issue. |
 | 7 | Live-test drift tolerance ±10% on a 1208-edge fixture (~120 edges) may flap on bulk-edits in Le Sappey | Future (live-test maintenance) | Empirical — defer until observed. Mitigation if it flaps: widen the band, switch to a less-active area, or pin against a snapshot of Overpass's last-known-good state instead of live. |
-| 8 | `radius_km` exceeding Overpass query limits → opaque osmnx error | Story 2.8 | Setup-side `--area-cap` (or an equivalent radius cap) hasn't landed yet. Wire a sanity ceiling when the setup CLI gains its area-cap option in 2.8. |
+| 8 | `radius_km` exceeding Overpass query limits → opaque osmnx error | Story 2.8 | ✅ Resolved in Story 2.8 — `validate_setup_radius(r)` in `cli/_shared.py` rejects `r <= 0` or `r > 50 km` at the CLI boundary with `BadCLIArgError`. |
 
 ---
 
 ## Deferred from: code review of 2-2-implement-pipeline-stages-3-4-2d-polyline-smoothing-and-resampling.md (2026-05-07)
 
+**Status (2026-05-22 / Story 2.8):** D1 re-deferred to Future. Rationale: no `--spacing-m` CLI flag exists today, `spacing_m` is a module-scope constant in `pipeline/smoothing.py`, and the new `validate_setup_radius` ceiling (50 km half-side) caps polyline length upstream. The unbounded-`n_intervals` failure mode is structurally unreachable without a `--spacing-m` override. Land the cap together with `--spacing-m` if that flag ever ships.
+
 | # | Finding | Target | Detail |
 |---|---------|--------|--------|
-| 1 | No upper bound on `n_intervals` in `_resample_meters` — pathological `total / spacing_m` could blow memory/CPU | Story 2.5 / 2.8 | For a hypothetical 1000-km polyline at 0.001-m spacing, `n_intervals ≈ 10⁹`. Today: `--area-cap` bounds polyline length upstream, spacing is the internal default constant — combination not reachable. Add a sanity ceiling when CLI exposes a spacing override (Story 2.8) or in the orchestrator (Story 2.5). [src/steeproute/pipeline/smoothing.py:190] |
+| 1 | No upper bound on `n_intervals` in `_resample_meters` — pathological `total / spacing_m` could blow memory/CPU | Future (`--spacing-m`-bundled) | For a hypothetical 1000-km polyline at 0.001-m spacing, `n_intervals ≈ 10⁹`. Today: `--area-cap` + `validate_setup_radius` cap polyline length upstream, spacing is the internal default constant — combination not reachable without a future `--spacing-m` override. Land the cap together with that flag. [src/steeproute/pipeline/smoothing.py:190] |
 
 ---
 
 ## Deferred from: code review of 2-3-implement-pipeline-stage-5-dem-elevation-sampling-and-commit-real-dem-test-fixture.md (2026-05-18)
 
+**Status:** D2 resolved in Story 2.8 (inverted-bounds sanity check in `sample_elevation` raises a clearer `DEMCoverageError` instead of a per-vertex wall). D1 remains routed to Story 2.9.
+
 | # | Finding | Target | Detail |
 |---|---------|--------|--------|
 | 1 | `0.0`-as-void on a user-supplied DEM with `nodata=None` is silently accepted as a legitimate elevation | Story 2.9 (DEM source / setup-time sanity) or `--dem-path` docs | A DEM whose author left nodata undeclared but used `0.0` as a void marker would yield bogus sea-level elevations for void cells. The contract "no silent NaN" doesn't promise to catch this. The production fixture has `nodata=None` but is fully covered; the failure mode is latent for user-supplied DEMs. Either Story 2.9 should add a setup-time DEM-coverage assertion, or document on `--dem-path` that nodata must be properly declared. [src/steeproute/pipeline/dem.py:109-117] |
-| 2 | Inverted-bounds GeoTIFF (`bounds.left > bounds.right`, flipped origin) produces a wall of unhelpful `DEMCoverageError`s | Story 2.8 (CLI consumer of `--dem-path`) | A malformed DEM with negative pixel width or N/S-flipped origin would cause every vertex to fail the OOB guard with no hint that the raster is upside-down. Add a one-time sanity check at `rasterio.open` time: `assert bounds.right > bounds.left and bounds.top > bounds.bottom` else raise a clearer error. [src/steeproute/pipeline/dem.py:73-98] |
+| 2 | Inverted-bounds GeoTIFF (`bounds.left > bounds.right`, flipped origin) produces a wall of unhelpful `DEMCoverageError`s | Story 2.8 (CLI consumer of `--dem-path`) | ✅ Resolved in Story 2.8 — `sample_elevation` checks `bounds.right > bounds.left and bounds.top > bounds.bottom` immediately after `rasterio.open` and raises a `DEMCoverageError` whose `user_message` names the inverted bounds. [src/steeproute/pipeline/dem.py:73-98] |
 
 ---
 
 ## Deferred from: code review of 2-5-implement-pipeline-orchestrator-and-integration-test-stages-1-7-end-to-end-on-real-fixture.md (2026-05-20)
 
+**Status:** D1 resolved in Story 2.8 (`--verbose` plumbing + `logger.debug(...)` calls in `_drop_short_edges` / `_drop_orphan_nodes`).
+
 | # | Finding | Target | Detail |
 |---|---------|--------|--------|
-| 1 | `_drop_short_edges` / `_drop_orphan_nodes` mutate topology with no debug log | Story 2.8 (CLI verbose wiring) | The orchestrator drops degenerate edges and orphan nodes silently — invisible until downstream behavior surprises. A `logger.debug("dropped %d short edges, %d orphan nodes", ...)` call would surface real OSM-fixture regressions. The right time to add this is when Story 2.8 wires the `--verbose` plumbing — `logging` configuration needs a sink first; adding logger calls now means they fire into the default `WARNING` root logger config and are invisible anyway. Add the debug logs alongside the CLI verbose wiring. [src/steeproute/pipeline/__init__.py:147-183] |
+| 1 | `_drop_short_edges` / `_drop_orphan_nodes` mutate topology with no debug log | Story 2.8 (CLI verbose wiring) | ✅ Resolved in Story 2.8 — `configure_cli_logging(verbose=...)` in `cli/_shared.py` flips the stderr logger to DEBUG when `--verbose` is set; the pipeline now emits `pipeline: dropped %d orphan nodes` and `pipeline: dropped %d short edges` debug lines on each non-zero prune. [src/steeproute/pipeline/__init__.py:147-183] |
 
 ---
 
 ## Deferred from: code review of 2-7-implement-atomic-cache-write-read-and-index-maintenance.md (2026-05-20)
 
+**Status:** D2 resolved in Story 2.8 (`rebuild_index` now emits a `logger.warning` for each skipped corrupt manifest). D1 remains routed to Story 2.10.
+
 | # | Finding | Target | Detail |
 |---|---------|--------|--------|
 | 1 | KeyboardInterrupt between manifest commit and `rebuild_index` leaves stale `index.json` | Story 2.10 (`check_coverage` opportunistic rebuild) | Architecture §Cat 4d says manifest is the commit signal; the index is derived state. If a user `Ctrl-C`s after `manifest.json`'s `os.replace` lands but before `write_entry`'s final `rebuild_index` call runs, the entry is readable via `read_entry(cache_key)` but `index.json` doesn't list it. Next `write_entry` (any key) fixes it, but a `steeproute` query invocation before the next setup would hit the stale index — which is the coverage-check path. Right time to add an opportunistic `rebuild_index` call on the read path is Story 2.10's `check_coverage` (it already walks `areas/*/manifest.json` semantically; sharing the rebuild is cheap). [src/steeproute/cache.py:301-360] |
-| 2 | `rebuild_index` swallows `CacheCorruptedError` silently — no log, no counter | Story 2.8 (CLI verbose wiring) | A cache directory entirely full of corrupt manifests yields a successful empty-index rebuild indistinguishable from "no entries". A `logger.warning("skipping corrupt manifest at %s: %s", ...)` would surface this for `--verbose` users, but logging infrastructure isn't wired yet — same reason Story 2.5's `_drop_*` debug logs were deferred to Story 2.8. Add alongside the rest of the CLI verbose plumbing. [src/steeproute/cache.py:432-438] |
+| 2 | `rebuild_index` swallows `CacheCorruptedError` silently — no log, no counter | Story 2.8 (CLI verbose wiring) | ✅ Resolved in Story 2.8 — `rebuild_index` now calls `logger.warning("cache.rebuild_index: skipping corrupt manifest at %s: %s", ...)` for each skipped entry; visible on stderr at WARNING level (always) and indirectly via `--verbose`. [src/steeproute/cache.py:432-438] |
 
-## Deferred from: lightweight review of 2-6-implement-cache-key-hashing-manifest-schema-and-provenance-helpers.md (2026-05-20)
+## Deferred from: code review of 2-8-wire-steeproute-setup-end-to-end-with-force-refresh-semantics-on-real-fixture.md (2026-05-22)
 
 | # | Finding | Target | Detail |
 |---|---------|--------|--------|
-| 1 | `get_commit_short` treats untracked files as `-dirty` | Story 2.8 (CLI consumer of the commit string) | `git status --porcelain` includes untracked files by default. After a typical `bmad-dev-story` run that leaves story / planning artifacts in the working tree (or any local-only dev-tooling files outside `.gitignore`), the commit string flips to `-dirty` even though no tracked file was modified. Architecture's "dirty flag if working tree modified" is ambiguous on untracked. The right time to decide is Story 2.8, when the CLI surface starts emitting the commit string in user-visible places — either filter via `--untracked-files=no` (treat only tracked-file changes as dirty) or accept the current behavior with a docs note. [src/steeproute/provenance.py:48-54] |
+| 1 | `validate_setup_radius` not enforced inside `run_setup_stages` | Future (if a non-CLI caller surface appears) | A direct caller (test, future script) constructing `Area(radius_km > 50)` bypasses the CLI-side ceiling. Adding the guard to the orchestrator would break tests that construct synthetic `Area`s with deliberately specific (often large) radii. CLI-tier validation is the right home; revisit if and when a non-CLI consumer of `run_setup_stages` materializes. [src/steeproute/pipeline/__init__.py:89-141] |
+| 2 | DEM `permission denied` not surfaced as `PreExecutionError` (rasterio leaks as exit 1) | Story 2.9 (`DataSourceUnavailableError` mapping) | `dem_path.is_file()` returns True without read perms; rasterio later raises `RasterioIOError → OSError`, leaking past `run_entry_point` as exit 1 + traceback. Story 2.9's source-unavailable handling is the natural home — it already covers DEM read failures conceptually. Add a `try/except (OSError, rasterio.RasterioIOError)` wrapper around the `rasterio.open` call site that re-raises as `DataSourceUnavailableError`. [src/steeproute/cli/setup.py:113, src/steeproute/pipeline/dem.py:73] |
+
+## Deferred from: lightweight review of 2-6-implement-cache-key-hashing-manifest-schema-and-provenance-helpers.md (2026-05-20)
+
+**Status:** D1 resolved in Story 2.8 (`git status --porcelain --untracked-files=no` — untracked-only working trees no longer flip `get_commit_short` to `-dirty`).
+
+| # | Finding | Target | Detail |
+|---|---------|--------|--------|
+| 1 | `get_commit_short` treats untracked files as `-dirty` | Story 2.8 (CLI consumer of the commit string) | ✅ Resolved in Story 2.8 — `_get_commit_short_at` passes `--untracked-files=no` to `git status --porcelain` so only tracked-file modifications flip the `-dirty` suffix; matches `git describe --dirty` convention. [src/steeproute/provenance.py:48-54] |
 
 ## Deferred from: code review of 2-4-implement-pipeline-stages-6-7-elevation-smoothing-and-per-edge-metrics.md (2026-05-18)
 

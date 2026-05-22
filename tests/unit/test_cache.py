@@ -337,6 +337,25 @@ def test_resolve_cache_root_returns_platformdirs_default_when_no_override() -> N
     assert re.search(r"[\\/](?i:steeproute)([\\/]Cache)?$", str(default_root)) is not None
 
 
+# --- entry_dir_for (Story 2.8 review patch P3) -------------------------------
+
+
+def test_entry_dir_for_matches_write_entry_layout(tmp_path: pathlib.Path) -> None:
+    """`entry_dir_for` returns the same path that `write_entry` would produce.
+
+    Single source of truth for the `<cache-root>/steeproute/areas/<hash>/` layout
+    (Architecture §Cat 4a). External callers (`cli/setup.py`'s cache-hit summary)
+    use this rather than reconstructing the path by string concatenation. If the
+    layout ever changes, both `write_entry` and `entry_dir_for` move in lockstep.
+    """
+    from steeproute.cache import entry_dir_for
+
+    cache_key = "fedcba9876543210"
+    result = entry_dir_for(tmp_path, cache_key)
+    # Expected layout: `<cache-root>/steeproute/areas/<cache-key>/`.
+    assert result == tmp_path / "steeproute" / "areas" / cache_key
+
+
 # --- Review patch P2: bounds.geojson axis-order consistency ------------------
 
 
@@ -352,6 +371,7 @@ def test_bounds_geojson_geometry_and_properties_center_use_lon_lat_consistently(
     builder.
     """
     import json as _json
+
     import networkx as nx
 
     area = Area(center=(45.0716, 6.1079), radius_km=2.0)

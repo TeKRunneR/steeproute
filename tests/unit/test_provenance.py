@@ -81,6 +81,22 @@ def test_get_commit_short_at_appends_dirty_when_working_tree_modified(
     assert _DIRTY_HASH_RE.match(result) is not None, result
 
 
+def test_get_commit_short_at_ignores_untracked_only_changes(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Untracked-only working trees stay clean — Story 2.8 deferred-work D1 from 2.6.
+
+    A typical `bmad-dev-story` run leaves planning artifacts in the working tree
+    that the user never intended to commit (story files, etc.). Those should not
+    flip the report-visible commit string to `-dirty` when no tracked file was
+    modified — matches `git describe --dirty` convention.
+    """
+    _init_throwaway_repo(tmp_path)
+    (tmp_path / "untracked_artifact.md").write_text("scratch\n", encoding="utf-8")
+    result = _get_commit_short_at(tmp_path)
+    assert _CLEAN_HASH_RE.match(result) is not None, result
+
+
 def test_get_commit_short_at_returns_unknown_sentinel_for_non_git_directory(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,

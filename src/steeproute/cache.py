@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import os
 import pathlib
@@ -29,6 +30,8 @@ import platformdirs
 
 from steeproute.errors import CacheCorruptedError, CacheNotFoundError
 from steeproute.models import Area
+
+_logger = logging.getLogger(__name__)
 
 # SHA256 truncation length for cache-entry directory names. Short enough to keep
 # directory listings readable, long enough that collision risk across a single
@@ -311,6 +314,21 @@ def resolve_cache_root(override: pathlib.Path | None = None) -> pathlib.Path:
     return pathlib.Path(platformdirs.user_cache_dir(_APP_NAME))
 
 
+def entry_dir_for(cache_root: pathlib.Path, cache_key: str) -> pathlib.Path:
+    """Return the canonical entry directory for `cache_key` under `cache_root`.
+
+    Single source of truth for the `<cache-root>/steeproute/areas/<hash>/` layout
+    (Architecture §Cat 4a). External callers (e.g. `cli/setup.py`'s cache-hit
+    summary) use this rather than reconstructing the path by string concatenation
+    — that would create a second source of layout truth that could silently
+    diverge from `write_entry`'s own composition.
+
+    Note: this does not check whether the entry actually exists or is valid;
+    use `read_entry` for validation. This is purely a layout-resolution helper.
+    """
+    return _areas_dir(cache_root) / cache_key
+
+
 def write_json_atomic(path: pathlib.Path, obj: object) -> None:
     """Write `obj` to `path` atomically as canonical JSON.
 
@@ -500,11 +518,18 @@ def rebuild_index(cache_root: pathlib.Path) -> None:
                 CacheCorruptedError,
                 UnicodeDecodeError,
                 OSError,
-            ):
+            ) as exc:
                 # A corrupt or unreadable manifest is not an index-rebuild
                 # concern — one bad entry must not block the rebuild for all
                 # the others. The next `read_entry` against the bad key will
-                # surface the error with full context.
+                # surface the error with full context. A `--verbose` user gets
+                # a stderr warning here so the silent swallow is observable
+                # (deferred-work D2 from Story 2.7).
+                _logger.warning(
+                    "cache.rebuild_index: skipping corrupt manifest at %s: %s",
+                    manifest_path,
+                    exc,
+                )
                 continue
             lat, lon = manifest.area.center
             entries.append(

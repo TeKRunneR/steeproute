@@ -78,6 +78,21 @@ def sample_elevation(
                 detail="Ensure the GeoTIFF declares a CRS (e.g., EPSG:2154 for IGN RGE ALTI 5m).",
             )
         bounds = dataset.bounds  # (left, bottom, right, top) in DEM CRS units
+        # Sanity-check the raster transform before iterating vertices: a malformed
+        # DEM with negative pixel width or a flipped N/S origin would otherwise
+        # surface as a wall of per-vertex out-of-bounds errors, hiding the
+        # underlying "this DEM is upside-down" diagnosis. Routed in via
+        # deferred-work D2 from Story 2.3.
+        if bounds.right <= bounds.left or bounds.top <= bounds.bottom:
+            raise DEMCoverageError(
+                f"DEM at {dem_path} has inverted or zero-width bounds "
+                f"(left={bounds.left}, right={bounds.right}, "
+                f"bottom={bounds.bottom}, top={bounds.top}).",
+                detail=(
+                    "Expected right > left and top > bottom. The raster transform "
+                    "may have a negative pixel width or a flipped origin."
+                ),
+            )
         nodata = dataset.nodata
         # NaN-nodata is handled implicitly by the `not math.isfinite(elev)` branch
         # below; only finite nodata needs the equality check. Real DEM sentinels

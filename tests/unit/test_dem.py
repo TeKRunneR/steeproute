@@ -397,6 +397,26 @@ def test_committed_dem_fixture_under_size_cap() -> None:
     )
 
 
+# --- inverted-bounds sanity check (Story 2.8 carry-forward, deferred D2 from 2.3) ---
+
+
+def test_sample_elevation_rejects_flipped_origin_dem(tmp_path: pathlib.Path) -> None:
+    """A DEM whose transform flips N/S origin surfaces a clear `inverted ... bounds` error.
+
+    Without this guard every vertex fails the per-vertex OOB check, hiding the
+    underlying "this raster is upside-down" diagnosis behind a wall of unhelpful
+    DEMCoverageErrors.
+    """
+    data = np.full((10, 10), 500.0, dtype=np.float32)
+    # `ysize=-0.0001` flips origin: north < south, top < bottom on `dataset.bounds`.
+    transform = from_origin(west=5.788, north=45.260, xsize=0.0001, ysize=-0.0001)
+    dem_path = _write_dem(tmp_path / "flipped.tif", data, transform, "EPSG:4326")
+    graph = _single_edge_graph([(5.788, 45.260), (5.7882, 45.2602)])
+
+    with pytest.raises(DEMCoverageError, match=r"inverted or zero-width bounds"):
+        _ = sample_elevation(graph, dem_path)
+
+
 def test_fixture_pipeline_preserves_attribute_contract(
     fixture_pipeline_through_stage5: nx.MultiDiGraph,
 ) -> None:

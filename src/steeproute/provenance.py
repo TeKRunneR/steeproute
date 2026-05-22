@@ -39,6 +39,13 @@ def _get_commit_short_at(cwd: pathlib.Path) -> str:
     Production calls with `_PACKAGE_ROOT`; tests target a throwaway repo.
     `core.fileMode=false` is passed inline so a stale-execute-bit difference
     on Windows checkouts doesn't spuriously flip the dirty flag.
+
+    `--untracked-files=no` excludes untracked-only changes from the dirty
+    signal (deferred-work D1 from Story 2.6): a typical `bmad-dev-story` run
+    leaves story / planning artifacts in the working tree, and that should not
+    flip the report-visible commit string to `-dirty` when no tracked file was
+    modified. Architecture's "dirty if working tree modified" is interpreted
+    as "tracked files modified" — same convention `git describe --dirty` uses.
     """
     try:
         commit = subprocess.run(
@@ -49,7 +56,14 @@ def _get_commit_short_at(cwd: pathlib.Path) -> str:
             cwd=cwd,
         ).stdout.strip()
         status = subprocess.run(
-            ["git", "-c", "core.fileMode=false", "status", "--porcelain"],
+            [
+                "git",
+                "-c",
+                "core.fileMode=false",
+                "status",
+                "--porcelain",
+                "--untracked-files=no",
+            ],
             check=True,
             capture_output=True,
             text=True,

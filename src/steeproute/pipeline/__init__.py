@@ -43,6 +43,7 @@ query side in Epic 3; their orchestrator entry point is not in this story.
 
 from __future__ import annotations
 
+import logging
 import math
 
 import networkx as nx
@@ -57,6 +58,8 @@ from steeproute.pipeline.smoothing import (
     resample_edges,
     smooth_polylines,
 )
+
+_logger = logging.getLogger(__name__)
 
 # Most permissive recognized SAC rank in `pipeline.osm.SAC_SCALE_RANK`. The
 # orchestrator pins `difficulty_cap` to this value so stages 1-7 are
@@ -173,6 +176,8 @@ def _drop_orphan_nodes(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
     orphans = [n for n, deg in out.degree() if deg == 0]
     for n in orphans:
         out.remove_node(n)
+    if orphans:
+        _logger.debug("pipeline: dropped %d orphan nodes", len(orphans))
     return out
 
 
@@ -195,6 +200,12 @@ def _drop_short_edges(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
             edges_to_drop.append((u, v, k))
     for u, v, k in edges_to_drop:
         out.remove_edge(u, v, k)
+    if edges_to_drop:
+        _logger.debug(
+            "pipeline: dropped %d short edges (< %.3g m)",
+            len(edges_to_drop),
+            _PIPELINE_LENGTH_FLOOR_M,
+        )
     # The drop may have created new orphans; reuse the same prune helper so
     # the post-guard graph keeps its "every node has degree >= 1" invariant.
     return _drop_orphan_nodes(out)

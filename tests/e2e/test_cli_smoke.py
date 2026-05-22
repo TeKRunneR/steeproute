@@ -136,8 +136,25 @@ def test_query_happy_path_exits_0() -> None:
     assert "stub" in result.stdout
 
 
-def test_setup_happy_path_exits_0() -> None:
-    # --dem-path omitted: it has default=None in cli/_shared.py, not required.
+def test_setup_missing_dem_path_exits_2() -> None:
+    """Story 2.8: `--dem-path` is now required at the setup CLI boundary."""
     result = _run_cli("steeproute-setup", "--center", "45.0716,6.1079", "--radius", "10")
-    assert result.returncode == 0, result.stderr
-    assert "stub" in result.stdout
+    assert result.returncode == 2, result.stderr
+    assert result.stderr.startswith("error:")
+    assert "--dem-path" in result.stderr
+
+
+def test_setup_radius_above_ceiling_exits_2() -> None:
+    """Story 2.8: `validate_setup_radius` rejects half-side > 50 km."""
+    result = _run_cli(
+        "steeproute-setup",
+        "--center",
+        "45.0716,6.1079",
+        "--radius",
+        "5000",
+        "--dem-path",
+        "doesnotmatter.tif",
+    )
+    assert result.returncode == 2, result.stderr
+    assert result.stderr.startswith("error:")
+    assert "ceiling" in result.stderr

@@ -113,14 +113,27 @@ def test_query_cli_without_verbose_leaves_state_false() -> None:
 
 
 def test_verbose_flag_sets_verbose_state_on_setup_cli() -> None:
+    """`--verbose` is an eager click callback — state flips even when later args fail.
+
+    The CLI now exits non-zero on missing `--dem-path` (Story 2.8), but the
+    eager-callback contract is "set state during the first parse pass", which
+    runs before BadCLIArgError propagation. Asserting `is_verbose()` after a
+    deliberately-failing invocation confirms eager evaluation still works.
+    """
     runner = CliRunner()
     result = runner.invoke(setup_cli, ["--center", "45.07,6.11", "--radius", "10", "--verbose"])
-    assert result.exit_code == 0
+    # Missing --dem-path raises BadCLIArgError, but the eager --verbose callback
+    # has already flipped the global state.
+    assert isinstance(result.exception, BadCLIArgError)
     assert is_verbose() is True
 
 
 def test_setup_cli_without_verbose_leaves_state_false() -> None:
+    # `tests/unit/conftest.py::reset_verbose_flag` autouse-resets `_verbose` to
+    # `False` before this test runs, so the assertion below tests "the eager
+    # callback did NOT flip the state without `--verbose`" — not just inertia
+    # carried over from a previous test.
     runner = CliRunner()
     result = runner.invoke(setup_cli, ["--center", "45.07,6.11", "--radius", "10"])
-    assert result.exit_code == 0
+    assert isinstance(result.exception, BadCLIArgError)
     assert is_verbose() is False

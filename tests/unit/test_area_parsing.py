@@ -1,6 +1,7 @@
 """Unit tests for FR1/FR2 area-spec validation at the CLI boundary (Story 1.6)."""
 
 import math
+import pathlib
 import sys
 from unittest import mock
 
@@ -125,15 +126,61 @@ def test_setup_cli_inherits_lat_lon_range_validation() -> None:
     assert "latitude" in result.exception.user_message
 
 
-def test_setup_cli_does_not_enforce_area_cap() -> None:
+def test_setup_cli_rejects_nan_radius(tmp_path: pathlib.Path) -> None:
+    """validate_setup_radius rejects non-finite radii (NaN, ±Inf).
+
+    `click.FLOAT` accepts the strings "nan", "inf", "-inf" via `float()`. Without
+    an explicit finiteness check, `nan` slips past every comparison (IEEE-754),
+    and the area silently propagates into osmnx as a crash. Story 2.8 review P1.
+    """
+    runner = CliRunner()
+    for bad in ("nan", "inf", "-inf"):
+        result = runner.invoke(
+            setup_cli,
+            [
+                "--center",
+                "45.0716,6.1079",
+                "--radius",
+                bad,
+                "--dem-path",
+                str(tmp_path / "nonexistent.tif"),
+            ],
+        )
+        assert isinstance(result.exception, BadCLIArgError), (
+            f"--radius {bad!r} should raise BadCLIArgError; got {result.exception!r}"
+        )
+        assert "--radius" in result.exception.user_message
+
+
+def test_setup_cli_does_not_enforce_area_cap(tmp_path: pathlib.Path) -> None:
     """Setup CLI has no --area-cap flag and does not call validate_area_size.
 
     A 30 km radius (~2827 km²) would be rejected by the query CLI's default cap of 500 km²,
-    but setup accepts it because area-cap enforcement is query-only.
+    but setup accepts it because area-cap enforcement is query-only. The setup CLI does
+    apply its own `validate_setup_radius` ceiling (Story 2.8), set at 50 km — 30 is below
+    that. We provide a `--dem-path` so the test isolates the area-cap question; the path
+    points at `tmp_path / nonexistent.tif` (a guaranteed-non-existent path that does not
+    depend on the test-process CWD), so the failure mode is the dem-existence guard, not
+    a real OSM fetch.
     """
     runner = CliRunner()
-    result = runner.invoke(setup_cli, ["--center", "45.0716,6.1079", "--radius", "30"])
-    assert result.exit_code == 0
+    result = runner.invoke(
+        setup_cli,
+        [
+            "--center",
+            "45.0716,6.1079",
+            "--radius",
+            "30",
+            "--dem-path",
+            str(tmp_path / "nonexistent.tif"),
+        ],
+    )
+    # The 30 km radius passes both `validate_setup_radius` (≤ 50 km) and any
+    # would-be area-cap check; what fails the run is the dem-existence guard
+    # at the CLI boundary. That failure mode confirms the absence of area-cap
+    # rejection on the setup path.
+    assert isinstance(result.exception, BadCLIArgError)
+    assert "--area-cap" not in result.exception.user_message
 
 
 # --- --verbose ordering with BadCLIArgError from convert (AC #4) ---

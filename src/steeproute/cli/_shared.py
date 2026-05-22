@@ -1,5 +1,6 @@
 """Shared CLI plumbing: verbose flag state, exit-code wrapper, and reusable click option decorators."""
 
+import logging
 import math
 import pathlib
 import sys
@@ -22,6 +23,22 @@ def set_verbose(value: bool) -> None:
 def is_verbose() -> bool:
     """Return the current verbose state. Used by tests; production reads `_verbose` directly."""
     return _verbose
+
+
+def configure_cli_logging(*, verbose: bool) -> None:
+    """Route stdlib `logging` output to stderr at DEBUG (--verbose) or WARNING otherwise.
+
+    Architecture §Cat 8 splits the two streams: progress + run summary go to stdout
+    via plain `print`; `logging` is reserved for diagnostics and warnings on stderr.
+    `force=True` makes the call idempotent across repeated CliRunner invocations
+    inside a single test process.
+    """
+    logging.basicConfig(
+        stream=sys.stderr,
+        level=logging.DEBUG if verbose else logging.WARNING,
+        format="%(levelname)s: %(name)s: %(message)s",
+        force=True,
+    )
 
 
 def run_entry_point(main_fn: Callable[[], int]) -> NoReturn:
@@ -100,6 +117,45 @@ def validate_area_size(radius_km: float, area_cap_km2: float) -> None:
         raise BadCLIArgError(
             f"--radius {radius_km:g} produces ~{area_km2:.0f} km², "
             f"exceeds --area-cap of {area_cap_km2:g} km²",
+        )
+
+
+# Setup-side hard ceiling on --radius (km), routed in via deferred-work D8 from
+# Story 2.1. A 2*r bbox at r=50 km still spans 10_000 km^2 — far above the
+# Grenoble Alps personal-tool use case but small enough to catch obvious typos
+# (e.g. `--radius 5000`) that would otherwise hand osmnx an Overpass query that
+# either times out or exceeds the 1 GB response cap. The query CLI has its own
+# `--area-cap`-driven ceiling (`validate_area_size`); setup deliberately has no
+# `--area-cap` flag so this constant carries the safety net here.
+_SETUP_MAX_RADIUS_KM: float = 50.0
+
+
+def validate_setup_radius(radius_km: float) -> None:
+    """Setup-side --radius sanity ceiling. Rejects non-finite and non-positive values.
+
+    Click parses `"nan"` and `"inf"` as legitimate floats; both slip past naive
+    `r <= 0` / `r > max` comparisons (`nan` compares False against everything,
+    `inf` only passes the upper bound). The explicit `math.isfinite` check at
+    the top closes both. Per Architecture §Cat 10, CLI-tier validation surfaces
+    as `BadCLIArgError → exit 2`, not a raw IEEE-754-induced traceback.
+    """
+    if not math.isfinite(radius_km):
+        raise BadCLIArgError(
+            f"--radius {radius_km!r} must be a finite number.",
+        )
+    if radius_km <= 0.0:
+        raise BadCLIArgError(
+            f"--radius {radius_km:g} must be positive.",
+        )
+    if radius_km > _SETUP_MAX_RADIUS_KM:
+        raise BadCLIArgError(
+            f"--radius {radius_km:g} km exceeds the steeproute-setup ceiling of "
+            f"{_SETUP_MAX_RADIUS_KM:g} km.",
+            detail=(
+                "Setup fetches the full bounding box from Overpass; very large "
+                "radii hit the Overpass timeout / 1 GB response cap. Split the "
+                "area into smaller prepared regions instead."
+            ),
         )
 
 
