@@ -42,6 +42,12 @@ dependencies = [
     "shapely>=2.0,<3",
     "rasterio>=1.4,<2",
     "platformdirs>=4,<5",
+    # `requests` is imported directly in `pipeline/osm.py` to catch the
+    # `requests.exceptions.RequestException` family from osmnx's HTTP backend
+    # (Story 2.9 source-unavailable mapping). osmnx 2.x depends on `requests`
+    # transitively, but a direct dep guards against a future osmnx release
+    # that swaps in `httpx` / `urllib3` and breaks the transitive guarantee.
+    "requests>=2,<3",
 ]
 
 

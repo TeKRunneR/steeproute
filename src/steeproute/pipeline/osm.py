@@ -9,9 +9,10 @@ import math
 
 import networkx as nx
 import osmnx
+import requests
 import shapely
 
-from steeproute.errors import BadCLIArgError
+from steeproute.errors import BadCLIArgError, DataSourceUnavailableError
 from steeproute.models import Area
 
 # OSM sac_scale tag values mapped to numeric T-rank for difficulty-cap filtering.
@@ -49,17 +50,43 @@ def osm_load(area: Area) -> nx.MultiDiGraph:
     Raises:
         BadCLIArgError: if `area.radius_km` is non-positive or non-finite, or
             `area.center` falls outside lat ∈ [-90, 90] / lon ∈ [-180, 180].
+        DataSourceUnavailableError: Overpass unreachable, request timeout, HTTP
+            error, or low-level I/O failure during the `osmnx.graph_from_point`
+            call. The original exception is chained via `raise ... from exc` so
+            `--verbose` can surface its `repr` on the detail line.
     """
     _validate_area(area)
     _ensure_sac_scale_in_useful_tags()
-    raw = osmnx.graph_from_point(
-        center_point=area.center,
-        dist=area.radius_km * 1000.0,
-        dist_type="bbox",
-        custom_filter=_OSM_CUSTOM_FILTER,
-        retain_all=False,
-        simplify=True,
-    )
+    try:
+        raw = osmnx.graph_from_point(
+            center_point=area.center,
+            dist=area.radius_km * 1000.0,
+            dist_type="bbox",
+            custom_filter=_OSM_CUSTOM_FILTER,
+            retain_all=False,
+            simplify=True,
+        )
+    except (requests.exceptions.RequestException, OSError, ValueError) as exc:
+        # `RequestException` is the base of every `requests` failure (ConnectionError,
+        # Timeout, HTTPError, ...) — the documented network-failure modes osmnx propagates
+        # from its HTTP backend. `OSError` covers the truly low-level cases (network
+        # filesystem hiccups, exhausted file descriptors, etc.).
+        #
+        # `ValueError` is the contract-correct catch for osmnx's own error classes:
+        # `osmnx._errors.ResponseStatusCodeError(ValueError)` fires on non-`ok` HTTP
+        # responses (e.g., 5xx Overpass outages — the canonical "source unavailable"
+        # scenario this wrap is meant to map to exit 2). `InsufficientResponseError`
+        # and `GraphSimplificationError` likewise inherit from `ValueError`. Catching
+        # `ValueError` at THIS specific call site is safe because `_validate_area`
+        # above already rejected malformed arguments — by elimination, any `ValueError`
+        # surfacing from `osmnx.graph_from_point` is a server-response interpretation
+        # failure, not a programming error. (Catching `ValueError` at the module level
+        # would mask real bugs; constraining it to this call site preserves type-error
+        # diagnostics elsewhere.)
+        raise DataSourceUnavailableError(
+            "OSM source unreachable.",
+            detail=f"osmnx.graph_from_point failed: {exc!r}",
+        ) from exc
     return normalize_edges(raw)
 
 

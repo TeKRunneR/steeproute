@@ -778,6 +778,7 @@ dependencies = [
     { name = "osmnx" },
     { name = "platformdirs" },
     { name = "rasterio" },
+    { name = "requests" },
     { name = "shapely" },
 ]
 
@@ -802,6 +803,7 @@ requires-dist = [
     { name = "osmnx", specifier = ">=2.0,<3" },
     { name = "platformdirs", specifier = ">=4,<5" },
     { name = "rasterio", specifier = ">=1.4,<2" },
+    { name = "requests", specifier = ">=2,<3" },
     { name = "shapely", specifier = ">=2.0,<3" },
 ]
 

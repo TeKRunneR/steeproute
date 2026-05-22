@@ -34,9 +34,10 @@ import pathlib
 import networkx as nx
 import pyproj
 import rasterio
+import rasterio.errors
 import shapely
 
-from steeproute.errors import DEMCoverageError
+from steeproute.errors import DataSourceUnavailableError, DEMCoverageError
 
 # Graph-side CRS: shapely geometries from stages 1-4 are WGS84 lon/lat.
 WGS84_EPSG: int = 4326
@@ -67,10 +68,32 @@ def sample_elevation(
         DEMCoverageError: if any edge vertex falls outside the DEM's bounds or
             lands on a nodata pixel. The message names one offending edge and
             the DEM bounds (fail-fast on the first violation).
+        DataSourceUnavailableError: `rasterio.open` cannot read the DEM —
+            permission denied, corrupt header, truncated file, missing file
+            (when `is_file()` raced an unlink), network-filesystem hiccup, etc.
+            Coverage-tier failures keep their `DEMCoverageError` class so users
+            can distinguish "can't open the file" from "file opened but the
+            area isn't covered" (Architecture §Cat 10).
         TypeError: if any edge's `geometry` is not a `shapely.LineString`.
     """
     out: nx.MultiDiGraph = graph.copy()
-    with rasterio.open(dem_path) as dataset:
+    try:
+        dataset_ctx = rasterio.open(dem_path)
+    except (rasterio.errors.RasterioIOError, OSError) as exc:
+        # `RasterioIOError` is rasterio's primary "couldn't read the raster" class
+        # (subclass of `OSError`). Catching `OSError` too covers truly low-level
+        # I/O failures (network filesystem disconnect, EACCES on systems where
+        # `is_file()` returns True without read permission). We deliberately keep
+        # the existing `DEMCoverageError` paths inside the `with` block — those
+        # represent "DEM opened fine but the data is wrong shape for this area",
+        # categorically distinct from "DEM source unreachable" per Cat 10. The
+        # `is_file()` check in `cli/setup.py` catches the common typo case earlier;
+        # this wrap covers what slips past it (deferred-work DEF2 from Story 2.8).
+        raise DataSourceUnavailableError(
+            "DEM source unreachable.",
+            detail=f"rasterio.open({dem_path}) failed: {exc!r}",
+        ) from exc
+    with dataset_ctx as dataset:
         dem_crs = dataset.crs
         if dem_crs is None:
             raise DEMCoverageError(
