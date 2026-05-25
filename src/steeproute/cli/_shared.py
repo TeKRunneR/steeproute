@@ -1,5 +1,6 @@
-"""Shared CLI plumbing: verbose flag state, exit-code wrapper, and reusable click option decorators."""
+"""Shared CLI plumbing: verbose flag state, exit-code wrapper, reusable click option decorators, OSM-age warning helper."""
 
+import datetime
 import logging
 import math
 import pathlib
@@ -9,6 +10,7 @@ from typing import NoReturn, override
 
 import click
 
+from steeproute.cache import Manifest
 from steeproute.errors import BadCLIArgError, PreExecutionError
 
 _verbose: bool = False
@@ -362,3 +364,82 @@ osm_age_warn_days_option = click.option(
     show_default=True,
     help="OSM-extract-age warning threshold in days.",
 )
+
+
+# --- OSM-age warning (Architecture §Cat 4f) ---------------------------------
+
+# Shared "what to re-run" suggestion. Both CLIs land on cache-hit paths
+# (`steeproute-setup` re-prepares; `steeproute` queries an existing entry);
+# in both cases the action that refreshes OSM is `steeproute-setup --force-refresh`.
+# Keeping the message identical across CLIs means users see one consistent
+# instruction regardless of which entry-point surfaced the stale data.
+_OSM_AGE_WARNING_TEMPLATE: str = (
+    "OSM extract for this cache entry is %d days old (threshold: %d days). "
+    "Re-run `steeproute-setup --force-refresh` for this area to fetch the latest OSM data."
+)
+
+
+_osm_age_logger = logging.getLogger(__name__)
+
+
+def emit_osm_age_warning(
+    *,
+    manifest: Manifest,
+    threshold_days: int,
+    now: datetime.datetime,
+) -> None:
+    """Emit a `logging.warning(...)` if the manifest's OSM extract is stale (Architecture §Cat 4f).
+
+    Lifted from `cli/setup.py` (Story 2.9) to `cli/_shared.py` (Story 2.10) so
+    `cli/query.py`'s cache-hit path can reuse the same boundary semantics
+    without re-implementing them. The warning is non-blocking: callers proceed
+    normally after this returns.
+
+    **Boundary semantics are strict:** the helper fires iff `age_days > threshold_days`.
+    Equality does NOT warn — an entry whose `osm_extract_date` is exactly `threshold_days`
+    ago is treated as "fresh, at the boundary." Any age exceeding the threshold by any
+    margin (e.g., 90.5 days at the default threshold) triggers the warning. The rendered
+    age in the warning message is `math.ceil(age_days)` so the displayed number always
+    reflects "this entry has crossed the threshold" — a 90.5-day entry renders as 91,
+    not 90 (which would mislead under `%.0f`'s round-half-to-even).
+
+    A malformed `osm_extract_date` or any other unexpected exception is swallowed via
+    `_logger.debug` rather than crashing the cache-hit path: we already have the user's
+    graph, the age-warning is auxiliary diagnostic information. (`Manifest.from_dict`
+    would have already raised `CacheCorruptedError` on schema violations, so reaching the
+    swallow branch in production requires hand-edited or schema-drifted manifests.)
+
+    Args:
+        manifest: the cache-entry metadata just read by `read_entry` (setup-side) or
+            `check_coverage` (query-side).
+        threshold_days: the `--osm-age-warn-days` CLI value (default 90).
+        now: current UTC datetime; injected so tests can drive deterministic ages
+            without monkey-patching `datetime.datetime.now`.
+    """
+    try:
+        extract_dt = datetime.datetime.fromisoformat(manifest.osm_extract_date)
+    except Exception as exc:
+        # Defense-in-depth: any failure parsing the manifest's date (malformed string,
+        # future schema where the field becomes non-string, OverflowError on an absurdly
+        # distant date) must not crash the cache-hit path. The user's graph is already
+        # loaded successfully; the age warning is auxiliary diagnostic info. Surface the
+        # swallow via `_logger.debug` so `--verbose` users can still diagnose schema drift.
+        _osm_age_logger.debug("OSM-age warning skipped (could not parse osm_extract_date): %r", exc)
+        return
+    # `fromisoformat` produces a naive datetime when the input lacks a tz designator;
+    # `provenance.iso8601_utc_now` writes a literal-Z suffix (Python 3.11+ parses Z
+    # as UTC). If the manifest predates that convention or is hand-edited to naive,
+    # treat it as UTC so the comparison doesn't crash on tz-mismatch.
+    if extract_dt.tzinfo is None:
+        extract_dt = extract_dt.replace(tzinfo=datetime.UTC)
+    age = now - extract_dt
+    age_days = age.total_seconds() / 86_400.0
+    if age_days > threshold_days:
+        # `math.ceil` (not `%.0f`) so a 90.5-day entry renders as 91, not 90 —
+        # otherwise the displayed number would contradict the strict-`>` rule
+        # the comparison above just applied. See docstring.
+        _osm_age_logger.warning(
+            _OSM_AGE_WARNING_TEMPLATE,
+            math.ceil(age_days),
+            threshold_days,
+        )

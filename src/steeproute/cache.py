@@ -1,15 +1,18 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
 # Reason: networkx MultiDiGraph operations surface as Unknown; same external-boundary
 # pattern as pipeline/__init__.py, pipeline/osm.py, pipeline/smoothing.py, etc.
-"""Cache I/O: key hashing + manifest schema (Story 2.6); atomic write + read + index (Story 2.7); coverage check lands in Story 2.10.
+"""Cache I/O: key hashing + manifest schema (Story 2.6); atomic write + read + index (Story 2.7); coverage check (Story 2.10).
 
 `compute_cache_key` is the single source of truth for which inputs invalidate a cached graph
 (Architecture §Cat 4b). `Manifest` is the wire schema written last as the atomic commit signal
 (§Cat 4d). `write_entry` / `read_entry` / `rebuild_index` (Story 2.7) implement the `.tmp/`
 → `os.replace()` atomic pattern that guarantees a Ctrl-C mid-write cannot surface a partial
-entry. The package is the sole reader/writer of the cache directory (§Boundaries — Cache
-boundary), so all serialization concerns live here too. All JSON writes route through the
-single `write_json_atomic` helper per Architecture §Key anti-patterns.
+entry. `check_coverage` (Story 2.10) is the FR24 query-side surface — strict `shapely.contains`
+against `index.json` entries with smallest-radius tiebreak; it opportunistically rebuilds the
+index when a prior `write_entry` was interrupted between manifest commit and index rebuild
+(closes Story 2.7 D1). The package is the sole reader/writer of the cache directory
+(§Boundaries — Cache boundary), so all serialization concerns live here too. All JSON writes
+route through the single `write_json_atomic` helper per Architecture §Key anti-patterns.
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ from typing import Any
 
 import networkx as nx
 import platformdirs
+import shapely
 
 from steeproute.errors import CacheCorruptedError, CacheNotFoundError
 from steeproute.models import Area
@@ -504,11 +508,16 @@ def rebuild_index(cache_root: pathlib.Path) -> None:
     entries: list[dict[str, object]] = []
     if areas_dir.is_dir():
         for entry_dir in sorted(areas_dir.iterdir(), key=lambda p: p.name):
-            if not entry_dir.is_dir():
+            # `_is_entry_dir` excludes staging (`.tmp/`) and rollback (`.old/`)
+            # directories by suffix — a Ctrl-C mid-rollback can leave an `.old/`
+            # with a valid-looking but stale manifest; admitting it into the
+            # index would surface as a `read_entry` miss at query time
+            # (areas/<hash> doesn't exist, only areas/<hash>.old).
+            if not _is_entry_dir(entry_dir):
                 continue
             manifest_path = entry_dir / _MANIFEST_FILENAME
             if not manifest_path.is_file():
-                # `.tmp/`, `.old/`, half-written entries — skip silently.
+                # Half-written entries (no manifest commit yet) — skip silently.
                 continue
             try:
                 payload = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -562,27 +571,15 @@ def _bounds_geojson(area: Area) -> dict[str, object]:
     dist_type="bbox")` consumes upstream: `radius_km` is the half-side of
     an axis-aligned square in WGS84 degrees (lat/lon), **not** a disk radius.
     The 4-vertex polygon is the simplest faithful representation; Story 2.10's
-    `shapely.contains` check builds an equivalent polygon at query time.
+    `check_coverage` builds an equivalent polygon at query time via the shared
+    `_area_to_polygon` helper, so the on-disk sidecar and the in-memory
+    coverage geometry can't silently diverge.
     """
+    poly = _area_to_polygon(area)
+    # `Polygon.exterior.coords` includes the closing duplicate vertex, matching
+    # the prior hand-built ring's shape exactly.
+    ring = [[float(x), float(y)] for x, y in poly.exterior.coords]
     lat, lon = area.center
-    # `radius_km` is bbox half-side per `models.Area`. Architecture leaves the
-    # km→deg conversion implementation-defined for v1; we use a simple WGS84
-    # equator-approximation (1° lat ≈ 111 km, 1° lon ≈ 111 km × cos(lat)) which
-    # is good enough at Grenoble's ~45° N for the diagnostic / debug-viz role
-    # `bounds.geojson` plays. Coverage math (Story 2.10) recomputes from the
-    # canonical Area + radius_km, not from bounds.geojson, so a small
-    # projection-skew here doesn't propagate.
-    deg_per_km_lat = 1.0 / 111.0
-    deg_per_km_lon = 1.0 / (111.0 * math.cos(math.radians(lat)) or 1.0)
-    dlat = area.radius_km * deg_per_km_lat
-    dlon = area.radius_km * deg_per_km_lon
-    ring = [
-        [lon - dlon, lat - dlat],
-        [lon + dlon, lat - dlat],
-        [lon + dlon, lat + dlat],
-        [lon - dlon, lat + dlat],
-        [lon - dlon, lat - dlat],
-    ]
     # `properties.center` uses GeoJSON `[lon, lat]` ordering for internal
     # consistency with `geometry.coordinates` (also `[lon, lat]` per RFC 7946).
     # The manifest's `area.center` keeps the `[lat, lon]` ordering Architecture
@@ -596,3 +593,409 @@ def _bounds_geojson(area: Area) -> dict[str, object]:
             "radius_km": float(area.radius_km),
         },
     }
+
+
+# --- Coverage check (Story 2.10) ---------------------------------------------
+
+
+# WGS84 km→deg approximation used by both `_bounds_geojson` and the coverage
+# check. Lives at module scope so both sides share one source of truth — a
+# polygon-skew between query and entry would cause phantom misses on edge
+# cases. Architecture leaves the conversion implementation-defined for v1.
+_DEG_PER_KM_LAT: float = 1.0 / 111.0
+
+
+def _deg_per_km_lon(lat_deg: float) -> float:
+    """Longitude-degrees-per-km factor at a given latitude (cos(lat) compensation).
+
+    At the equator: ~1/111 deg/km. At ±60° N/S: ~1/55.5 deg/km.
+
+    Polar guard: `math.cos(math.radians(90.0))` is `~6.12e-17` (not exactly 0,
+    due to float imprecision in `math.radians`), so an `or 1.0` short-circuit
+    fallback would never fire — the unfettered formula returns ~1.47e14 deg/km
+    at lat=±90, producing polygons that span ~10^14 degrees of longitude.
+    `LatLonParamType` accepts lat=±90 inclusive at the CLI boundary, so the
+    pole case is reachable. We guard with an explicit epsilon check and treat
+    near-pole inputs as equator (graceful degenerate — longitudes converge at
+    the pole, so any sensible factor produces a degenerate polygon there).
+    """
+    cos_lat = math.cos(math.radians(lat_deg))
+    # Epsilon chosen so |lat| ≥ 89.99° trips the fallback; below that, the
+    # cos compensation is meaningful (at 89° cos ≈ 0.0175, factor ≈ 0.516 deg/km).
+    if abs(cos_lat) < 1e-4:
+        return 1.0 / 111.0
+    return 1.0 / (111.0 * cos_lat)
+
+
+def _area_to_polygon(area: Area) -> shapely.Polygon:
+    """Build the WGS84 lon/lat polygon for `area`'s bbox half-side `radius_km`.
+
+    Shared by `_bounds_geojson` (entry-side, persisted) and `check_coverage`
+    (query-side, transient). Coordinates are `(lon, lat)` per RFC 7946 — the
+    same axis order shapely uses everywhere else in the codebase (pipeline
+    geometries are also lon/lat).
+
+    The 5-point ring closes the polygon (first vertex repeated last). Empty /
+    degenerate radii (≤0) would produce a zero-area or self-intersecting polygon
+    and downstream `.contains` would return False for everything — acceptable
+    for v1 since `validate_setup_radius` rejects non-positive radii at the CLI
+    boundary (Story 2.8).
+    """
+    lat, lon = area.center
+    dlat = area.radius_km * _DEG_PER_KM_LAT
+    dlon = area.radius_km * _deg_per_km_lon(lat)
+    return shapely.Polygon(
+        [
+            (lon - dlon, lat - dlat),
+            (lon + dlon, lat - dlat),
+            (lon + dlon, lat + dlat),
+            (lon - dlon, lat + dlat),
+            (lon - dlon, lat - dlat),
+        ]
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _IndexedEntry:
+    """One row from `index.json`, internal to `cache.py` containment logic.
+
+    Architecture §Cat 4 frames `index.json` as a coverage-lookup convenience
+    file with two fields per entry (`cache_key_hash`, `area`); promoting this
+    to a top-level dataclass would be over-engineering for v1 with one reader.
+    """
+
+    cache_key_hash: str
+    area: Area
+
+
+def _read_indexed_entries(index_path: pathlib.Path) -> list[_IndexedEntry] | None:
+    """Parse `index.json` into `_IndexedEntry`s, or return `None` to signal "rebuild me".
+
+    A `None` return means the file is missing, unparseable, schema-incompatible,
+    or structurally malformed in any way — the caller's contract is then to
+    invoke `rebuild_index` and retry. A `[]` return means the file parses
+    cleanly but lists zero entries; the caller still cross-checks the on-disk
+    `areas/` against this in case an interrupted `write_entry` left a stale
+    empty index (Story 2.7 D1).
+    """
+    if not index_path.is_file():
+        return None
+    try:
+        payload = json.loads(index_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("schema_version") != _INDEX_SCHEMA_VERSION:
+        return None
+    entries_raw = payload.get("entries")
+    if not isinstance(entries_raw, list):
+        return None
+    parsed: list[_IndexedEntry] = []
+    for row in entries_raw:
+        if not isinstance(row, dict):
+            return None
+        cache_key_hash = row.get("cache_key_hash")
+        area_raw = row.get("area")
+        if not isinstance(cache_key_hash, str) or not isinstance(area_raw, dict):
+            return None
+        center = area_raw.get("center")
+        radius_km = area_raw.get("radius_km")
+        # `isinstance(True, int)` is True in Python (bool subclasses int) and
+        # `float(NaN)` / `float(Infinity)` succeed silently — a malformed payload
+        # would otherwise build an `Area` whose polygon raises a raw shapely
+        # `GEOSException` from `_area_to_polygon`, breaking the FR24 exit-2
+        # contract. Reject these defensively here so the caller rebuilds.
+        if (
+            not isinstance(center, list)
+            or len(center) != 2
+            or not isinstance(radius_km, (int, float))
+            or isinstance(radius_km, bool)
+            or not math.isfinite(radius_km)
+            or radius_km <= 0
+        ):
+            return None
+        try:
+            lat_raw, lon_raw = float(center[0]), float(center[1])
+        except (TypeError, ValueError):
+            return None
+        # Same finiteness guard on the center coordinates — NaN/Infinity in
+        # `center` would also pollute `_area_to_polygon` downstream.
+        if not (math.isfinite(lat_raw) and math.isfinite(lon_raw)):
+            return None
+        try:
+            area = Area(center=(lat_raw, lon_raw), radius_km=float(radius_km))
+        except (TypeError, ValueError):
+            return None
+        parsed.append(_IndexedEntry(cache_key_hash=cache_key_hash, area=area))
+    return parsed
+
+
+def _is_entry_dir(path: pathlib.Path) -> bool:
+    """True iff `path` looks like a real cache entry directory (not a staging artifact).
+
+    Filters out `<hash>.tmp/` (in-flight writes) and `<hash>.old/` (rollback
+    shuffle from Story 2.7's atomic-write pattern). A Ctrl-C in the narrow
+    window between `os.replace(entry_dir, backup_dir)` and the manifest
+    commit can leave a `<hash>.old/` with the previous entry's full manifest
+    on disk — without this suffix filter both `_areas_has_valid_entries` and
+    `rebuild_index` would admit it as a live entry. The manifest-presence
+    check still applies on top of this; both guards together ensure only
+    fully-committed entries enter the rebuilt index.
+    """
+    if not path.is_dir():
+        return False
+    return path.suffix not in {_TMP_DIR_SUFFIX, _OLD_DIR_SUFFIX}
+
+
+def _areas_has_valid_entries(cache_root: pathlib.Path) -> bool:
+    """Cheap filesystem probe: does `areas/` contain at least one committed entry?
+
+    Used to detect the "interrupted write" case where a `write_entry` landed
+    the entry's `manifest.json` but didn't reach `rebuild_index` before
+    Ctrl-C, leaving the index out-of-date (Story 2.7 D1). `.tmp/` and `.old/`
+    directories are skipped via `_is_entry_dir` — they're not committed
+    entries even when a stale manifest happens to live inside them. We don't
+    validate manifest contents here; `rebuild_index` does that next, and an
+    invalid one is skipped from the rebuilt index.
+    """
+    areas_dir = _areas_dir(cache_root)
+    if not areas_dir.is_dir():
+        return False
+    for entry_dir in areas_dir.iterdir():
+        if _is_entry_dir(entry_dir) and (entry_dir / _MANIFEST_FILENAME).is_file():
+            return True
+    return False
+
+
+def _select_smallest_containing(
+    query_area: Area,
+    indexed: list[_IndexedEntry],
+) -> _IndexedEntry | None:
+    """Return the smallest-radius indexed entry whose bbox contains `query_area`, or None.
+
+    "Contains" per `shapely.Polygon.contains` (DE-9IM `[T*****FF*]`): no point
+    of the query polygon lies outside the entry polygon. Identical bboxes
+    qualify (a polygon contains itself); a query bbox that pokes outside on
+    any side does not. This matches the Architecture §Cat 4e "strict
+    containment" rule's intent (no out-of-bounds query coverage).
+
+    Ties on `radius_km` are broken by ascending `cache_key_hash` so the result
+    is deterministic regardless of `index.json` insertion order.
+    """
+    query_poly = _area_to_polygon(query_area)
+    containing: list[_IndexedEntry] = []
+    for entry in indexed:
+        entry_poly = _area_to_polygon(entry.area)
+        if entry_poly.contains(query_poly):
+            containing.append(entry)
+    if not containing:
+        return None
+    return min(containing, key=lambda e: (e.area.radius_km, e.cache_key_hash))
+
+
+def _planar_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Approximate distance in km using the same flat-earth projection as `_area_to_polygon`.
+
+    This is NOT a true great-circle (haversine) distance — it's a planar
+    approximation with cos-latitude correction on the longitude axis. Sharing
+    the projection with `_area_to_polygon` makes the "nearest" metric consistent
+    with the containment geometry. For Grenoble-area distances (≤ ~100 km) the
+    deviation from haversine is well under 1%, which is irrelevant for an
+    actionable "narrow your radius" hint.
+
+    Antimeridian crossings (lon1 ~+180, lon2 ~-180) are NOT handled — the
+    `lon1 - lon2` delta produces a ~360° span. Out of scope for the Grenoble
+    Alps use case; document the limitation if a polar/equatorial use case
+    ever materializes.
+    """
+    avg_lat = (lat1 + lat2) / 2.0
+    dlat_km = (lat1 - lat2) / _DEG_PER_KM_LAT
+    dlon_km = (lon1 - lon2) / _deg_per_km_lon(avg_lat)
+    return math.sqrt(dlat_km * dlat_km + dlon_km * dlon_km)
+
+
+def _find_nearest(query_area: Area, indexed: list[_IndexedEntry]) -> _IndexedEntry:
+    """Pick the entry whose center is closest to `query_area.center`.
+
+    Ties broken by `cache_key_hash` for determinism. `indexed` is non-empty
+    by caller contract — `check_coverage` only calls this on the partial-
+    coverage branch after the empty-cache case is handled.
+    """
+    q_lat, q_lon = query_area.center
+
+    def _distance(entry: _IndexedEntry) -> tuple[float, str]:
+        e_lat, e_lon = entry.area.center
+        return (_planar_distance_km(q_lat, q_lon, e_lat, e_lon), entry.cache_key_hash)
+
+    return min(indexed, key=_distance)
+
+
+def _format_lat_lon(lat: float, lon: float) -> str:
+    """Render `(lat, lon)` for an actionable CLI command. Trims trailing zeros."""
+    return f"{_format_number(lat)},{_format_number(lon)}"
+
+
+def _format_number(value: float) -> str:
+    """Strip trailing zeros from a float for clean copy-pasteable CLI output.
+
+    `45.0716` stays as-is; `1.0` becomes `1`; `10.5` stays `10.5`. Click parses
+    both `1` and `1.0` as the same `--radius` float so the trimmed form is
+    safe to suggest in error messages.
+
+    Signed-zero normalization: `f"{-0.0:g}"` renders as `'-0'` (Python's
+    IEEE-754-respecting `:g` format), which would surface in suggested CLI
+    commands as `--center -0,-0` — parseable but awkward. Coerce to positive
+    zero before formatting so the displayed form is clean.
+    """
+    if value == 0.0:  # True for both +0.0 and -0.0; `+ 0.0` normalizes the sign.
+        value = value + 0.0
+    return f"{value:g}"
+
+
+def _no_prepared_cache_message(query_area: Area) -> str:
+    """AC #3: empty-cache error message echoing the query's center and radius.
+
+    Lead phrase distinguishes the empty-cache case from `_partial_coverage_message`'s
+    "No prepared cache covers this area." so users can triage at a glance.
+    """
+    lat, lon = query_area.center
+    return (
+        f"No prepared cache exists yet. "
+        f"Run: steeproute-setup --center {_format_lat_lon(lat, lon)} "
+        f"--radius {_format_number(query_area.radius_km)} --dem-path <your DEM>"
+    )
+
+
+def _partial_coverage_message(
+    query_area: Area,
+    nearest: _IndexedEntry,
+) -> str:
+    """AC #4: partial-coverage error naming the nearest prepared area.
+
+    Suggests the largest `--radius` value that would fit strictly inside the
+    nearest entry while keeping the original query center, OR — if the query
+    center is itself outside the nearest entry — suggests narrowing `--center`
+    rather than emitting a non-positive radius. Both branches provide a fully
+    copy-pasteable `steeproute-setup` command for the "widen the prepared area
+    instead" path; the smaller-radius branch additionally suggests a narrowed
+    `steeproute` re-invocation.
+    """
+    q_lat, q_lon = query_area.center
+    e_lat, e_lon = nearest.area.center
+    dlat_km = abs(q_lat - e_lat) / _DEG_PER_KM_LAT
+    dlon_km = abs(q_lon - e_lon) / _deg_per_km_lon((q_lat + e_lat) / 2.0)
+    # Largest query radius keeping query bbox strictly inside the entry bbox at
+    # the same query center: r_new = min(entry.r - |Δlat_km|, entry.r - |Δlon_km|).
+    # If non-positive, the query center sits outside the entry — fall back to
+    # the center-relocation hint.
+    r_new = min(nearest.area.radius_km - dlat_km, nearest.area.radius_km - dlon_km)
+    base = (
+        f"No prepared cache covers this area. "
+        f"Nearest prepared area: center {_format_lat_lon(e_lat, e_lon)}, "
+        f"radius {_format_number(nearest.area.radius_km)} km."
+    )
+    # Both branches echo a fully copy-pasteable `steeproute-setup` command
+    # using the user's original query center + radius so they can widen the
+    # prepared area to cover their target without composing the command
+    # themselves (UX parity with the empty-cache message).
+    widen_setup_cmd = (
+        f"steeproute-setup --center {_format_lat_lon(q_lat, q_lon)} "
+        f"--radius {_format_number(query_area.radius_km)} --dem-path <your DEM>"
+    )
+    if r_new > 0:
+        return (
+            f"{base} Re-run with a smaller --radius (<= {_format_number(r_new)}) "
+            f"or prepare your target area: {widen_setup_cmd}"
+        )
+    return (
+        f"{base} Narrow --center toward {_format_lat_lon(e_lat, e_lon)} "
+        f"or prepare your target area: {widen_setup_cmd}"
+    )
+
+
+def _diagnostic_detail(indexed: list[_IndexedEntry]) -> str:
+    """Verbose `detail` line listing every prepared area for the user."""
+    rows = ", ".join(
+        f"{e.cache_key_hash}: center {_format_lat_lon(*e.area.center)} "
+        f"radius {_format_number(e.area.radius_km)} km"
+        for e in indexed
+    )
+    return f"Prepared areas: [{rows}]"
+
+
+def check_coverage(cache_root: pathlib.Path, query_area: Area) -> PreparedData:
+    """FR24 coverage check: resolve a query area against the prepared cache (Architecture §Cat 4e).
+
+    Strategy:
+
+    1. Read `index.json`. If missing / unparseable / schema-incompatible, OR if
+       it parses as empty while `areas/` actually contains valid entries (the
+       Story 2.7 D1 interrupted-write window), opportunistically `rebuild_index`
+       and re-read.
+    2. If the index lists zero entries, raise `CacheNotFoundError` with the
+       empty-cache actionable message (AC #3).
+    3. For each indexed entry, build its polygon via `_area_to_polygon` and
+       test strict `shapely.contains` against the query polygon (also built
+       via `_area_to_polygon` so query and entry share one geometry source).
+       Among the strictly-containing entries, pick the smallest `radius_km`
+       (tiebreak by `cache_key_hash` for determinism).
+    4. If no entry strictly contains the query, raise `CacheNotFoundError`
+       with the partial-coverage message naming the nearest prepared area
+       and an actionable smaller-radius or center-relocation hint (AC #4).
+    5. Otherwise, return `read_entry(cache_root, chosen.cache_key_hash)` — any
+       `CacheCorruptedError` from the chosen entry's graph propagates unchanged
+       (existing exit-2 contract).
+
+    Args:
+        cache_root: cache root path as returned by `resolve_cache_root` — the
+            same value `write_entry` / `read_entry` accept.
+        query_area: the query CLI's parsed `--center` / `--radius`.
+
+    Raises:
+        CacheNotFoundError: no entry strictly contains the query, or the cache
+            is empty.
+        CacheCorruptedError: the selected entry's `graph.pkl` or `manifest.json`
+            is unreadable (propagated from `read_entry`).
+    """
+    index_path = cache_root / _CACHE_SUBDIR / _INDEX_FILENAME
+    indexed = _read_indexed_entries(index_path)
+    if indexed is None:
+        # Missing / unparseable / schema-incompatible — rebuild and retry.
+        rebuild_index(cache_root)
+        rebuilt = _read_indexed_entries(index_path)
+        if rebuilt is None:
+            _logger.debug(
+                "check_coverage: index at %s remained unreadable after rebuild; "
+                "falling back to empty entry list.",
+                index_path,
+            )
+        indexed = rebuilt or []
+    elif not indexed and _areas_has_valid_entries(cache_root):
+        # Empty index but on-disk entries exist (Story 2.7 D1: interrupted
+        # write between manifest commit and final `rebuild_index`).
+        rebuild_index(cache_root)
+        rebuilt = _read_indexed_entries(index_path)
+        if rebuilt is None:
+            _logger.debug(
+                "check_coverage: rebuild_index ran but index at %s is still unreadable; "
+                "falling back to empty entry list.",
+                index_path,
+            )
+        indexed = rebuilt or []
+
+    if not indexed:
+        raise CacheNotFoundError(
+            user_message=_no_prepared_cache_message(query_area),
+            detail=f"Cache root: {cache_root}",
+        )
+
+    chosen = _select_smallest_containing(query_area, indexed)
+    if chosen is None:
+        nearest = _find_nearest(query_area, indexed)
+        raise CacheNotFoundError(
+            user_message=_partial_coverage_message(query_area, nearest),
+            detail=_diagnostic_detail(indexed),
+        )
+
+    return read_entry(cache_root, chosen.cache_key_hash)

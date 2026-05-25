@@ -28,7 +28,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-05-22
+last_updated: 2026-05-25
 project: bmad-test
 project_key: NOKEY
 tracking_system: file-system
@@ -55,7 +55,7 @@ development_status:
   2-7-implement-atomic-cache-write-read-and-index-maintenance: done
   2-8-wire-steeproute-setup-end-to-end-with-force-refresh-semantics-on-real-fixture: done
   2-9-handle-source-unavailable-errors-and-emit-osm-age-warnings: done
-  2-10-implement-query-side-fail-fast-on-unprepared-area: backlog
+  2-10-implement-query-side-fail-fast-on-unprepared-area: done
   epic-2-retrospective: optional
 
   epic-3: backlog

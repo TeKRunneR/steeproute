@@ -127,13 +127,32 @@ def test_query_area_cap_exceeded_exits_2() -> None:
     assert "--area-cap" in result.stderr
 
 
-# --- Task 5: happy path ---
+# --- Task 5: query CLI surface ---
 
 
-def test_query_happy_path_exits_0() -> None:
-    result = _run_cli("steeproute", "--center", "45.0716,6.1079", "--radius", "10")
-    assert result.returncode == 0, result.stderr
-    assert "stub" in result.stdout
+def test_query_unprepared_area_exits_2_with_setup_command_suggestion(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Story 2.10 FR24: a query against an empty cache exits 2 with an actionable error.
+
+    The Epic-1-era stub returned 0; Story 2.10 wired the CLI through
+    `cache.check_coverage`, which raises `CacheNotFoundError` when no prepared
+    cache covers the query area. The CLI is exercised with `--cache-dir <tmp>`
+    so the test stays isolated from the user's real cache root.
+    """
+    result = _run_cli(
+        "steeproute",
+        "--center",
+        "45.0716,6.1079",
+        "--radius",
+        "10",
+        "--cache-dir",
+        str(tmp_path),
+    )
+    assert result.returncode == 2, result.stderr
+    # P5: empty-cache lead distinguishes from partial-coverage lead.
+    assert result.stderr.startswith("error: No prepared cache exists yet.")
+    assert "steeproute-setup --center 45.0716,6.1079" in result.stderr
 
 
 def test_setup_missing_dem_path_exits_2() -> None:

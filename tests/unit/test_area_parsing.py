@@ -12,7 +12,7 @@ from steeproute.cli._shared import LAT_LON, is_verbose, validate_area_size
 from steeproute.cli.query import cli as query_cli
 from steeproute.cli.query import main as query_main
 from steeproute.cli.setup import cli as setup_cli
-from steeproute.errors import BadCLIArgError
+from steeproute.errors import BadCLIArgError, CacheNotFoundError
 
 # --- LatLonParamType: range validation + BadCLIArgError surfacing (AC #1) ---
 
@@ -73,11 +73,31 @@ def test_validate_area_size_rejects_above_cap() -> None:
 # --- Query CLI end-to-end (CliRunner): area-cap + happy path (AC #2, #5) ---
 
 
-def test_query_cli_happy_path_proceeds_to_stub() -> None:
-    """Valid args reach the Story 1.5 stub body and exit 0."""
+def test_query_cli_happy_path_passes_parsing_then_hits_coverage_check(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Valid args clear parse + area-cap, then surface `CacheNotFoundError` from `check_coverage`.
+
+    Story 2.10 wired the query CLI through `cache.check_coverage` (FR24). With
+    no prepared cache under the (test-isolated) `--cache-dir`, the wired CLI
+    raises `CacheNotFoundError` instead of reaching the Story 1.5 stub body.
+    What this test still proves: parsing succeeded, validation succeeded, and
+    the CLI body executed far enough to call `check_coverage`. The exit-2
+    contract itself is covered by `tests/e2e/test_coverage_check.py`.
+    """
     runner = CliRunner()
-    result = runner.invoke(query_cli, ["--center", "45.0716,6.1079", "--radius", "10"])
-    assert result.exit_code == 0
+    result = runner.invoke(
+        query_cli,
+        [
+            "--center",
+            "45.0716,6.1079",
+            "--radius",
+            "10",
+            "--cache-dir",
+            str(tmp_path),
+        ],
+    )
+    assert isinstance(result.exception, CacheNotFoundError)
 
 
 def test_query_cli_rejects_radius_exceeding_area_cap() -> None:
@@ -88,15 +108,31 @@ def test_query_cli_rejects_radius_exceeding_area_cap() -> None:
     assert "--area-cap" in result.exception.user_message
 
 
-def test_query_cli_accepts_radius_just_below_custom_cap() -> None:
-    """User-overridden --area-cap is honored; radius producing area below cap passes."""
+def test_query_cli_accepts_radius_just_below_custom_cap(tmp_path: pathlib.Path) -> None:
+    """User-overridden --area-cap is honored; radius producing area below cap passes validation.
+
+    Post-Story-2.10 the CLI now goes through `check_coverage` after passing
+    `validate_area_size`. With an isolated empty `--cache-dir`, success past
+    the area-cap guard is signalled by reaching `CacheNotFoundError` rather
+    than a `BadCLIArgError` from the cap.
+    """
     runner = CliRunner()
     radius = math.sqrt(100.0 / math.pi) * 0.999
     result = runner.invoke(
         query_cli,
-        ["--center", "45.0716,6.1079", "--radius", f"{radius:.6f}", "--area-cap", "100"],
+        [
+            "--center",
+            "45.0716,6.1079",
+            "--radius",
+            f"{radius:.6f}",
+            "--area-cap",
+            "100",
+            "--cache-dir",
+            str(tmp_path),
+        ],
     )
-    assert result.exit_code == 0
+    # Area-cap passed (no BadCLIArgError); coverage check then raises.
+    assert isinstance(result.exception, CacheNotFoundError)
 
 
 def test_query_cli_rejects_malformed_center() -> None:

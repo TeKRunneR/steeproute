@@ -98,11 +98,7 @@ def _osm_load_from_fixture(_area: Area) -> nx.MultiDiGraph:
 
 @pytest.fixture(autouse=True)
 def _skip_if_fixtures_missing() -> None:
-    if (
-        not _DEM_FIXTURE_PATH.exists()
-        or not _OSM_FIXTURE_PATH.exists()
-        or not _FIXTURES_LOADED
-    ):
+    if not _DEM_FIXTURE_PATH.exists() or not _OSM_FIXTURE_PATH.exists() or not _FIXTURES_LOADED:
         pytest.skip("OSM or DEM fixture not committed; source-unavailable e2e tests skipped.")
 
 

@@ -1,10 +1,11 @@
-# pyright: reportPrivateUsage=false
-# Reason: `_emit_osm_age_warning` is intentionally module-private (the `_` prefix
-# signals "internal to cli/setup.py" per Architecture §Python code conventions).
-# Unit-testing it from outside the module is the correct way to pin its boundary
-# semantics — the `_` says "safe to rename if no external usage", and tests
-# constraining the contract are explicit external usage.
-"""Unit tests for `cli/setup.py` pure helpers (Story 2.9: `_emit_osm_age_warning`)."""
+"""Unit tests for the shared `emit_osm_age_warning` helper (Story 2.9 + Story 2.10 lift).
+
+Originally lived in `cli/setup.py` (`emit_osm_age_warning`, Story 2.9). Story
+2.10 lifted it to `cli/_shared.py::emit_osm_age_warning` so `cli/query.py`'s
+cache-hit path could reuse the same boundary semantics. Tests retain their
+original location to avoid churn — they pin the helper's contract regardless of
+its host module.
+"""
 
 from __future__ import annotations
 
@@ -14,14 +15,14 @@ import logging
 import pytest
 
 from steeproute.cache import Manifest
-from steeproute.cli.setup import _emit_osm_age_warning
+from steeproute.cli._shared import emit_osm_age_warning
 from steeproute.models import Area
 
 
 def _manifest_with(osm_extract_date: str) -> Manifest:
     """Build a synthetic `Manifest` with the given `osm_extract_date`.
 
-    All other fields are arbitrary but valid: `_emit_osm_age_warning` only
+    All other fields are arbitrary but valid: `emit_osm_age_warning` only
     reads `osm_extract_date`, so the rest are stable placeholder content.
     """
     return Manifest(
@@ -52,8 +53,8 @@ def test_emit_osm_age_warning_warns_when_age_exceeds_threshold(
 ) -> None:
     """AC #6: an `osm_extract_date` dated >90 days ago triggers a single `logging.warning`."""
     manifest = _manifest_with(_iso_days_before(120))
-    with caplog.at_level(logging.WARNING, logger="steeproute.cli.setup"):
-        _emit_osm_age_warning(manifest=manifest, threshold_days=90, now=_NOW)
+    with caplog.at_level(logging.WARNING, logger="steeproute.cli._shared"):
+        emit_osm_age_warning(manifest=manifest, threshold_days=90, now=_NOW)
 
     warnings = [rec for rec in caplog.records if rec.levelno == logging.WARNING]
     assert len(warnings) == 1
@@ -68,8 +69,8 @@ def test_emit_osm_age_warning_silent_below_threshold(
 ) -> None:
     """AC #6: a fresh `osm_extract_date` (0 days old) emits no warning."""
     manifest = _manifest_with(_iso_days_before(0))
-    with caplog.at_level(logging.WARNING, logger="steeproute.cli.setup"):
-        _emit_osm_age_warning(manifest=manifest, threshold_days=90, now=_NOW)
+    with caplog.at_level(logging.WARNING, logger="steeproute.cli._shared"):
+        emit_osm_age_warning(manifest=manifest, threshold_days=90, now=_NOW)
     assert caplog.records == []
 
 
@@ -92,8 +93,8 @@ def test_emit_osm_age_warning_boundary_semantics(
 ) -> None:
     """AC #6 boundary: `age == threshold` does NOT warn; `age > threshold` does."""
     manifest = _manifest_with(_iso_days_before(age_days))
-    with caplog.at_level(logging.WARNING, logger="steeproute.cli.setup"):
-        _emit_osm_age_warning(manifest=manifest, threshold_days=90, now=_NOW)
+    with caplog.at_level(logging.WARNING, logger="steeproute.cli._shared"):
+        emit_osm_age_warning(manifest=manifest, threshold_days=90, now=_NOW)
     if should_warn:
         assert len(caplog.records) == 1
     else:
@@ -105,8 +106,8 @@ def test_emit_osm_age_warning_custom_threshold(
 ) -> None:
     """A non-default `threshold_days` (e.g. user passed `--osm-age-warn-days 30`) is honoured."""
     manifest = _manifest_with(_iso_days_before(60))
-    with caplog.at_level(logging.WARNING, logger="steeproute.cli.setup"):
-        _emit_osm_age_warning(manifest=manifest, threshold_days=30, now=_NOW)
+    with caplog.at_level(logging.WARNING, logger="steeproute.cli._shared"):
+        emit_osm_age_warning(manifest=manifest, threshold_days=30, now=_NOW)
     assert len(caplog.records) == 1
 
 
@@ -122,6 +123,6 @@ def test_emit_osm_age_warning_swallows_malformed_extract_date(
     the cache-hit happy path because of it is not.
     """
     manifest = _manifest_with("not-an-iso-timestamp")
-    with caplog.at_level(logging.WARNING, logger="steeproute.cli.setup"):
-        _emit_osm_age_warning(manifest=manifest, threshold_days=90, now=_NOW)
+    with caplog.at_level(logging.WARNING, logger="steeproute.cli._shared"):
+        emit_osm_age_warning(manifest=manifest, threshold_days=90, now=_NOW)
     assert caplog.records == []

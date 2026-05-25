@@ -1,5 +1,7 @@
 """Unit tests for the click option decorator surface in cli/_shared.py."""
 
+import pathlib
+
 import pytest
 from click.testing import CliRunner
 
@@ -33,7 +35,7 @@ from steeproute.cli._shared import (
 )
 from steeproute.cli.query import cli as query_cli
 from steeproute.cli.setup import cli as setup_cli
-from steeproute.errors import BadCLIArgError
+from steeproute.errors import BadCLIArgError, CacheNotFoundError
 
 # --- LatLonParamType ---
 
@@ -98,17 +100,48 @@ def test_decorator_is_callable(decorator: object) -> None:
 # --- --verbose wires set_verbose(True) on both CLIs ---
 
 
-def test_verbose_flag_sets_verbose_state_on_query_cli() -> None:
+def test_verbose_flag_sets_verbose_state_on_query_cli(tmp_path: pathlib.Path) -> None:
+    """`--verbose` is an eager click callback — state flips even when the body fails.
+
+    Post-Story-2.10 the query CLI goes through `check_coverage`, which raises
+    `CacheNotFoundError` against an empty `--cache-dir`. The eager-callback
+    contract is "set state during the first parse pass" — it runs before the
+    body executes, so verifying `is_verbose()` after a deliberately-failing
+    invocation confirms eager evaluation still works. Same pattern as the
+    setup-side test below (Story 2.8).
+    """
     runner = CliRunner()
-    result = runner.invoke(query_cli, ["--center", "45.07,6.11", "--radius", "10", "--verbose"])
-    assert result.exit_code == 0
+    result = runner.invoke(
+        query_cli,
+        [
+            "--center",
+            "45.07,6.11",
+            "--radius",
+            "10",
+            "--verbose",
+            "--cache-dir",
+            str(tmp_path),
+        ],
+    )
+    assert isinstance(result.exception, CacheNotFoundError)
     assert is_verbose() is True
 
 
-def test_query_cli_without_verbose_leaves_state_false() -> None:
+def test_query_cli_without_verbose_leaves_state_false(tmp_path: pathlib.Path) -> None:
+    """Same pattern as the above test: an empty cache-dir surfaces CacheNotFoundError; verbose state stays False."""
     runner = CliRunner()
-    result = runner.invoke(query_cli, ["--center", "45.07,6.11", "--radius", "10"])
-    assert result.exit_code == 0
+    result = runner.invoke(
+        query_cli,
+        [
+            "--center",
+            "45.07,6.11",
+            "--radius",
+            "10",
+            "--cache-dir",
+            str(tmp_path),
+        ],
+    )
+    assert isinstance(result.exception, CacheNotFoundError)
     assert is_verbose() is False
 
 
