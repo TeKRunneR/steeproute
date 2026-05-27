@@ -1,10 +1,11 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
 # Reason: networkx operations surface as Unknown; same external-boundary pattern
 # as pipeline/osm.py, pipeline/smoothing.py, pipeline/dem.py.
-"""Pipeline stage 7: per-edge length / elevation-gain / elevation-loss / avg-gradient.
+"""Pipeline stages 7 + 8: per-edge metrics and climb detection.
 
-Reads each edge's `vertices_resampled: list[tuple[lat, lon, elevation_m]]`
-(set by stage 5, smoothed by stage 6) and attaches four numeric metrics:
+Stage 7 (`compute_edge_metrics`) reads each edge's
+`vertices_resampled: list[tuple[lat, lon, elevation_m]]` (set by stage 5,
+smoothed by stage 6) and attaches four numeric metrics:
 
 - `length_m` — cumulative 2D ground-distance along the polyline. Computed from
   the `(lat, lon)` components using the same local-equirectangular projection
@@ -18,14 +19,22 @@ Reads each edge's `vertices_resampled: list[tuple[lat, lon, elevation_m]]`
 - `avg_gradient` — `(d_plus_m + d_minus_m) / length_m`. Total absolute altitude
   change per horizontal meter; dimensionless and ≥ 0. Not a signed slope.
 
-Stage 8 (climb detection) will also live in this module; it lands in Story 3.2.
+Stage 8 (`detect_climbs`) walks the post-stage-7 MultiDiGraph and emits the
+maximal edge-disjoint contiguous edge-sequences whose cumulative directional
+uphill slope (`d_plus_sum / length_sum`) stays ≥ θ and whose total ground
+length is ≥ `min_climb_ground_length`. Output is a `list[Climb]`; the input
+graph is never mutated. Stage 9 (graph contraction, Story 3.3) consumes the
+output to build the solver-side `ContractedGraph`.
 """
 
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import networkx as nx
+
+from steeproute.models import Climb, Edge
 
 # WGS84 equatorial radius for the local equirectangular projection. Same value
 # and rationale as `pipeline.smoothing._EARTH_RADIUS_M` — duplicated rather than
@@ -106,6 +115,190 @@ def _cumulative_2d_distance_m(verts: list[tuple[float, float, float]]) -> float:
         dlon = (verts[i][1] - verts[i - 1][1]) * deg_to_m_lon
         total += math.hypot(dlat, dlon)
     return total
+
+
+def detect_climbs(
+    graph: nx.MultiDiGraph,
+    theta: float,
+    min_climb_ground_length: float,
+) -> list[Climb]:
+    """Stage 8: emit edge-disjoint contiguous edge-sequences that qualify as climbs.
+
+    Walks `graph` and returns the maximal directed edge-sequences whose
+    cumulative directional uphill slope (`d_plus_sum / length_sum`) stays
+    `≥ theta` from the seed onwards and whose total `length_m` is
+    `≥ min_climb_ground_length`. Each underlying graph edge appears in at most
+    one returned `Climb` — Story 3.3's back-mapping injectivity depends on it.
+
+    Args:
+        graph: post-stage-7 MultiDiGraph; every edge must carry the stage-7
+            attribute contract (`length_m`, `d_plus_m`, `d_minus_m`,
+            `avg_gradient`) plus `sac_scale` (may be `None`). Never mutated.
+        theta: slope floor (dimensionless gradient, e.g. 0.20 for 20 %).
+        min_climb_ground_length: minimum cumulative 2D ground length (m) for a
+            candidate climb to be emitted.
+
+    Returns:
+        `list[Climb]` in the order each climb's seed edge is encountered when
+        iterating `sorted(graph.edges(keys=True))`. Each `Climb`'s aggregate
+        `length_m` / `d_plus_m` / `avg_slope` equals the sum / sum / ratio of
+        its underlying edges' metrics within floating-point tolerance.
+
+    Branching policy: at a junction with multiple unconsumed outgoing edges,
+    extend with the steepest (highest per-edge `d_plus_m / length_m`) edge
+    whose addition keeps the cumulative running-average slope `≥ theta` AND
+    whose target node has not yet been visited by the candidate (node-monotone
+    walk — prevents zigzag climbs that traverse the same node pair through
+    bidirectional / parallel edges). Ties on slope break on the outgoing
+    edge's `(node_v, key)` order so the choice is deterministic (FR29
+    byte-identical reproducibility). The function uses no RNG.
+    """
+    # Snapshot every edge's attribute dict into a `(u, v, k) -> data` lookup
+    # table once, up-front. Avoids repeated `graph[u][v][k]` indexed access
+    # (which basedpyright reads as `__getitem__(key: str)` against networkx's
+    # partial stubs) and gives a clean Pythonic-typed surface for the inner
+    # loops. The dict values are aliases of the live edge-data dicts — we
+    # never mutate them, so the purity contract holds.
+    edge_data: dict[tuple[int, int, int], dict[str, Any]] = {
+        (u, v, k): data for u, v, k, data in graph.edges(data=True, keys=True)
+    }
+    consumed: set[tuple[int, int, int]] = set()
+    climbs: list[Climb] = []
+
+    for seed in sorted(edge_data.keys()):
+        if seed in consumed:
+            continue
+        seed_data = edge_data[seed]
+        if not _qualifies_as_seed(seed_data, theta):
+            continue
+
+        u, v, _k = seed
+        candidate: list[tuple[int, int, int]] = [seed]
+        # Parallel `set` shadow of `candidate` for O(1) membership checks in
+        # the extension picker; without it, `edge_id in candidate` is O(n)
+        # per outgoing edge, giving worst-case O(E² · avg_out_degree).
+        candidate_set: set[tuple[int, int, int]] = {seed}
+        # Node-monotonicity guard: a candidate climb is a path, not a walk —
+        # consumers (Story 3.3 super-edge back-mapping, Story 3.6 solver
+        # route construction) treat each climb as a monotone uphill segment
+        # between two distinct endpoints. Visiting the same node twice would
+        # admit zigzag tuples through bidirectional / parallel edges on
+        # saddle-shaped terrain.
+        visited_nodes: set[int] = {u, v}
+        cum_d_plus: float = seed_data["d_plus_m"]
+        cum_length: float = seed_data["length_m"]
+        head: int = v
+
+        while True:
+            extension = _pick_steepest_extension(
+                graph,
+                edge_data,
+                head,
+                theta,
+                cum_d_plus,
+                cum_length,
+                consumed,
+                candidate_set,
+                visited_nodes,
+            )
+            if extension is None:
+                break
+            _a, b, _kk = extension
+            ed = edge_data[extension]
+            cum_d_plus += ed["d_plus_m"]
+            cum_length += ed["length_m"]
+            head = b
+            candidate.append(extension)
+            candidate_set.add(extension)
+            visited_nodes.add(b)
+
+        if cum_length >= min_climb_ground_length:
+            edges = tuple(
+                _edge_from_graph_data(a, b, kk, edge_data[(a, b, kk)]) for (a, b, kk) in candidate
+            )
+            climbs.append(
+                Climb(
+                    edges=edges,
+                    length_m=cum_length,
+                    d_plus_m=cum_d_plus,
+                    avg_slope=cum_d_plus / cum_length,
+                )
+            )
+            consumed.update(candidate)
+
+    return climbs
+
+
+def _qualifies_as_seed(data: dict[str, Any], theta: float) -> bool:
+    """True if a directed edge's per-edge uphill slope is `≥ theta`.
+
+    Uses the directional metric `d_plus_m / length_m` — *not* the absolute
+    stage-7 `avg_gradient` (which sums uphill + downhill churn). A descending
+    edge has `d_plus_m == 0` and never qualifies. `length_m > 0` is a
+    postcondition of stage 7 (same contract `compute_edge_metrics` relies on);
+    we don't re-guard it here.
+    """
+    return data["d_plus_m"] / data["length_m"] >= theta
+
+
+def _pick_steepest_extension(
+    graph: nx.MultiDiGraph,
+    edge_data: dict[tuple[int, int, int], dict[str, Any]],
+    head: int,
+    theta: float,
+    cum_d_plus: float,
+    cum_length: float,
+    consumed: set[tuple[int, int, int]],
+    candidate_set: set[tuple[int, int, int]],
+    visited_nodes: set[int],
+) -> tuple[int, int, int] | None:
+    """Steepest qualifying outgoing edge from `head` keeping cum-slope `≥ theta`.
+
+    Returns `None` when no qualifying continuation exists (closes the candidate
+    climb at the previous edge). An edge is qualifying iff it is unconsumed,
+    not already in the candidate, its target node is not already in the
+    candidate's path (node-monotonicity), and adding it keeps the cumulative
+    running-average slope `≥ theta`. Deterministic tie-break on
+    `(node_v, key)` via the sorted iteration order.
+    """
+    best: tuple[int, int, int] | None = None
+    best_slope: float = -math.inf
+    for out_edge in sorted(graph.out_edges(head, keys=True)):
+        a, b, kk = out_edge
+        edge_id: tuple[int, int, int] = (a, b, kk)
+        if edge_id in consumed or edge_id in candidate_set:
+            continue
+        if b in visited_nodes:
+            continue
+        ed = edge_data[edge_id]
+        length: float = ed["length_m"]
+        new_avg = (cum_d_plus + ed["d_plus_m"]) / (cum_length + length)
+        if new_avg < theta:
+            continue
+        slope: float = ed["d_plus_m"] / length
+        if slope > best_slope:
+            best_slope = slope
+            best = edge_id
+    return best
+
+
+def _edge_from_graph_data(u: int, v: int, k: int, data: dict[str, Any]) -> Edge:
+    """Project a `MultiDiGraph` edge-data dict into the `Edge` value-type.
+
+    Reads the stage-7 attribute contract verbatim. `sac_scale` falls back to
+    `None` when absent (test fixtures may legitimately omit it; production
+    `pipeline.osm.normalize_edges` always sets it, sometimes to `None`).
+    """
+    return Edge(
+        node_u=u,
+        node_v=v,
+        key=k,
+        length_m=data["length_m"],
+        d_plus_m=data["d_plus_m"],
+        d_minus_m=data["d_minus_m"],
+        avg_gradient=data["avg_gradient"],
+        sac_scale=data.get("sac_scale"),
+    )
 
 
 def _elevation_gain_loss(verts: list[tuple[float, float, float]]) -> tuple[float, float]:

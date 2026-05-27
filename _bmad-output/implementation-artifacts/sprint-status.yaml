@@ -28,7 +28,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-05-25
+last_updated: 2026-05-27
 project: bmad-test
 project_key: NOKEY
 tracking_system: file-system
@@ -60,7 +60,7 @@ development_status:
 
   epic-3: in-progress
   3-1-core-query-side-data-models: review
-  3-2-pipeline-stage-8-climb-detection: backlog
+  3-2-pipeline-stage-8-climb-detection: done
   3-3-pipeline-stage-9-contracted-climb-graph-construction: backlog
   3-4-topntracker-with-jaccard-distinctness: backlog
   3-5-exhaustive-enumerator-oracle-with-its-own-correctness-tests: backlog

@@ -133,6 +133,13 @@ Items deferred during code review that are owned by a future story.
 | 4 | Test rigor on `--verbose` detail-line assertions and warn-before-summary ordering | Future (incremental test rigor) | `"ConnectionError" in stderr` would pass even if the substring landed on the user_message line instead of the detail line. The "warning emitted before `_print_summary`" contract (AC #3) is not pinned by the e2e test — only that both substrings appear. Tighten as the CLI surface grows. [tests/e2e/test_source_unavailable.py:304,329] |
 | 5 | DEM mid-read errors inside `with rasterio.open(...) as dataset:` block bypass the source-unavailable wrap | Future (GeoTIFF-integrity story, if ever) | The Story 2.9 wrap covers only `rasterio.open(dem_path)`. A truncated GeoTIFF whose header parses but whose data block fails on `dataset.sample(...)` leaks as `RasterioIOError → exit 1 + traceback`. **Rationale for deferral:** open-time wrap is sufficient for the realistic threat model (typo, permission denied, header corruption); mid-read corruption on a partially-truncated DEM is unlikely for the personal-tool case (DEMs are local cache, not network-streamed). Routed to a future GeoTIFF-integrity story if it ever materializes. [src/steeproute/pipeline/dem.py:80-176] |
 
+## Deferred from: code review of 3-2-pipeline-stage-8-climb-detection.md (2026-05-25)
+
+| # | Finding | Target | Detail |
+|---|---------|--------|--------|
+| 1 | Self-loop edges (`node_u == node_v`) uncovered | Future (when a fixture surfaces one) | Stage-4's `_drop_short_edges` doesn't explicitly forbid self-loops, only sub-1 mm edges. A self-loop with a real polyline (closed-loop trail) can survive. If it qualifies as seed, `head` lands on itself; `out_edges(head)` includes the seed (skipped via `in candidate`) plus any other out-edges. Behavior is well-defined but odd. Document expected behavior + add a test once a real fixture surfaces one (committed Le Sappey has none). [tests/unit/test_climb_detection.py — missing test] |
+| 2 | Integration test has no positive assertion the OSM-load patch took effect | Future (test-architecture pass) | `patch("steeproute.pipeline.osm_load", ...)` silently no-ops if the symbol path changes; same fragile pattern as `test_pipeline_end_to_end.py`. A silent patch miss manifests as a network-dependent CI failure (live OSM fetch), not a wrong-result false-positive — visible enough that it isn't urgent. Defer to a broader test-architecture review across the integration suite. [tests/integration/test_climb_detection_fixture.py:526] |
+
 ## Deferred from: code review of 2-10-implement-query-side-fail-fast-on-unprepared-area.md (2026-05-25)
 
 | # | Finding | Target | Detail |
