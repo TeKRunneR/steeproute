@@ -63,7 +63,7 @@ development_status:
   3-2-pipeline-stage-8-climb-detection: done
   3-3-pipeline-stage-9-contracted-climb-graph-construction: done
   3-4-topntracker-with-jaccard-distinctness: done
-  3-5-exhaustive-enumerator-oracle-with-its-own-correctness-tests: backlog
+  3-5-exhaustive-enumerator-oracle-with-its-own-correctness-tests: done
   3-6-grasp-solver-main-loop: backlog
   3-7-grasp-vs-exhaustive-ci-quality-gate: backlog
   3-8-metamorphic-invariants-test-suite: backlog
