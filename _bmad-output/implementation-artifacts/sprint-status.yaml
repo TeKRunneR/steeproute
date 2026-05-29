@@ -29,6 +29,7 @@
 
 generated: 2026-04-24
 last_updated: 2026-05-29
+
 project: bmad-test
 project_key: NOKEY
 tracking_system: file-system
@@ -64,7 +65,7 @@ development_status:
   3-3-pipeline-stage-9-contracted-climb-graph-construction: done
   3-4-topntracker-with-jaccard-distinctness: done
   3-5-exhaustive-enumerator-oracle-with-its-own-correctness-tests: done
-  3-6-grasp-solver-main-loop: backlog
+  3-6-grasp-solver-main-loop: done
   3-7-grasp-vs-exhaustive-ci-quality-gate: backlog
   3-8-metamorphic-invariants-test-suite: backlog
   3-9-runtime-route-validation: backlog
