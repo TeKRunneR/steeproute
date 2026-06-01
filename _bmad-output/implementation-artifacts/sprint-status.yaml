@@ -68,7 +68,7 @@ development_status:
   3-6-grasp-solver-main-loop: done
   3-7-grasp-vs-exhaustive-ci-quality-gate: done
   3-8-metamorphic-invariants-test-suite: done
-  3-9-runtime-route-validation: backlog
+  3-9-runtime-route-validation: done
   3-10-html-json-output-rendering-with-vendored-assets: backlog
   3-11-wire-query-cli-end-to-end-with-validation-driven-exit-code: backlog
   epic-3-retrospective: optional
