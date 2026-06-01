@@ -66,7 +66,7 @@ development_status:
   3-4-topntracker-with-jaccard-distinctness: done
   3-5-exhaustive-enumerator-oracle-with-its-own-correctness-tests: done
   3-6-grasp-solver-main-loop: done
-  3-7-grasp-vs-exhaustive-ci-quality-gate: backlog
+  3-7-grasp-vs-exhaustive-ci-quality-gate: done
   3-8-metamorphic-invariants-test-suite: backlog
   3-9-runtime-route-validation: backlog
   3-10-html-json-output-rendering-with-vendored-assets: backlog
