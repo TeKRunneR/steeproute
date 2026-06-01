@@ -333,30 +333,43 @@ def entry_dir_for(cache_root: pathlib.Path, cache_key: str) -> pathlib.Path:
     return _areas_dir(cache_root) / cache_key
 
 
-def write_json_atomic(path: pathlib.Path, obj: object) -> None:
-    """Write `obj` to `path` atomically as canonical JSON.
+def write_text_atomic(path: pathlib.Path, text: str) -> None:
+    """Write `text` to `path` atomically as UTF-8.
 
-    Single chokepoint for all JSON writes in this module per Architecture
-    §Key anti-patterns ("no per-site reimplementation"). Writes to a sibling
-    `.tmp` file then `os.replace()`s into place — a Ctrl-C mid-write leaves
-    the `.tmp` sibling but never a half-written target.
+    Single chokepoint for the `.tmp` sibling + `os.replace()` pattern. A
+    Ctrl-C (or any error) mid-write leaves the `.tmp` sibling but never a
+    half-written target; the sibling is cleaned up on failure so orphans
+    don't accumulate. Shared by `write_json_atomic` (cache manifests/index)
+    and `output.py` (HTML reports) so the rename pattern lives in exactly
+    one place (Architecture §Key anti-patterns — "no per-site reimplementation").
 
-    `sort_keys=True` makes the output diff-stable across runs so cache state
-    is reviewable in version-control diffs (e.g. when `--cache-dir` points
-    into a repo for test fixtures).
+    The `.tmp` sibling is kept in the target's own directory so `os.replace`
+    is a same-filesystem rename (atomic) even when the caller's `path` lives
+    on a user-supplied `--output-dir`.
     """
     tmp_path = path.with_name(path.name + _TMP_DIR_SUFFIX)
     try:
-        tmp_path.write_text(
-            json.dumps(obj, sort_keys=True, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        tmp_path.write_text(text, encoding="utf-8")
         os.replace(tmp_path, path)
     except BaseException:
         # ENOSPC / EACCES / cross-device / Ctrl-C mid-write all leave the
         # `.tmp` sibling behind. Clean it up so orphans don't accumulate.
         tmp_path.unlink(missing_ok=True)
         raise
+
+
+def write_json_atomic(path: pathlib.Path, obj: object) -> None:
+    """Write `obj` to `path` atomically as canonical JSON.
+
+    Single chokepoint for all JSON writes per Architecture §Key anti-patterns
+    ("no per-site reimplementation"); delegates the atomic rename to
+    `write_text_atomic`.
+
+    `sort_keys=True` makes the output diff-stable across runs so cache state
+    is reviewable in version-control diffs (e.g. when `--cache-dir` points
+    into a repo for test fixtures).
+    """
+    write_text_atomic(path, json.dumps(obj, sort_keys=True, indent=2) + "\n")
 
 
 def write_entry(

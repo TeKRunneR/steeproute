@@ -48,6 +48,10 @@ dependencies = [
     # transitively, but a direct dep guards against a future osmnx release
     # that swaps in `httpx` / `urllib3` and breaks the transitive guarantee.
     "requests>=2,<3",
+    # Jinja2 renders the per-route HTML report (`output.py` + `templates/route.html.j2`,
+    # Story 3.10 / Architecture §Cat 9). The vendored Leaflet + Chart.js assets are
+    # inlined into the template, so Jinja2 is the only runtime templating dependency.
+    "jinja2>=3,<4",
 ]
 
 
