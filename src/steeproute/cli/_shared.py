@@ -161,6 +161,72 @@ def validate_setup_radius(radius_km: float) -> None:
         )
 
 
+def validate_solver_options(
+    *,
+    theta: float,
+    l_connector: float,
+    min_climb_ground_length: float,
+    j_max: float,
+    n: int,
+    iter_budget: int | None,
+) -> None:
+    """Query-side solver-parameter sanity checks at the CLI boundary (§Cat 10 → exit 2).
+
+    The query CLI feeds these flags into `SolverParams`, `GraspSolver`, and
+    `TopNTracker`, all of which raise a bare `ValueError` on out-of-range input
+    (`iter_budget < 1`, `n < 1`, `j_max ∉ [0, 1]`). A `ValueError` is not a
+    `PreExecutionError`, so without this guard it escapes `run_entry_point` as a
+    raw traceback (exit 1) instead of the documented `BadCLIArgError → exit 2`.
+    Non-finite floats are caught first for the same reason `validate_setup_radius`
+    does: `click.FLOAT` parses `"nan"`/`"inf"`, and `nan` then slips past every
+    downstream comparison (IEEE-754), silently yielding zero/garbage climbs.
+
+    Checks are fail-fast (first violation wins) and ordered finiteness-then-range
+    so a `nan` is reported as non-finite rather than as a confusing range message.
+    """
+    for name, value in (
+        ("--theta", theta),
+        ("--l-connector", l_connector),
+        ("--min-climb-ground-length", min_climb_ground_length),
+        ("--j-max", j_max),
+    ):
+        if not math.isfinite(value):
+            raise BadCLIArgError(f"{name} {value!r} must be a finite number.")
+    if theta < 0.0:
+        raise BadCLIArgError(f"--theta {theta:g} must be >= 0.")
+    if l_connector < 0.0:
+        raise BadCLIArgError(f"--l-connector {l_connector:g} must be >= 0.")
+    if min_climb_ground_length <= 0.0:
+        raise BadCLIArgError(
+            f"--min-climb-ground-length {min_climb_ground_length:g} must be positive."
+        )
+    if not 0.0 <= j_max <= 1.0:
+        raise BadCLIArgError(f"--j-max {j_max:g} must be in [0, 1].")
+    if n < 1:
+        raise BadCLIArgError(f"--n {n} must be >= 1.")
+    if iter_budget is not None and iter_budget < 1:
+        raise BadCLIArgError(f"--iter-budget {iter_budget} must be >= 1.")
+
+
+def ensure_output_dir(output_dir: pathlib.Path) -> None:
+    """Create `--output-dir` now so an unusable path fails as exit 2, not a traceback.
+
+    `click.Path(file_okay=False)` already rejects an `--output-dir` that *is* an
+    existing file. This catches the residual the renderer would otherwise hit at
+    its own `mkdir`: a parent component that is a file (`NotADirectoryError`) or a
+    location that can't be created (`PermissionError`, etc.) — both `OSError`
+    subclasses — mapping them to `BadCLIArgError → exit 2` per §Cat 10. Creating
+    the directory eagerly also fails fast, before the (potentially long) solve.
+    """
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise BadCLIArgError(
+            f"--output-dir {output_dir} could not be created: {exc.strerror or exc}.",
+            detail="Provide a path to a writable directory.",
+        ) from exc
+
+
 # --- Area ---
 
 center_option = click.option(

@@ -3,12 +3,19 @@
 import math
 import pathlib
 import sys
+from collections.abc import Callable
 from unittest import mock
 
 import pytest
 from click.testing import CliRunner
 
-from steeproute.cli._shared import LAT_LON, is_verbose, validate_area_size
+from steeproute.cli._shared import (
+    LAT_LON,
+    ensure_output_dir,
+    is_verbose,
+    validate_area_size,
+    validate_solver_options,
+)
 from steeproute.cli.query import cli as query_cli
 from steeproute.cli.query import main as query_main
 from steeproute.cli.setup import cli as setup_cli
@@ -70,7 +77,106 @@ def test_validate_area_size_rejects_above_cap() -> None:
     assert "km" in msg
 
 
+# --- validate_solver_options: §Cat 10 CLI-boundary guards (Story 3.11 review) ---
+
+
+def _check_solver_options(
+    *,
+    theta: float = 0.20,
+    l_connector: float = 200.0,
+    min_climb_ground_length: float = 300.0,
+    j_max: float = 0.30,
+    n: int = 5,
+    iter_budget: int | None = None,
+) -> None:
+    """Call `validate_solver_options` with in-range defaults; tests override one field."""
+    validate_solver_options(
+        theta=theta,
+        l_connector=l_connector,
+        min_climb_ground_length=min_climb_ground_length,
+        j_max=j_max,
+        n=n,
+        iter_budget=iter_budget,
+    )
+
+
+def test_validate_solver_options_accepts_defaults() -> None:
+    """In-range values (including iter_budget=None, the unset default) pass silently."""
+    _check_solver_options()
+
+
+def test_validate_solver_options_accepts_boundary_values() -> None:
+    """j_max ∈ {0, 1} inclusive; n=1, iter_budget=1, theta=0, l_connector=0 are the minimums."""
+    _check_solver_options(j_max=0.0, n=1, iter_budget=1, theta=0.0, l_connector=0.0)
+    _check_solver_options(j_max=1.0)
+
+
+@pytest.mark.parametrize(
+    ("call", "violation_token"),
+    [
+        (lambda: _check_solver_options(iter_budget=0), "--iter-budget"),
+        (lambda: _check_solver_options(iter_budget=-1), "--iter-budget"),
+        (lambda: _check_solver_options(n=0), "--n"),
+        (lambda: _check_solver_options(n=-3), "--n"),
+        (lambda: _check_solver_options(j_max=1.5), "--j-max"),
+        (lambda: _check_solver_options(j_max=-0.1), "--j-max"),
+        (lambda: _check_solver_options(j_max=float("nan")), "--j-max"),
+        (lambda: _check_solver_options(theta=float("nan")), "--theta"),
+        (lambda: _check_solver_options(theta=float("inf")), "--theta"),
+        (lambda: _check_solver_options(theta=-0.1), "--theta"),
+        (lambda: _check_solver_options(min_climb_ground_length=0.0), "--min-climb-ground-length"),
+        (lambda: _check_solver_options(min_climb_ground_length=-5.0), "--min-climb-ground-length"),
+        (
+            lambda: _check_solver_options(min_climb_ground_length=float("nan")),
+            "--min-climb-ground-length",
+        ),
+        (lambda: _check_solver_options(l_connector=-1.0), "--l-connector"),
+        (lambda: _check_solver_options(l_connector=float("inf")), "--l-connector"),
+    ],
+)
+def test_validate_solver_options_rejects_out_of_range(
+    call: Callable[[], None], violation_token: str
+) -> None:
+    """Each out-of-range / non-finite flag raises BadCLIArgError naming the flag."""
+    with pytest.raises(BadCLIArgError) as exc_info:
+        call()
+    assert violation_token in exc_info.value.user_message
+
+
+# --- ensure_output_dir: residual --output-dir validation (Story 3.11 review) ---
+
+
+def test_ensure_output_dir_creates_missing_directory(tmp_path: pathlib.Path) -> None:
+    """A not-yet-existing (nested) output dir is created."""
+    target = tmp_path / "reports" / "nested"
+    ensure_output_dir(target)
+    assert target.is_dir()
+
+
+def test_ensure_output_dir_idempotent_on_existing(tmp_path: pathlib.Path) -> None:
+    """Re-creating an existing directory is a silent no-op."""
+    ensure_output_dir(tmp_path)
+    ensure_output_dir(tmp_path)  # no raise
+
+
+def test_ensure_output_dir_rejects_parent_that_is_a_file(tmp_path: pathlib.Path) -> None:
+    """A parent component that is a regular file → BadCLIArgError (not a raw OSError)."""
+    a_file = tmp_path / "iam_a_file.txt"
+    a_file.write_text("x", encoding="utf-8")
+    with pytest.raises(BadCLIArgError) as exc_info:
+        ensure_output_dir(a_file / "sub")
+    assert "--output-dir" in exc_info.value.user_message
+
+
 # --- Query CLI end-to-end (CliRunner): area-cap + happy path (AC #2, #5) ---
+
+
+def test_query_cli_rejects_out_of_range_n() -> None:
+    """`--n 0` surfaces BadCLIArgError out past click.standalone_mode (exit-2 contract)."""
+    runner = CliRunner()
+    result = runner.invoke(query_cli, ["--center", "45.0716,6.1079", "--radius", "10", "--n", "0"])
+    assert isinstance(result.exception, BadCLIArgError)
+    assert "--n" in result.exception.user_message
 
 
 def test_query_cli_happy_path_passes_parsing_then_hits_coverage_check(

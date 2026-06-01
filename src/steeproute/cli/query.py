@@ -1,16 +1,22 @@
-# pyright: reportUnknownVariableType=false, reportUnknownMemberType=false
+# pyright: reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownArgumentType=false
 # Reason: `check_coverage` returns `PreparedData` whose `graph` is a
 # `MultiDiGraph[Unknown]` upstream (networkx generic parameter unspecified).
 # Same external-boundary pattern as `cli/setup.py` and `pipeline/`.
-"""steeproute query CLI entry point: FR24 coverage check + cache-hit cue (stages 8-9 + solver in later epics).
+"""steeproute query CLI entry point: FR24 coverage check → stages 8-9 → GRASP → validate → render.
 
-Story 2.10 wires the query CLI through `cache.check_coverage`, which resolves
-the user's `--center` / `--radius` against `index.json` and either returns the
-smallest-radius `PreparedData` strictly containing the query area or raises
-`CacheNotFoundError` (mapped to exit 2 by `run_entry_point`). The fully-wired
-solver lands in Epic 3; this story emits a one-line `cache-hit` summary on
-stdout and an OSM-age warning when the chosen entry's `osm_extract_date`
-exceeds `--osm-age-warn-days`.
+Story 2.10 wired the cache-hit path through `cache.check_coverage`, which
+resolves the user's `--center` / `--radius` against `index.json` and either
+returns the smallest-radius `PreparedData` strictly containing the query area
+or raises `CacheNotFoundError` (mapped to exit 2 by `run_entry_point`).
+
+Story 3.11 wires the full Journey-1 happy path on top of that: climb detection
+(stage 8) → contracted-graph construction (stage 9) → GRASP → runtime validation
+→ HTML/JSON rendering. The process exit code is validation-driven (§Cat 6c):
+`0` when every route passes, `1` when any route fails validation or any
+set-level pairwise distinctness violation exists. Outputs are always written to
+disk *before* the exit code is computed, so disk state is correct regardless of
+exit code (FR28). Progress UI + interrupt handling (real `progress_callback`,
+Ctrl-C → exit 130) land in Epic 4; this CLI passes a no-op callback (`None`).
 """
 
 from __future__ import annotations
@@ -20,8 +26,10 @@ import pathlib
 from typing import NoReturn
 
 import click
+import numpy as np
 
-from steeproute.cache import check_coverage, resolve_cache_root
+from steeproute import output
+from steeproute.cache import Manifest, check_coverage, resolve_cache_root
 from steeproute.cli._shared import (
     area_cap_option,
     cache_dir_option,
@@ -29,6 +37,7 @@ from steeproute.cli._shared import (
     configure_cli_logging,
     difficulty_cap_option,
     emit_osm_age_warning,
+    ensure_output_dir,
     iter_budget_option,
     j_max_option,
     l_connector_option,
@@ -46,9 +55,27 @@ from steeproute.cli._shared import (
     time_budget_option,
     untagged_trails_option,
     validate_area_size,
+    validate_solver_options,
     verbose_option,
 )
-from steeproute.models import Area
+from steeproute.models import Area, ProvenanceInfo, SolverParams, ValidatedRouteSet
+from steeproute.pipeline.climbs import detect_climbs
+from steeproute.pipeline.graph import contract_climbs
+from steeproute.solver.grasp import GraspSolver
+from steeproute.validator import validate
+
+# Concrete fallback when `--iter-budget` is unset. Epic 3's GRASP terminates on
+# iter-budget only (time-budget + stagnation land in Epic 4), so the CLI must
+# resolve a positive integer here. Sized to find routes on a real Grenoble query
+# while staying well inside NFR1's 10-minute design target; tunable post-baseline
+# once Epic 4 wires the time/stagnation termination that would normally cap it.
+DEFAULT_ITER_BUDGET: int = 2000
+
+# Fixed convergence status for Epic 3: the solver runs to its iteration budget,
+# which maps to "budget-exhausted" in the §Cat 5e termination table. Story 4.2
+# replaces this with the full three-value contract (converged / budget-exhausted
+# / interrupted) once stagnation + interrupt handling exist.
+_CONVERGENCE_STATUS: output.ConvergenceStatus = "budget-exhausted"
 
 
 @click.command(
@@ -106,6 +133,22 @@ def cli(
     # boundary, not after a successful cache walk.
     validate_area_size(radius_km=radius, area_cap_km2=area_cap)
 
+    # Solver-parameter sanity at the CLI boundary (§Cat 10 → exit 2). Out-of-range
+    # values would otherwise surface as a raw `ValueError` traceback from
+    # `GraspSolver`/`TopNTracker`, and a `nan` slope floor would silently yield
+    # zero routes. Fail-fast here, before the cache walk and the solve.
+    validate_solver_options(
+        theta=theta,
+        l_connector=l_connector,
+        min_climb_ground_length=min_climb_ground_length,
+        j_max=j_max,
+        n=n,
+        iter_budget=iter_budget,
+    )
+    # Create the output directory now so an unusable `--output-dir` fails as a
+    # clean exit 2 rather than an `OSError` traceback mid-render.
+    ensure_output_dir(output_dir)
+
     area = Area(center=center, radius_km=radius)
     cache_root = resolve_cache_root(cache_dir)
 
@@ -124,32 +167,98 @@ def cli(
         now=datetime.datetime.now(datetime.UTC),
     )
 
-    # Solver wiring lands in Epic 3 — Story 2.10 establishes the cache-hit
-    # path and its observable contract. The print already touches `prepared`
-    # via `manifest.cache_key_hash`, so no separate basedpyright-silencer is
-    # needed for `prepared.graph` (Epic 3 will consume it). Single space
-    # between tokens for clean downstream tooling that splits on whitespace.
+    # Cache-hit cue on stdout (kept from Story 2.10 — the full run summary lands
+    # in Epic 4 Story 4.5). Single space between tokens for downstream tooling
+    # that splits on whitespace.
     print(f"steeproute: cache-hit cache_key_hash: {prepared.manifest.cache_key_hash}")
 
-    # Acknowledge the remaining click-bound kwargs so basedpyright doesn't flag
-    # them — the solver, output, and progress wiring consumes them in Epics 3-4.
-    _ = (
-        theta,
-        difficulty_cap,
-        l_connector,
-        min_climb_ground_length,
-        j_max,
-        n,
-        untagged_trails,
-        seed,
-        iter_budget,
-        time_budget,
-        stagnation_iters,
-        progress_interval,
-        output_dir,
-        quiet,
+    # --- Journey 1 happy path: stages 8-9 → GRASP → validate → render --------
+    params = SolverParams(
+        theta=theta,
+        difficulty_cap=difficulty_cap,
+        l_connector=l_connector,
+        min_climb_ground_length=min_climb_ground_length,
+        j_max=j_max,
+        n=n,
+        area_cap=area_cap,
+        untagged_policy=untagged_trails,
+        seed=seed,
+        # Epic 3 terminates on iter-budget only; resolve the `None` default to a
+        # concrete positive count (Epic 4 adds time/stagnation termination).
+        iter_budget=iter_budget if iter_budget is not None else DEFAULT_ITER_BUDGET,
+        time_budget=time_budget,
+        # `None` (flag unset) → 0 disables stagnation termination (§Cat 5e); the
+        # real default is tuned in Epic 4 Story 4.2.
+        stagnation_iters=stagnation_iters if stagnation_iters is not None else 0,
     )
-    return 0
+    provenance = _build_provenance(prepared.manifest)
+
+    climbs = detect_climbs(
+        prepared.graph,
+        theta=theta,
+        min_climb_ground_length=min_climb_ground_length,
+    )
+    contracted = contract_climbs(prepared.graph, climbs, l_connector=l_connector)
+
+    # No-op progress callback for Epic 3 (Story 4.1 wires the throttled renderer);
+    # seed threads straight into the RNG so `--seed` produces byte-identical
+    # edge-sets (FR29). An unseeded run passes `None` → non-deterministic.
+    solver = GraspSolver(contracted, params, np.random.default_rng(seed), progress_callback=None)
+    solutions = solver.run()
+
+    validated = validate(solutions, contracted, params)
+
+    # Render every route (failed ones too, with a banner — FR28) BEFORE computing
+    # the exit code, so disk state is identical regardless of pass/fail (§Cat 6c).
+    output.render(
+        validated,
+        prepared.graph,
+        contracted,
+        params,
+        provenance,
+        _CONVERGENCE_STATUS,
+        output_dir,
+    )
+
+    # Acknowledge the Epic-4 kwargs (progress UI) so basedpyright doesn't flag them.
+    _ = (progress_interval, quiet)
+
+    # Exit-code coupling (§Cat 6c / FR28 / FR30): 1 if any route failed validation
+    # OR any set-level pairwise violation exists; 0 otherwise. `ctx.exit(code)`
+    # raises SystemExit, which `_invoke_command` maps to the process exit code —
+    # returning the int from this callback would be discarded by click's
+    # standalone mode (it always exits 0 on a plain return).
+    click.get_current_context().exit(_exit_code_for(validated))
+
+
+def _build_provenance(manifest: Manifest) -> ProvenanceInfo:
+    """Build the report's `ProvenanceInfo` from the cache entry that fed this query.
+
+    The four cache-derived fields echo the manifest verbatim (the report
+    describes the *prepared data* it was generated from — §Cat 4b/§Cat 9). The
+    git commit is split out of `manifest.steeproute_commit`, which `provenance.
+    get_commit_short()` produced with a `-dirty` suffix when the setup-time tree
+    was modified; `ProvenanceInfo` carries the short hash and the dirty flag as
+    separate fields so the renderer can re-compose `<hash>-dirty` consistently.
+    """
+    commit = manifest.steeproute_commit
+    git_dirty = commit.endswith("-dirty")
+    git_commit_short = commit[: -len("-dirty")] if git_dirty else commit
+    return ProvenanceInfo(
+        steeproute_version=manifest.steeproute_version,
+        git_commit_short=git_commit_short,
+        git_dirty=git_dirty,
+        osm_extract_date=manifest.osm_extract_date,
+        dem_version=manifest.dem_version,
+        pipeline_content_hash=manifest.pipeline_content_hash,
+    )
+
+
+def _exit_code_for(validated: ValidatedRouteSet) -> int:
+    """Validation-driven exit code (§Cat 6c): 1 on any failure, else 0."""
+    any_per_route_failure = any(not r.validation.passed for r in validated.routes)
+    any_pairwise_failure = bool(validated.set_violations)
+    return 1 if (any_per_route_failure or any_pairwise_failure) else 0
 
 
 def _invoke_command() -> int:
