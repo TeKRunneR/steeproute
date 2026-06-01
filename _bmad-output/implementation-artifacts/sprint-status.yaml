@@ -28,7 +28,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-05-29
+last_updated: 2026-06-01
 
 project: bmad-test
 project_key: NOKEY
@@ -67,7 +67,7 @@ development_status:
   3-5-exhaustive-enumerator-oracle-with-its-own-correctness-tests: done
   3-6-grasp-solver-main-loop: done
   3-7-grasp-vs-exhaustive-ci-quality-gate: done
-  3-8-metamorphic-invariants-test-suite: backlog
+  3-8-metamorphic-invariants-test-suite: done
   3-9-runtime-route-validation: backlog
   3-10-html-json-output-rendering-with-vendored-assets: backlog
   3-11-wire-query-cli-end-to-end-with-validation-driven-exit-code: backlog
