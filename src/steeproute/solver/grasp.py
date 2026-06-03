@@ -20,7 +20,7 @@ start node by greedy-randomized walk extension:
    (via the injected `numpy.random.Generator`).
 2. At each step, build the restricted candidate list (RCL): the outgoing edges
    from the current node that pass the feasibility filters
-   (not-yet-used + SAC cap + θ-on-super-edges), sorted by per-edge objective
+   (not-yet-used + SAC cap), sorted by per-edge objective
    contribution (`d_plus_m + d_minus_m`) descending, truncated to
    `RCL_SIZE` entries.
 3. Sample one edge uniformly from the RCL; append it; advance the current
@@ -28,7 +28,16 @@ start node by greedy-randomized walk extension:
 4. Repeat until the RCL is empty (no feasible extension); the walk emits as a
    `Solution`.
 
-Each completed `Solution` is offered to a `TopNTracker(params.n, params.j_max)`
+The slope floor θ (FR3) is a **route-level** constraint — the whole-route
+average `(Σ d_plus_m + Σ d_minus_m) / Σ length_m` must clear θ — so it is NOT
+applied per-edge during construction. It is enforced at finalization in `run()`
+(`_route_slope_ok`): a partial walk may dip below θ and recover by appending a
+steep climb, so greedy mid-walk pruning would wrongly discard recoverable
+routes. Per-climb steepness lives in the separate `--min-climb-slope`
+detection threshold (Story 4.1), upstream in stage 8.
+
+Each completed `Solution` that clears the route-level floor is offered to a
+`TopNTracker(params.n, params.j_max)`
 — the same admission policy the oracle uses (`tests/integration/exhaustive_oracle.py`,
 Story 3.5). This is what makes the Story 3.7 GRASP-vs-exhaustive quality
 ratio apples-to-apples: identical distinctness semantics on both sides.
@@ -66,7 +75,7 @@ from typing import Any
 
 import numpy as np
 
-from steeproute.models import ContractedGraph, Edge, Solution, SolverParams
+from steeproute.models import ContractedGraph, Edge, Solution, SolverParams, route_avg_gradient
 from steeproute.pipeline.osm import max_sac_rank, parse_difficulty_cap
 from steeproute.solver.distinctness import TopNTracker
 
@@ -133,9 +142,24 @@ class GraspSolver:
             return self._tracker.current_top()
         for _ in range(self._params.iter_budget):
             solution = self._construct_one()
-            if solution.edges:
+            if solution.edges and self._route_slope_ok(solution):
                 self._tracker.consider(solution)
         return self._tracker.current_top()
+
+    def _route_slope_ok(self, solution: Solution) -> bool:
+        """Route-level slope floor (FR3): admit iff `(Σd+ + Σd−)/Σlength ≥ θ`.
+
+        The binding constraint is the *whole-route* average gradient, enforced
+        here at finalization rather than greedily in `_build_rcl` — a partial
+        walk may legitimately dip below θ and recover by appending a steep
+        climb, so mid-construction pruning would wrongly kill recoverable
+        routes. The ratio is single-sourced through `models.route_avg_gradient`
+        — the same function the validator's `slope_floor` check uses — so the
+        validator can never flag a GRASP-admitted route over a float-summation
+        discrepancy. An empty/zero-length route yields gradient `0.0` and is
+        rejected at any positive θ.
+        """
+        return route_avg_gradient(solution.edges) >= self._params.theta
 
     def _construct_one(self) -> Solution:
         """Build one GRASP candidate via greedy-randomized walk extension.
@@ -180,9 +204,11 @@ class GraspSolver:
         - Not-yet-used: `(u, v, key)` not in `used_ids` — edge-simple-walk.
         - SAC cap: `max_sac_rank(sac_scale) > cap_rank` rejects. `None` /
           unrecognized values pass (cleared `filter_trails` upstream).
-        - Slope floor θ on **super-edges only** (membership test against
-          `graph.super_edge_to_base`); plain connectors carry whatever
-          gradient their underlying trail has.
+
+        The slope floor θ is **not** an RCL filter: it is a route-level
+        constraint enforced at finalization (`run` / `_route_slope_ok`), not a
+        per-edge one. Every edge that clears the two filters above is a
+        candidate regardless of its own gradient.
 
         Ranking: by per-edge objective contribution `d_plus_m + d_minus_m`
         descending; ties broken by `(node_v, key)` ascending. This `feasible.sort`
@@ -195,8 +221,6 @@ class GraspSolver:
         total.
         """
         nx_graph = self._graph.graph
-        super_edges = self._graph.super_edge_to_base
-        theta = self._params.theta
         cap_rank = self._cap_rank
         feasible: list[Edge] = []
         for u, v, k, data in nx_graph.out_edges(current, keys=True, data=True):
@@ -205,8 +229,6 @@ class GraspSolver:
                 continue
             rank = max_sac_rank(data["sac_scale"])
             if rank is not None and rank > cap_rank:
-                continue
-            if eid in super_edges and data["avg_gradient"] < theta:
                 continue
             feasible.append(
                 Edge(

@@ -177,24 +177,47 @@ def _relabelled(graph: ContractedGraph, offset: int) -> ContractedGraph:
 # --------------------------------------------------------------------------- #
 
 
+# Theta pair for the route-level relaxation. `θ` floors the WHOLE-route average
+# (D+ + D−)/length (Story 4.2), not individual super-edges, so lowering it admits
+# a superset of routes and the best objective is monotone non-decreasing. old=0.45
+# keeps every seed feasible (verified non-empty); new=0.25 admits the unfiltered
+# optimum. Non-vacuity is asserted at the suite level (see
+# `test_relax_theta_binds_on_at_least_one_seed`): a per-seed strict-drop guard is
+# no longer possible because the seeds' feasibility boundaries no longer coincide
+# under route-level semantics (seed 21 goes infeasible just above 0.45 while seed 26
+# only bends near 0.46). Full fixture re-tuning + the scale_elevation θ/min_climb_slope
+# co-scaling are Story 4.3 scope.
+_RELAX_THETA_OLD, _RELAX_THETA_NEW = 0.45, 0.25
+
+
 @pytest.mark.parametrize("seed", _SEEDS)
 def test_relax_theta_objective_non_decreasing(seed: int) -> None:
-    """Lowering the slope floor θ admits more super-edges → best objective must not drop."""
+    """Lowering the route-level slope floor θ admits a superset of routes → best objective must not drop."""
     graph = _base_graph(seed)
-    # Base theta=0.45 is above the factory's spine-feasibility guarantee (theta<=0.25),
-    # so the spine is severed here; base feasibility comes from non-super/connector edges
-    # and is verified non-empty on every seed in _SEEDS. theta>0.25 is required for
-    # non-vacuity — all super-edges have avg_gradient>=0.25, so a lower base wouldn't filter any.
-    old_theta, new_theta = 0.45, 0.25
-    old_obj = _best_objective(graph, _params(theta=old_theta))
-    new_obj = _best_objective(graph, _params(theta=new_theta))
+    old_obj = _best_objective(graph, _params(theta=_RELAX_THETA_OLD))
+    new_obj = _best_objective(graph, _params(theta=_RELAX_THETA_NEW))
     assert new_obj >= old_obj, (
-        f"seed {seed}: relaxing theta {old_theta}->{new_theta} dropped objective "
-        f"{old_obj}->{new_obj}"
+        f"seed {seed}: relaxing theta {_RELAX_THETA_OLD}->{_RELAX_THETA_NEW} dropped "
+        f"objective {old_obj}->{new_obj}"
     )
-    assert new_obj > old_obj, (
-        f"seed {seed}: relaxing theta {old_theta}->{new_theta} was a no-op "
-        f"({old_obj}=={new_obj}) — test is vacuous, retune the fixture/seed"
+
+
+def test_relax_theta_binds_on_at_least_one_seed() -> None:
+    """Suite-level non-vacuity: the θ relaxation strictly raises the objective on some seed.
+
+    Guards against the monotonicity test silently degrading into a tautology (e.g. if
+    a future change made θ inert). A per-seed strict guard isn't viable under route-level
+    semantics — see the `_RELAX_THETA_*` note — so the guarantee is asserted across the
+    seed set instead.
+    """
+    strict_gains = [
+        _best_objective(_base_graph(seed), _params(theta=_RELAX_THETA_NEW))
+        > _best_objective(_base_graph(seed), _params(theta=_RELAX_THETA_OLD))
+        for seed in _SEEDS
+    ]
+    assert any(strict_gains), (
+        f"relaxing theta {_RELAX_THETA_OLD}->{_RELAX_THETA_NEW} was a no-op on every seed "
+        f"in {_SEEDS} — the monotonicity test is vacuous, retune the fixture/seeds"
     )
 
 

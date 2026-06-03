@@ -28,12 +28,15 @@ Semantics:
     - SAC difficulty cap per edge (`max_sac_rank(sac_scale) > cap_rank` → drop).
       Edges with `sac_scale=None` or unrecognized values pass — they already
       cleared `filter_trails` upstream under the prevailing `untagged_policy`.
-    - Slope floor θ on **super-edges** (membership test against
-      `graph.super_edge_to_base`); plain connectors carry whatever gradient
-      their underlying trail has and are not subject to θ.
     - Edge-reuse (graph-membership): enforced by the simple-walk constraint;
       sub-`l_connector` connectors are absent from the input by construction
       (Story 3.3), so no separate length check is needed.
+  The slope floor θ (FR3) is **not** a DFS filter — it is a route-level
+  constraint, so (exactly like GRASP's `_route_slope_ok` finalization gate) it
+  is applied to each fully-enumerated candidate before admission:
+  `(Σ d_plus_m + Σ d_minus_m) / Σ length_m ≥ θ`. This keeps the oracle's and
+  GRASP's feasible sets identical, which is what makes Story 3.7's quality
+  ratio meaningful.
 - **Top-N + distinctness:** the full enumeration is deduplicated by canonical
   edge-set (different traversal orderings of the same edge-set collapse), then
   sorted objective-descending and fed through `TopNTracker(n, params.j_max)` —
@@ -48,7 +51,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from steeproute.models import ContractedGraph, Edge, Solution, SolverParams
+from steeproute.models import ContractedGraph, Edge, Solution, SolverParams, route_avg_gradient
 from steeproute.pipeline.osm import max_sac_rank, parse_difficulty_cap
 from steeproute.solver.distinctness import TopNTracker
 
@@ -82,7 +85,6 @@ def enumerate_best(
     see AC #4 in Story 3.5 (1 s wall-clock budget on a 5-node hand-graph).
     """
     cap_rank = parse_difficulty_cap(params.difficulty_cap)
-    super_edges = graph.super_edge_to_base
     nx_graph = graph.graph
 
     # Canonical edge-set → first-discovered Solution. Different traversal
@@ -93,16 +95,19 @@ def enumerate_best(
     for start in list(nx_graph.nodes):
         _dfs(
             nx_graph=nx_graph,
-            super_edges=super_edges,
             current=start,
             path_edges=[],
             used_ids=set(),
             cap_rank=cap_rank,
-            theta=params.theta,
             results=candidates,
         )
 
-    sorted_candidates = sorted(candidates.values(), key=lambda s: -s.objective)
+    # Route-level slope floor (FR3) is applied here, post-enumeration, on each
+    # complete candidate — via the same `models.route_avg_gradient` the solver's
+    # finalization gate uses, so both share one feasible set bit-for-bit (keeps
+    # the Story 3.7 ratio honest).
+    feasible = (s for s in candidates.values() if route_avg_gradient(s.edges) >= params.theta)
+    sorted_candidates = sorted(feasible, key=lambda s: -s.objective)
     tracker = TopNTracker(n, params.j_max)
     for sol in sorted_candidates:
         tracker.consider(sol)
@@ -112,12 +117,10 @@ def enumerate_best(
 def _dfs(
     *,
     nx_graph: Any,
-    super_edges: dict[tuple[int, int, int], tuple[Edge, ...]],
     current: int,
     path_edges: list[Edge],
     used_ids: set[tuple[int, int, int]],
     cap_rank: int,
-    theta: float,
     results: dict[frozenset[tuple[int, int, int]], Solution],
 ) -> None:
     """Backtracking walk-enumerator; emits each non-empty prefix as a candidate.
@@ -140,8 +143,6 @@ def _dfs(
         rank = max_sac_rank(data["sac_scale"])
         if rank is not None and rank > cap_rank:
             continue
-        if eid in super_edges and data["avg_gradient"] < theta:
-            continue
         edge = Edge(
             node_u=u,
             node_v=v,
@@ -156,12 +157,10 @@ def _dfs(
         used_ids.add(eid)
         _dfs(
             nx_graph=nx_graph,
-            super_edges=super_edges,
             current=v,
             path_edges=path_edges,
             used_ids=used_ids,
             cap_rank=cap_rank,
-            theta=theta,
             results=results,
         )
         path_edges.pop()

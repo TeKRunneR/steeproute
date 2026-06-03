@@ -8,9 +8,9 @@ Exercises the three things the solver-core must guarantee in isolation:
    foundation FR29 (`tests/integration/test_grasp_reproducible.py`) builds on.
 2. Constructor / `best_so_far` shape — readable before `run()` is called and
    returns `[]`.
-3. RCL respects the slope floor (θ on super-edges) and the SAC cap — one
-   directed test per filter, on hand-built graphs where the only-correct-edge
-   is unambiguous by inspection.
+3. The route-level slope floor (θ on the whole-route average, enforced at
+   finalization) and the SAC-cap RCL filter — one directed test each, on
+   hand-built graphs where the only-correct outcome is unambiguous by inspection.
 
 All graphs constructed inline with an explanatory comment block; see
 `tests/integration/test_oracle_correctness.py` for the established pattern.
@@ -181,21 +181,22 @@ def test_grasp_best_so_far_reflects_run_results() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Fixture B — slope-floor filter probe (3 nodes, 2 super-edges from node 0).
+# Fixture B — route-level slope-floor probe (3 nodes, 2 super-edges from node 0).
 # ---------------------------------------------------------------------------
 #
-#       super B_pass (above θ)
+#       B_pass route (above θ)
 #   0 -------------------------> 1     (dead-end)
 #    \
-#     `--super B_fail (below θ)--> 2   (dead-end)
+#     `--B_fail route (below θ)--> 2   (dead-end)
 #
-# B_pass: 0→1 super, len=400, d+=200, d-=0  (avg_gradient=0.500 ≥ θ=0.20)
-# B_fail: 0→2 super, len=1000, d+=100, d-=0 (avg_gradient=0.100 < θ=0.20)
+# B_pass: 0→1, len=400, d+=200, d-=0  (route avg (D+ + D−)/length = 0.500 ≥ θ=0.20)
+# B_fail: 0→2, len=1000, d+=100, d-=0 (route avg = 0.100 < θ=0.20)
 #
-# With `iter_budget=1` and `default_rng(0)`, the start node is sampled
-# uniformly over `sorted(nodes) = [0, 1, 2]`. With higher `iter_budget` we
-# cover all starts; in every case the only super-edge GRASP can ever emit is
-# `B_pass`. `B_fail` must NEVER appear in any returned route.
+# Both are single-edge dead-end routes, so the whole-route average equals the
+# edge's own gradient. With higher `iter_budget` every start node is sampled;
+# in every case the B_fail route is rejected by `_route_slope_ok` at
+# finalization (NOT by any RCL membership filter — that no longer exists, Story
+# 4.2), so `(0, 2, 0)` must NEVER appear in any returned route.
 
 
 def _build_slope_floor_fixture() -> ContractedGraph:
@@ -211,12 +212,13 @@ def _build_slope_floor_fixture() -> ContractedGraph:
     )
 
 
-def test_grasp_rcl_excludes_super_edges_below_theta() -> None:
-    """AC #4(c) slope-floor branch: sub-θ super-edges are filtered from the RCL.
+def test_grasp_discards_routes_below_route_level_theta() -> None:
+    """FR3: the finalization gate discards a sub-θ route; an at/above-θ route is admitted.
 
-    `B_fail` has `avg_gradient=0.10 < θ=0.20` and is registered as a super-edge
-    (membership in `super_edge_to_base`); it must never appear in any GRASP
-    output. Run enough iterations that every start node is plausibly sampled.
+    `B_fail`'s whole-route average is `0.10 < θ=0.20`, so `_route_slope_ok`
+    rejects it before it reaches the tracker — `(0, 2, 0)` must never appear in
+    any returned route. `B_pass` (route avg `0.50 ≥ θ`) is admitted. Run enough
+    iterations that every start node is sampled.
     """
     graph = _build_slope_floor_fixture()
     params = _params(iter_budget=50, n=3)
@@ -226,7 +228,7 @@ def test_grasp_rcl_excludes_super_edges_below_theta() -> None:
 
     all_edge_ids = {(e.node_u, e.node_v, e.key) for sol in result for e in sol.edges}
     assert (0, 2, 0) not in all_edge_ids, (
-        f"B_fail (sub-θ super-edge) must not appear in any route; got {all_edge_ids}"
+        f"B_fail (sub-θ route) must not appear in any route; got {all_edge_ids}"
     )
     # Sanity: B_pass should appear (otherwise the test would pass vacuously
     # because the result was empty).

@@ -9,7 +9,8 @@ contract every returned route must satisfy:
 - `len(result) <= params.n` (FR11 cap).
 - Each route is an edge-simple walk in the contracted graph (no repeated
   `(node_u, node_v, key)`, consecutive edges share an endpoint).
-- Each super-edge has `avg_gradient >= params.theta` (slope floor on climbs).
+- Each route clears the route-level slope floor: `(ΣD+ + ΣD−)/Σlength >= θ`
+  (FR3 — enforced by `GraspSolver._route_slope_ok` at finalization).
 - Each edge's SAC scale ranks at or below `params.difficulty_cap`.
 - Pairwise Jaccard distance >= `1 - params.j_max` across all returned pairs
   (FR11 distinctness — self-consistency check against what the tracker
@@ -35,7 +36,7 @@ import numpy as np
 import osmnx
 import pytest
 
-from steeproute.models import Area, Edge, PipelineConfig, Solution, SolverParams
+from steeproute.models import Area, Edge, PipelineConfig, Solution, SolverParams, route_avg_gradient
 from steeproute.pipeline import run_setup_stages
 from steeproute.pipeline.climbs import detect_climbs
 from steeproute.pipeline.graph import contract_climbs
@@ -92,20 +93,19 @@ def _params() -> SolverParams:
 
 
 @pytest.fixture(scope="module")
-def grasp_run() -> tuple[list[Solution], set[tuple[int, int, int]]]:
+def grasp_result() -> list[Solution]:
     """Run the full setup → climbs → contract → GRASP chain once.
 
-    Returns `(grasp_result, super_edge_ids)` so the assertions below can share
-    both products of a single setup chain. Module-scoped because every
-    assertion operates on the same output — re-running construction for each
-    test would multiply the wall-clock by the test count for no semantic gain.
+    Module-scoped because every assertion operates on the same output —
+    re-running construction for each test would multiply the wall-clock by the
+    test count for no semantic gain.
 
     The committed `osm_graph.graphml` / `dem.tif` fixtures are required (no
     `pytest.skip` fallback — AC #8 forbids it): a missing fixture should
     hard-fail loudly rather than silently drop coverage. The `assert result`
     here is the single non-vacuity guard for the whole module — every
-    dependent test iterates `grasp_result`, so pinning non-emptiness once at
-    the fixture trips them all if a regression empties the output.
+    dependent test iterates the result, so pinning non-emptiness once at the
+    fixture trips them all if a regression empties the output.
     """
 
     def _osm_load_from_fixture(_area: Area) -> nx.MultiDiGraph:
@@ -128,21 +128,7 @@ def grasp_run() -> tuple[list[Solution], set[tuple[int, int, int]]]:
     solver = GraspSolver(contracted, params, np.random.default_rng(_SEED))
     result = solver.run()
     assert result, "expected >= 1 GRASP route on the Grenoble Le Sappey fixture"
-    return result, set(contracted.super_edge_to_base.keys())
-
-
-@pytest.fixture(scope="module")
-def grasp_result(
-    grasp_run: tuple[list[Solution], set[tuple[int, int, int]]],
-) -> list[Solution]:
-    return grasp_run[0]
-
-
-@pytest.fixture(scope="module")
-def super_edge_ids(
-    grasp_run: tuple[list[Solution], set[tuple[int, int, int]]],
-) -> set[tuple[int, int, int]]:
-    return grasp_run[1]
+    return result
 
 
 def _assert_valid_walk(sol_edges: tuple[Edge, ...]) -> None:
@@ -176,25 +162,21 @@ def test_every_grasp_route_is_an_edge_simple_walk(grasp_result: list[Solution]) 
         _assert_valid_walk(sol.edges)
 
 
-def test_super_edges_in_routes_clear_theta(
-    grasp_result: list[Solution],
-    super_edge_ids: set[tuple[int, int, int]],
-) -> None:
-    """Architecture §Cat 5e: super-edges carry climbs; climbs must clear θ.
+def test_every_grasp_route_clears_route_level_theta(grasp_result: list[Solution]) -> None:
+    """FR3: every admitted route's whole-route average gradient clears θ.
 
-    The construction filter in `_build_rcl` enforces this — any super-edge
-    surfaced in the result must have `avg_gradient >= θ`. This test pins the
-    invariant against the actual super-edge ID set of the contracted graph
-    (a stronger statement than "every edge's avg_gradient >= θ", which would
-    also reject legitimate downhill connectors).
+    The binding slope constraint is route-level — `GraspSolver._route_slope_ok`
+    admits a finalized solution only if `(ΣD+ + ΣD−)/Σlength >= θ`. So no
+    returned route may fall below θ on average, even though individual connector
+    edges within it may be flat or downhill. This is feasible-by-construction:
+    a failure here signals a solver bug (the gate was bypassed), not a tuning
+    issue. Allow a tiny epsilon for float summation order.
     """
     for sol in grasp_result:
-        for edge in sol.edges:
-            eid = (edge.node_u, edge.node_v, edge.key)
-            if eid in super_edge_ids:
-                assert edge.avg_gradient >= _THETA, (
-                    f"super-edge {eid} in route has avg_gradient={edge.avg_gradient} < θ={_THETA}"
-                )
+        avg = route_avg_gradient(sol.edges)
+        assert avg >= _THETA - 1e-9, (
+            f"route avg_gradient={avg} fell below the route-level floor θ={_THETA}"
+        )
 
 
 def test_every_edge_in_every_route_satisfies_sac_cap(

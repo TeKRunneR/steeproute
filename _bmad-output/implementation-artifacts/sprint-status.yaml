@@ -29,7 +29,7 @@
 
 generated: 2026-04-24
 last_updated: 2026-06-03
-# Epic 4 → in-progress; Story 4.1 → done (lightweight review approved)
+# Epic 4 → in-progress; Story 4.1 → done; Story 4.2 → done (adversarial code review, shared-helper fix applied)
 
 project: bmad-test
 project_key: NOKEY
@@ -79,7 +79,7 @@ development_status:
   # Former Epic 4 (Operational Robustness) -> Epic 5; former Epic 5 (Release Polish) -> Epic 6.
   epic-4: in-progress
   4-1-split-theta-introduce-min-climb-slope-and-route-level-semantics: done
-  4-2-route-level-slope-enforcement-solver-oracle-validator-metric-fix: backlog
+  4-2-route-level-slope-enforcement-solver-oracle-validator-metric-fix: done
   4-3-revalidate-metamorphic-and-cli-tests-and-doc-sync: backlog
   epic-4-retrospective: optional
 

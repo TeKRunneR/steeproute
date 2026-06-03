@@ -21,11 +21,12 @@ Constraint semantics mirror the solver's construction filters so that
 GRASP output validates by construction (a failure on real GRASP output signals
 a *solver* bug, not a validator one):
 
-- **Slope floor** is checked on **non-connector edges only** — i.e. super-edges
-  (climbs), identified by membership in `ContractedGraph.super_edge_to_base`.
-  Plain connectors carry their underlying trail gradient and are exempt, exactly
-  as the RCL filter does (`solver/grasp.py` `_build_rcl`). Checking every edge
-  would wrongly reject legitimate downhill connectors.
+- **Slope floor** (FR3) is a **route-level** constraint: the whole-route average
+  gradient `(D+ + D−)/length` must clear θ. It is checked once per route against
+  the aggregate `avg_gradient`, mirroring the solver's finalization gate
+  (`solver/grasp.py` `_route_slope_ok`) so GRASP output validates by
+  construction. Per-climb steepness is the separate `--min-climb-slope`
+  detection threshold applied upstream in stage 8 — not a validator concern.
 - **Difficulty cap** rejects an edge iff `max_sac_rank(sac_scale)` is a known
   rank above the parsed cap; `None` (untagged / unrecognized SAC) passes — same
   policy as the solver and the Story 3.5 oracle.
@@ -59,6 +60,7 @@ from steeproute.models import (
     Solution,
     SolverParams,
     ValidatedRouteSet,
+    route_avg_gradient,
 )
 from steeproute.pipeline.osm import max_sac_rank, parse_difficulty_cap
 from steeproute.solver.distinctness import jaccard_distance
@@ -144,13 +146,30 @@ def _validate_edges(
     validates.
     """
     cap_rank = parse_difficulty_cap(params.difficulty_cap)
-    super_edge_ids = graph.super_edge_to_base
     nx_graph = graph.graph
     violations: list[ConstraintViolation] = []
 
+    # Slope floor (FR3): the *whole-route* average gradient must clear θ. This is
+    # a route-level constraint, not a per-edge one — a route may chain steep
+    # climbs across flat valley connectors and still fail because its overall
+    # (D+ + D−)/length dips below θ. Computed via `_route_metrics` so the
+    # validator's slope check and the report's `avg_gradient` are single-sourced.
+    avg_gradient = _route_metrics(list(edges)).avg_gradient
+    if avg_gradient < params.theta:
+        violations.append(
+            ConstraintViolation(
+                constraint_id="slope_floor",
+                detail=(
+                    f"route avg_gradient {avg_gradient:.4f} is below the "
+                    f"route-level slope floor θ={params.theta}"
+                ),
+                numeric={"observed": avg_gradient, "required": params.theta},
+            )
+        )
+
     # Per-edge checks run over *distinct* edge identities (first occurrence
     # preserved for deterministic order): a reused edge is one bad edge, not
-    # two, so it must not emit duplicate slope/difficulty/membership violations.
+    # two, so it must not emit duplicate difficulty/membership violations.
     # Edge reuse itself is reported separately below.
     seen_ids: set[tuple[int, int, int]] = set()
     unique_edges: list[Edge] = []
@@ -162,19 +181,6 @@ def _validate_edges(
 
     for edge in unique_edges:
         edge_id = (edge.node_u, edge.node_v, edge.key)
-
-        # Slope floor: non-connector (super-edge) climbs must clear θ.
-        if edge_id in super_edge_ids and edge.avg_gradient < params.theta:
-            violations.append(
-                ConstraintViolation(
-                    constraint_id="slope_floor",
-                    detail=(
-                        f"super-edge {edge_id} avg_gradient {edge.avg_gradient:.4f} "
-                        f"is below the slope floor θ={params.theta}"
-                    ),
-                    numeric={"observed": edge.avg_gradient, "required": params.theta},
-                )
-            )
 
         # Difficulty cap: a known SAC rank above the cap is a violation.
         rank = max_sac_rank(edge.sac_scale)
@@ -226,12 +232,11 @@ def _route_metrics(edges: list[Edge]) -> RouteMetrics:
     length_m = sum((edge.length_m for edge in edges), 0.0)
     d_plus_m = sum((edge.d_plus_m for edge in edges), 0.0)
     d_minus_m = sum((edge.d_minus_m for edge in edges), 0.0)
-    avg_gradient = d_plus_m / length_m if length_m > 0 else 0.0
     return RouteMetrics(
         length_m=length_m,
         d_plus_m=d_plus_m,
         d_minus_m=d_minus_m,
-        avg_gradient=avg_gradient,
+        avg_gradient=route_avg_gradient(edges),
     )
 
 

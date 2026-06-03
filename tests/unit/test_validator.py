@@ -127,13 +127,14 @@ def _route(edges: list[Edge]) -> Route:
 
 
 # ----------------------------------------------------------------------------
-# AC #2 — slope floor (super-edges only)
+# AC #2 — slope floor (route-level: (D+ + D−)/length ≥ θ)
 # ----------------------------------------------------------------------------
 
 
-def test_validate_route_flags_super_edge_below_theta() -> None:
-    """A super-edge below θ violates `slope_floor` with observed/required numerics."""
-    edges = [_edge(0, 1, avg_gradient=0.12)]  # 0.12 < θ=0.20
+def test_validate_route_flags_route_below_theta() -> None:
+    """A route whose whole-route average gradient is below θ violates `slope_floor`."""
+    # (D+ + D−)/length = (100 + 0) / 800 = 0.125 < θ=0.20.
+    edges = [_edge(0, 1, length_m=800.0, d_plus_m=100.0, d_minus_m=0.0)]
     graph = _graph(edges, super_ids={(0, 1, 0)})
 
     result = validate_route(_route(edges), graph, _params())
@@ -141,13 +142,30 @@ def test_validate_route_flags_super_edge_below_theta() -> None:
     assert result.passed is False
     slope = [v for v in result.violations if v.constraint_id == "slope_floor"]
     assert len(slope) == 1
-    assert slope[0].numeric == {"observed": 0.12, "required": 0.20}
+    assert slope[0].numeric["required"] == 0.20
+    assert abs(slope[0].numeric["observed"] - 0.125) < 1e-9
 
 
-def test_validate_route_ignores_below_theta_connector() -> None:
-    """A below-θ *connector* (not a super-edge) is exempt — no slope violation."""
-    edges = [_edge(0, 1, avg_gradient=0.05)]  # below θ, but NOT in super_ids
-    graph = _graph(edges, super_ids=set())
+def test_validate_route_admits_route_at_theta() -> None:
+    """A route whose average exactly meets θ passes — the floor is `>=`, not `>`."""
+    # (200 + 0) / 1000 = 0.20 == θ.
+    edges = [_edge(0, 1, length_m=1000.0, d_plus_m=200.0, d_minus_m=0.0)]
+    graph = _graph(edges, super_ids={(0, 1, 0)})
+
+    result = validate_route(_route(edges), graph, _params())
+
+    assert result.passed is True
+    assert result.violations == []
+
+
+def test_validate_route_slope_floor_counts_descent_in_average() -> None:
+    """Route average uses (D+ + D−)/length — descent counts toward clearing θ.
+
+    Under the old uphill-only metric (D+/length = 0.10) this route would have
+    been flagged; with the corrected total-vertical metric (0.20) it passes.
+    """
+    edges = [_edge(0, 1, length_m=1000.0, d_plus_m=100.0, d_minus_m=100.0)]
+    graph = _graph(edges, super_ids={(0, 1, 0)})
 
     result = validate_route(_route(edges), graph, _params())
 
@@ -216,16 +234,16 @@ def test_validate_route_admits_edge_simple_route() -> None:
 
 def test_validate_route_dedups_per_edge_violations_on_reuse() -> None:
     """A reused edge that also fails a per-edge constraint is reported once, not per occurrence."""
-    bad = _edge(0, 1, avg_gradient=0.05)  # super-edge below θ, traversed twice
+    bad = _edge(0, 1, sac_scale="alpine_hiking")  # rank 4 > T3 cap, traversed twice
     edges = [bad, _edge(1, 2), bad]
     graph = _graph([_edge(0, 1), _edge(1, 2)], super_ids={(0, 1, 0), (1, 2, 0)})
 
     result = validate_route(_route(edges), graph, _params())
 
-    # Exactly one slope_floor (deduped across the two traversals) + one edge_reuse.
-    slope = [v for v in result.violations if v.constraint_id == "slope_floor"]
+    # Exactly one difficulty_cap (deduped across the two traversals) + one edge_reuse.
+    cap = [v for v in result.violations if v.constraint_id == "difficulty_cap"]
     reuse = [v for v in result.violations if v.constraint_id == "edge_reuse"]
-    assert len(slope) == 1
+    assert len(cap) == 1
     assert len(reuse) == 1
     assert reuse[0].numeric == {"observed": 2.0, "required": 1.0}
 
@@ -314,7 +332,7 @@ def test_validate_builds_routes_with_aggregate_metrics() -> None:
     assert metrics.length_m == 1000.0
     assert metrics.d_plus_m == 200.0
     assert metrics.d_minus_m == 30.0
-    assert abs(metrics.avg_gradient - 0.20) < 1e-9  # 200 / 1000
+    assert abs(metrics.avg_gradient - 0.23) < 1e-9  # (200 + 30) / 1000
     assert result.routes[0].validation.passed is True
     assert result.set_violations == []
 

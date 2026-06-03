@@ -13,6 +13,7 @@ feed both setup-side ingestion and query-side cache coverage.
 """
 
 import pathlib
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -82,6 +83,22 @@ class Edge:
     d_minus_m: float
     avg_gradient: float
     sac_scale: str | None
+
+
+def route_avg_gradient(edges: Iterable[Edge]) -> float:
+    """Whole-route average gradient `(ΣD+ + ΣD−) / Σlength`, else `0.0` if length ≤ 0.
+
+    The single source of truth for the route-level slope metric (FR3). The GRASP
+    finalization gate (`solver/grasp.py` `_route_slope_ok`), the validator's
+    `slope_floor` check + `RouteMetrics.avg_gradient` (`validator.py`), and the
+    exhaustive oracle (`tests/integration/exhaustive_oracle.py`) all call this so
+    they compare bit-identical values — a route admitted by the solver can never
+    be flagged by the validator over a float-summation-order discrepancy.
+    """
+    edge_seq = tuple(edges)  # materialize: the metric makes two passes
+    total_length = sum((e.length_m for e in edge_seq), 0.0)
+    total_climb = sum((e.d_plus_m + e.d_minus_m for e in edge_seq), 0.0)
+    return total_climb / total_length if total_length > 0.0 else 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,8 +210,9 @@ class RouteMetrics:
 
     Produced by the route builder at the validator boundary (Story 3.9);
     consumers (output renderer Story 3.10) read these directly rather than
-    re-summing edge metrics. `avg_gradient` is `d_plus_m / length_m` if
-    `length_m > 0`, else 0.0.
+    re-summing edge metrics. `avg_gradient` is the whole-route
+    `(d_plus_m + d_minus_m) / length_m` (FR3 route-level metric) if
+    `length_m > 0`, else 0.0 — single-sourced via `route_avg_gradient`.
     """
 
     length_m: float
