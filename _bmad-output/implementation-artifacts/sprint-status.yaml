@@ -59,7 +59,7 @@ development_status:
   2-10-implement-query-side-fail-fast-on-unprepared-area: done
   epic-2-retrospective: optional
 
-  epic-3: in-progress
+  epic-3: done
   3-1-core-query-side-data-models: done
   3-2-pipeline-stage-8-climb-detection: done
   3-3-pipeline-stage-9-contracted-climb-graph-construction: done
