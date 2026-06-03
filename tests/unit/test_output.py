@@ -286,6 +286,31 @@ def test_html_is_self_contained_no_external_resource_tags(tmp_path: pathlib.Path
     assert re.search(r"<img[^>]*\bsrc\s*=\s*[\"']https?://", html) is None
 
 
+def test_basemap_uses_referer_tolerant_provider(tmp_path: pathlib.Path) -> None:
+    """Basemap is the OSM-derived Carto provider, not referer-gated tile.openstreetmap.org.
+
+    The bare OSM tile server now 403s requests with no Referer (which a
+    file://-opened report cannot send); the report uses a referer-tolerant
+    OSM-derived provider with dual OSM + CARTO attribution.
+    """
+    _render(tmp_path, [_route()])
+    html = (tmp_path / "route-1.html").read_text(encoding="utf-8")  # raw: tile URL is in a <script>
+    assert "basemaps.cartocdn.com" in html
+    assert "{s}.tile.openstreetmap.org" not in html  # the old referer-gated tile URL is gone
+    assert "OpenStreetMap contributors" in html
+    assert "CARTO" in html
+
+
+def test_map_and_profile_hover_linking_wired(tmp_path: pathlib.Path) -> None:
+    """The map polyline and the elevation profile are hover-linked both directions."""
+    _render(tmp_path, [_route()])
+    html = (tmp_path / "route-1.html").read_text(encoding="utf-8")  # raw: wiring is in a <script>
+    assert "circleMarker" in html  # map highlight marker
+    assert 'line.on("mousemove"' in html  # map -> profile
+    assert "setActiveElements" in html  # profile point activation
+    assert "onHover" in html  # profile -> map
+
+
 def test_interrupt_mid_render_leaves_no_partial_files(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

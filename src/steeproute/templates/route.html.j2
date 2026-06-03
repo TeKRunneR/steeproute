@@ -92,9 +92,14 @@
   // --- Route geometry (GeoJSON LineString, [lon, lat] order) ---
   const routeGeoJSON = {{ route_geojson | tojson }};
   const map = L.map("map");
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 19,
-    attribution: "&copy; OpenStreetMap contributors",
+  // OSM-derived Carto basemap: tile.openstreetmap.org now 403s requests with no
+  // Referer (which a file://-opened report cannot send), so use a referer-tolerant
+  // OSM-derived provider instead. URL stays a JS string — self-containment holds.
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
+    maxZoom: 20,
+    subdomains: "abcd",
+    referrerPolicy: "strict-origin-when-cross-origin",
+    attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
   }).addTo(map);
   const line = L.geoJSON(routeGeoJSON, { style: { color: "#b00020", weight: 4 } }).addTo(map);
   map.fitBounds(line.getBounds(), { padding: [20, 20] });
@@ -109,7 +114,7 @@
     const grn = Math.round(160 - t * 130);
     return `rgb(${r},${grn},70)`;
   }
-  new Chart(document.getElementById("elevation-profile"), {
+  const profileChart = new Chart(document.getElementById("elevation-profile"), {
     type: "line",
     data: {
       labels: distances.map((d) => (d / 1000).toFixed(2)),
@@ -117,6 +122,8 @@
         data: elevations,
         fill: false,
         pointRadius: 0,
+        pointHoverRadius: 5,
+        pointHoverBackgroundColor: "#0066ff",
         borderWidth: 3,
         segment: {
           borderColor: (ctx) => {
@@ -130,13 +137,65 @@
     },
     options: {
       responsive: true,
+      interaction: { mode: "index", intersect: false },
       plugins: { legend: { display: false } },
       scales: {
         x: { title: { display: true, text: "distance (km)" } },
         y: { title: { display: true, text: "elevation (m)" } },
       },
+      onHover: (_event, elements) => {
+        // Profile -> map: hovering a profile point marks the route on the map.
+        if (elements && elements.length) {
+          showHighlight(elements[0].index);
+        } else {
+          hideHighlight();
+        }
+      },
     },
   });
+
+  // --- Map <-> elevation-profile hover linking ---
+  // routeGeoJSON coordinate i and profile point i are the same resampled vertex
+  // (output.py builds both from one ordered vertex list), so linking the two views
+  // is just sharing that index — no distance interpolation needed.
+  const coords = routeGeoJSON.features[0].geometry.coordinates; // [lon, lat]
+  const latlngs = coords.map((c) => [c[1], c[0]]); // Leaflet wants [lat, lon]
+  const highlight = L.circleMarker([0, 0], {
+    radius: 6, color: "#0066ff", weight: 2, fillColor: "#0066ff", fillOpacity: 0.9,
+  });
+  let highlightOn = false;
+  function showHighlight(i) {
+    if (i < 0 || i >= latlngs.length) return;
+    highlight.setLatLng(latlngs[i]);
+    if (!highlightOn) { highlight.addTo(map); highlightOn = true; }
+  }
+  function hideHighlight() {
+    if (highlightOn) { map.removeLayer(highlight); highlightOn = false; }
+  }
+  function activateProfile(i) {
+    const pt = profileChart.getDatasetMeta(0).data[i];
+    const pos = pt ? { x: pt.x, y: pt.y } : { x: 0, y: 0 };
+    profileChart.setActiveElements([{ datasetIndex: 0, index: i }]);
+    profileChart.tooltip.setActiveElements([{ datasetIndex: 0, index: i }], pos);
+    profileChart.update();
+  }
+  function clearProfile() {
+    profileChart.setActiveElements([]);
+    profileChart.tooltip.setActiveElements([], { x: 0, y: 0 });
+    profileChart.update();
+  }
+  // Map -> profile: hovering the route highlights the matching profile point.
+  line.on("mousemove", (e) => {
+    let best = -1, bestD = Infinity;
+    for (let i = 0; i < latlngs.length; i++) {
+      const dlat = latlngs[i][0] - e.latlng.lat;
+      const dlon = latlngs[i][1] - e.latlng.lng;
+      const d = dlat * dlat + dlon * dlon;
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    if (best >= 0) { showHighlight(best); activateProfile(best); }
+  });
+  line.on("mouseout", () => { hideHighlight(); clearProfile(); });
 </script>
 {% endif %}
 </body>
