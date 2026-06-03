@@ -215,6 +215,7 @@ def make_toy_contracted_graph(
 def make_toy_solver_params(
     *,
     theta: float = 0.20,
+    min_climb_slope: float | None = None,
     difficulty_cap: str = "T3",
     j_max: float = 0.30,
     n: int = 3,
@@ -232,10 +233,16 @@ def make_toy_solver_params(
     across 5 seeds; the oracle is ~0.04s of that). The Epic 4 termination fields
     (`time_budget`, `stagnation_iters`) are inert here (the solver only honours
     `iter_budget` until Epic 4).
+
+    `min_climb_slope` defaults to `theta` (both ship at 0.20). The GRASP solver
+    never reads it — it drives `detect_climbs` (pipeline stage 8), which the
+    directly-built `ContractedGraph` fixtures bypass — so the default coupling is
+    harmless. Pass it explicitly to decouple the two (e.g. the `scale_elevation`
+    invariant co-scales both to document intent).
     """
     return SolverParams(
         theta=theta,
-        min_climb_slope=theta,
+        min_climb_slope=theta if min_climb_slope is None else min_climb_slope,
         difficulty_cap=difficulty_cap,
         l_connector=200.0,
         min_climb_ground_length=300.0,

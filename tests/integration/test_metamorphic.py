@@ -34,6 +34,19 @@ and `relax_j_max` on the top-1 objective (the highest-objective constructed rout
 is always admitted first with nothing higher to overlap-reject it, so the top-1
 objective is `j_max`-independent — see `distinctness.TopNTracker`).
 
+Why there is no `min_climb_slope` invariant
+============================================
+
+These 8 invariants are the complete set for the GRASP solver. There is
+deliberately no `relax_min_climb_slope` relation: `min_climb_slope` is a
+climb-*detection* threshold consumed by `detect_climbs` (pipeline stage 8),
+which runs *upstream* of the `ContractedGraph` this suite builds directly — the
+solver never reads it. Varying it here would leave every objective identical, so
+the invariant would be vacuous (a strict-gain guard would simply fail). The
+detection-side monotonicity of `min_climb_slope` belongs to a climb-detection
+test, not to this solver-level suite. The `scale_elevation` invariant still
+co-scales it for intent (see that test), but the result is unaffected.
+
 `pytest.skip`/`xfail` are forbidden here (Architecture §Cat 11c — pass-required).
 """
 
@@ -178,15 +191,16 @@ def _relabelled(graph: ContractedGraph, offset: int) -> ContractedGraph:
 
 
 # Theta pair for the route-level relaxation. `θ` floors the WHOLE-route average
-# (D+ + D−)/length (Story 4.2), not individual super-edges, so lowering it admits
-# a superset of routes and the best objective is monotone non-decreasing. old=0.45
-# keeps every seed feasible (verified non-empty); new=0.25 admits the unfiltered
+# (D+ + D−)/length, not individual super-edges, so lowering it admits a superset
+# of routes and the best objective is monotone non-decreasing. old=0.45 keeps
+# every seed feasible (verified non-empty); new=0.25 admits the unfiltered
 # optimum. Non-vacuity is asserted at the suite level (see
-# `test_relax_theta_binds_on_at_least_one_seed`): a per-seed strict-drop guard is
-# no longer possible because the seeds' feasibility boundaries no longer coincide
-# under route-level semantics (seed 21 goes infeasible just above 0.45 while seed 26
-# only bends near 0.46). Full fixture re-tuning + the scale_elevation θ/min_climb_slope
-# co-scaling are Story 4.3 scope.
+# `test_relax_theta_binds_on_at_least_one_seed`) rather than per-seed: under
+# route-level semantics the seeds' feasibility boundaries no longer coincide
+# (seed 21 goes infeasible just above 0.45 while seed 26 only bends near 0.46 —
+# disjoint), so no single θ pair makes a per-seed strict-drop guard bind on all
+# five. The per-seed monotone (`>=`) invariant plus the suite-level strict-gain
+# guard together pin the relation completely.
 _RELAX_THETA_OLD, _RELAX_THETA_NEW = 0.45, 0.25
 
 
@@ -291,17 +305,23 @@ def test_increase_iter_budget_objective_non_decreasing(seed: int) -> None:
 def test_scale_elevation_objective_scales_proportionally(seed: int) -> None:
     """Scaling all elevation by k scales the best objective by exactly k.
 
-    `theta` is scaled by the same `k` so the θ filter outcome is invariant
-    (`avg_gradient*k >= theta*k` iff `avg_gradient >= theta`); positive scaling
-    preserves the RCL `(d+ + d-)`-descending order too, so the identical route is
-    chosen and its objective scales by exactly `k`.
+    Both slope parameters are co-scaled by the same `k` so feasibility is
+    invariant. `theta` (the route-level floor) is scaled so the gate outcome is
+    unchanged (`avg_gradient*k >= theta*k` iff `avg_gradient >= theta`); positive
+    scaling also preserves the RCL `(d+ + d-)`-descending order, so the identical
+    route is chosen and its objective scales by exactly `k`. `min_climb_slope` is
+    co-scaled too for intent — though it is inert on this fixture (the solver
+    never consumes it; it drives `detect_climbs`, upstream of the directly-built
+    graph), so the co-scaling documents the semantics rather than affecting the
+    result.
     """
     graph = _base_graph(seed)
     k = 2.5
     base_params = _params()
     old_obj = _best_objective(graph, base_params)
     scaled_obj = _best_objective(
-        _with_scaled_elevation(graph, k), _params(theta=base_params.theta * k)
+        _with_scaled_elevation(graph, k),
+        _params(theta=base_params.theta * k, min_climb_slope=base_params.min_climb_slope * k),
     )
     assert math.isclose(scaled_obj, k * old_obj, rel_tol=1e-9), (
         f"seed {seed}: scaling elevation by {k} gave objective {scaled_obj}, expected {k * old_obj}"
