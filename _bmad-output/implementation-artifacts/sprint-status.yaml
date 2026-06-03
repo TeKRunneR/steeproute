@@ -29,7 +29,7 @@
 
 generated: 2026-04-24
 last_updated: 2026-06-03
-# Epic 4 → in-progress; Story 4.1 → done; Story 4.2 → done (adversarial code review, shared-helper fix applied); Story 4.3 → review (metamorphic suite finalized; docs/CLI-help verified already-synced)
+# Epic 4 → done (route-level slope-floor correction complete; 4.1/4.2/4.3 all done). Story 4.3 lightweight review approved (test-only diff). Epic-4 retrospective optional.
 
 project: bmad-test
 project_key: NOKEY
@@ -77,10 +77,10 @@ development_status:
   # Epic 4 inserted via correct-course 2026-06-03 (sprint-change-proposal-2026-06-03.md):
   # route-level slope-floor correction, sequenced ahead of Operational Robustness.
   # Former Epic 4 (Operational Robustness) -> Epic 5; former Epic 5 (Release Polish) -> Epic 6.
-  epic-4: in-progress
+  epic-4: done
   4-1-split-theta-introduce-min-climb-slope-and-route-level-semantics: done
   4-2-route-level-slope-enforcement-solver-oracle-validator-metric-fix: done
-  4-3-revalidate-metamorphic-and-cli-tests-and-doc-sync: review
+  4-3-revalidate-metamorphic-and-cli-tests-and-doc-sync: done
   epic-4-retrospective: optional
 
   epic-5: backlog
