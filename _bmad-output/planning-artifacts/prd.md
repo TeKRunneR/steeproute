@@ -104,7 +104,8 @@ The project has no business dimension (N=1, no revenue, no adoption target). Its
 
 **Configurable parameters (defaults)**
 
-- `θ` (avg slope floor) = 0.20
+- `θ` (route-level avg-slope floor, `(D+ + D−)/length`) = 0.20
+- `min_climb_slope` (climb-detection slope threshold, `d_plus/length`) = 0.20
 - `difficulty_cap` (SAC scale) = T3
 - `L_connector` (edge-reuse length threshold) = 200m
 - `min_climb_ground_length` (minimum climb length, measured as projected 2D distance along the trail) = 300m
@@ -347,7 +348,8 @@ All configuration via CLI flags. No config file in v1 (N=1, flag count manageabl
 
 | Flag | Default | Description |
 |---|---|---|
-| `--theta` | 0.20 | Average slope floor |
+| `--theta` | 0.20 | Route-level average-slope floor, `(D+ + D−)/length` |
+| `--min-climb-slope` | 0.20 | Min running-average uphill slope (`d_plus/length`) for a segment to count as a climb |
 | `--difficulty-cap` | T3 | SAC difficulty ceiling |
 | `--l-connector` | 200m | Edge-reuse length threshold |
 | `--min-climb-ground-length` | 300m | Minimum climb 2D arc length |
@@ -478,7 +480,8 @@ These are load-bearing for portfolio credibility. A feature-lean v1 is defensibl
 
 ### Route Search & Solver
 
-- **FR3**: User can configure the average-slope floor for eligible routes.
+- **FR3**: User can configure the **route-level** average-slope floor — the minimum ratio of total vertical change to total length, `(D+ + D−) / length`, that a returned route as a whole must satisfy.
+- **FR3b**: User can configure the **climb-detection slope threshold** — the minimum running-average uphill slope (`d_plus / length`) for a contiguous trail segment to qualify as a climb. Distinct from the route-level floor (FR3): this governs which segments become climbs (pipeline stage 8), while FR3 governs the whole route. (Numbered FR3b to avoid renumbering FR4–FR30; final numbering at PM discretion.)
 - **FR4**: User can configure the SAC difficulty ceiling for eligible route segments.
 - **FR5**: User can configure the length threshold distinguishing short connectors from primary edges.
 - **FR6**: User can configure the minimum ground-length threshold for a segment to count as a climb.

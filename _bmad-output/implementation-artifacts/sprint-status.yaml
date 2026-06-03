@@ -28,7 +28,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-06-01
+last_updated: 2026-06-03
 
 project: bmad-test
 project_key: NOKEY
@@ -73,17 +73,26 @@ development_status:
   3-11-wire-query-cli-end-to-end-with-validation-driven-exit-code: done
   epic-3-retrospective: optional
 
+  # Epic 4 inserted via correct-course 2026-06-03 (sprint-change-proposal-2026-06-03.md):
+  # route-level slope-floor correction, sequenced ahead of Operational Robustness.
+  # Former Epic 4 (Operational Robustness) -> Epic 5; former Epic 5 (Release Polish) -> Epic 6.
   epic-4: backlog
-  4-1-progressevent-throttled-callback-cli-renderer-with-quiet-verbose: backlog
-  4-2-time-budget-and-stagnation-termination: backlog
-  4-3-interrupt-handling-with-best-so-far-preservation: backlog
-  4-4-graceful-degradation-messaging-for-sparse-areas: backlog
-  4-5-run-summary-on-stdout: backlog
+  4-1-split-theta-introduce-min-climb-slope-and-route-level-semantics: backlog
+  4-2-route-level-slope-enforcement-solver-oracle-validator-metric-fix: backlog
+  4-3-revalidate-metamorphic-and-cli-tests-and-doc-sync: backlog
   epic-4-retrospective: optional
 
   epic-5: backlog
-  5-1-regression-golden-test-harness-and-update-regression-workflow: backlog
-  5-2-pin-2-3-grenoble-regression-fixtures-with-zero-tolerance-ci-gate: backlog
-  5-3-readme-gallery-with-3-5-pre-computed-example-reports: backlog
-  5-4-readme-known-limitations-quickstart-sections: backlog
-  5-5-final-ci-threshold-tightening-and-linux-best-effort-job: backlog
+  5-1-progressevent-throttled-callback-cli-renderer-with-quiet-verbose: backlog
+  5-2-time-budget-and-stagnation-termination: backlog
+  5-3-interrupt-handling-with-best-so-far-preservation: backlog
+  5-4-graceful-degradation-messaging-for-sparse-areas: backlog
+  5-5-run-summary-on-stdout: backlog
+  epic-5-retrospective: optional
+
+  epic-6: backlog
+  6-1-regression-golden-test-harness-and-update-regression-workflow: backlog
+  6-2-pin-2-3-grenoble-regression-fixtures-with-zero-tolerance-ci-gate: backlog
+  6-3-readme-gallery-with-3-5-pre-computed-example-reports: backlog
+  6-4-readme-known-limitations-quickstart-sections: backlog
+  6-5-final-ci-threshold-tightening-and-linux-best-effort-job: backlog
