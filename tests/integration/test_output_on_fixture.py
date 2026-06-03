@@ -76,6 +76,7 @@ _CENTER_LAT, _CENTER_LON, _DIST_M = _load_fixture_constants()
 def _params() -> SolverParams:
     return SolverParams(
         theta=_THETA,
+        min_climb_slope=_THETA,
         difficulty_cap=_DIFFICULTY_CAP,
         l_connector=_L_CONNECTOR,
         min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH_M,
@@ -103,7 +104,7 @@ def fixture_run() -> tuple[nx.MultiDiGraph, ContractedGraph, list[Solution]]:
         base_graph = run_setup_stages(area, config)
 
     climbs = detect_climbs(
-        base_graph, theta=_THETA, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH_M
+        base_graph, min_climb_slope=_THETA, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH_M
     )
     assert climbs, "expected >= 1 climb on the Grenoble Le Sappey fixture"
     contracted = contract_climbs(base_graph, climbs, l_connector=_L_CONNECTOR)

@@ -70,6 +70,7 @@ def _make_contracted_graph() -> ContractedGraph:
 def _make_solver_params() -> SolverParams:
     return SolverParams(
         theta=0.15,
+        min_climb_slope=0.16,
         difficulty_cap="T3",
         l_connector=500.0,
         min_climb_ground_length=300.0,
@@ -236,9 +237,10 @@ def test_contracted_graph_round_trip() -> None:
 
 
 def test_solver_params_round_trip() -> None:
-    """All 12 Cat 9 metadata-block fields are present and addressable by name."""
+    """All 13 Cat 9 metadata-block fields are present and addressable by name."""
     sp = _make_solver_params()
     assert math.isclose(sp.theta, 0.15)
+    assert math.isclose(sp.min_climb_slope, 0.16)
     assert sp.difficulty_cap == "T3"
     assert math.isclose(sp.l_connector, 500.0)
     assert math.isclose(sp.min_climb_ground_length, 300.0)

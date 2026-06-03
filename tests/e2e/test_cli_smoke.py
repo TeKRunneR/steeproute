@@ -20,6 +20,7 @@ QUERY_FLAGS = [
     "--center",
     "--radius",
     "--theta",
+    "--min-climb-slope",
     "--difficulty-cap",
     "--l-connector",
     "--min-climb-ground-length",
@@ -153,6 +154,22 @@ def test_query_unprepared_area_exits_2_with_setup_command_suggestion(
     # P5: empty-cache lead distinguishes from partial-coverage lead.
     assert result.stderr.startswith("error: No prepared cache exists yet.")
     assert "steeproute-setup --center 45.0716,6.1079" in result.stderr
+
+
+def test_query_negative_min_climb_slope_exits_2() -> None:
+    """Story 4.1: `--min-climb-slope` below 0 → BadCLIArgError → exit 2 (§Cat 10)."""
+    result = _run_cli(
+        "steeproute",
+        "--center",
+        "45.0716,6.1079",
+        "--radius",
+        "10",
+        "--min-climb-slope",
+        "-0.1",
+    )
+    assert result.returncode == 2, result.stderr
+    assert result.stderr.startswith("error:")
+    assert "--min-climb-slope" in result.stderr
 
 
 def test_setup_missing_dem_path_exits_2() -> None:

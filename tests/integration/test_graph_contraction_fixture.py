@@ -38,7 +38,7 @@ _DEM_FIXTURE_PATH = _FIXTURE_DIR / "dem.tif"
 # PRD §"Initial parameter defaults" — the values shipped as click defaults
 # in `cli/_shared.py`. Same values as `test_climb_detection_fixture.py` so
 # both integration tests exercise the production-default chain.
-_THETA = 0.20
+_MIN_CLIMB_SLOPE = 0.20
 _MIN_CLIMB_GROUND_LENGTH_M = 300.0
 _L_CONNECTOR = 200.0
 
@@ -80,7 +80,7 @@ def test_contracted_graph_has_fewer_edges_than_base(base_graph: nx.MultiDiGraph)
     """AC #3: contracted graph collapses climbs + drops sub-`l_connector` connectors."""
     climbs = detect_climbs(
         base_graph,
-        theta=_THETA,
+        min_climb_slope=_MIN_CLIMB_SLOPE,
         min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH_M,
     )
     assert climbs, "expected ≥ 1 climb on this fixture"
@@ -113,7 +113,7 @@ def test_super_edge_aggregates_match_back_expanded_base_metrics(
     """
     climbs = detect_climbs(
         base_graph,
-        theta=_THETA,
+        min_climb_slope=_MIN_CLIMB_SLOPE,
         min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH_M,
     )
     contracted = contract_climbs(base_graph, climbs, l_connector=_L_CONNECTOR)

@@ -123,14 +123,20 @@ class ContractedGraph:
 
 @dataclass(frozen=True, slots=True)
 class SolverParams:
-    """The 12 parameters every query records in its HTML/JSON metadata block (Architecture §Cat 9).
+    """The 13 parameters every query records in its HTML/JSON metadata block (Architecture §Cat 9).
 
     Field names match the CLI flag names verbatim so they double as the
     JSON-sidecar field names (`snake_case` per Architecture §"Serialization
     conventions"). The metadata block in `output.py` (Story 3.10) iterates the
     fields directly; reordering or renaming requires touching both surfaces.
 
-    - `theta`: slope floor (dimensionless gradient, e.g. 0.20 for 20%).
+    - `theta`: route-level average-slope floor (dimensionless gradient, e.g.
+      0.20 for 20%) — the minimum `(D+ + D−)/length` a returned route as a whole
+      must meet (FR3). Distinct from `min_climb_slope` below.
+    - `min_climb_slope`: per-climb detection threshold — the minimum
+      running-average uphill slope (`d_plus/length`) for a contiguous trail
+      segment to qualify as a climb in pipeline stage 8 (FR3b). Drives
+      `detect_climbs`; does not by itself constrain the whole route.
     - `difficulty_cap`: SAC scale ceiling (e.g. "T3"); edges above are excluded.
     - `l_connector`: minimum connector-edge length (m); shorter connectors
       drop out at the contraction step.
@@ -150,6 +156,7 @@ class SolverParams:
     """
 
     theta: float
+    min_climb_slope: float
     difficulty_cap: str
     l_connector: float
     min_climb_ground_length: float

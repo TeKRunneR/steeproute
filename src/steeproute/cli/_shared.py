@@ -164,6 +164,7 @@ def validate_setup_radius(radius_km: float) -> None:
 def validate_solver_options(
     *,
     theta: float,
+    min_climb_slope: float,
     l_connector: float,
     min_climb_ground_length: float,
     j_max: float,
@@ -186,6 +187,7 @@ def validate_solver_options(
     """
     for name, value in (
         ("--theta", theta),
+        ("--min-climb-slope", min_climb_slope),
         ("--l-connector", l_connector),
         ("--min-climb-ground-length", min_climb_ground_length),
         ("--j-max", j_max),
@@ -194,6 +196,8 @@ def validate_solver_options(
             raise BadCLIArgError(f"{name} {value!r} must be a finite number.")
     if theta < 0.0:
         raise BadCLIArgError(f"--theta {theta:g} must be >= 0.")
+    if min_climb_slope < 0.0:
+        raise BadCLIArgError(f"--min-climb-slope {min_climb_slope:g} must be >= 0.")
     if l_connector < 0.0:
         raise BadCLIArgError(f"--l-connector {l_connector:g} must be >= 0.")
     if min_climb_ground_length <= 0.0:
@@ -250,7 +254,15 @@ theta_option = click.option(
     type=click.FLOAT,
     default=0.20,
     show_default=True,
-    help="Average slope floor for eligible routes.",
+    help="Route-level average-slope floor, (D+ + D-)/length.",
+)
+
+min_climb_slope_option = click.option(
+    "--min-climb-slope",
+    type=click.FLOAT,
+    default=0.20,
+    show_default=True,
+    help="Min running-average uphill slope (d_plus/length) for a segment to count as a climb.",
 )
 
 difficulty_cap_option = click.option(

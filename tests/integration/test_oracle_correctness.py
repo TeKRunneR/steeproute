@@ -46,6 +46,7 @@ def _params(*, n: int = 1, theta: float = _THETA, j_max: float = _J_MAX) -> Solv
     """
     return SolverParams(
         theta=theta,
+        min_climb_slope=theta,
         difficulty_cap=_DIFFICULTY_CAP,
         l_connector=200.0,
         min_climb_ground_length=300.0,

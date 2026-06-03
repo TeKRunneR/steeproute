@@ -42,6 +42,7 @@ def _params(
     """
     return SolverParams(
         theta=theta,
+        min_climb_slope=theta,
         difficulty_cap=difficulty_cap,
         l_connector=200.0,
         min_climb_ground_length=300.0,

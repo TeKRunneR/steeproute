@@ -24,7 +24,7 @@ from steeproute.pipeline.climbs import detect_climbs
 # values to detect_climbs so we don't depend on these as module-scope
 # constants in production code — they live here only as the canonical
 # scenario knobs.
-_THETA = 0.20
+_MIN_CLIMB_SLOPE = 0.20
 _MIN_CLIMB_GROUND_LENGTH = 300.0
 
 
@@ -50,10 +50,12 @@ def _chain_graph(specs: list[tuple[float, float]]) -> nx.MultiDiGraph:
 
 
 def test_qualifying_uphill_chain_returns_single_climb() -> None:
-    # Five 100 m edges at 25 m gain each — per-edge slope 0.25 ≥ θ=0.20,
+    # Five 100 m edges at 25 m gain each — per-edge slope 0.25 ≥ min_climb_slope=0.20,
     # total 500 m ≥ min=300 m. Whole chain should collapse into one Climb.
     g = _chain_graph([(100.0, 25.0)] * 5)
-    climbs = detect_climbs(g, theta=_THETA, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH)
+    climbs = detect_climbs(
+        g, min_climb_slope=_MIN_CLIMB_SLOPE, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH
+    )
     assert len(climbs) == 1
     climb = climbs[0]
     assert len(climb.edges) == 5
@@ -70,7 +72,9 @@ def test_short_qualifying_chain_below_min_length_not_emitted() -> None:
     # Single 100 m edge at slope 0.25 — per-edge slope qualifies but the
     # total length (100 m) is below the 300 m floor → no climb emitted.
     g = _chain_graph([(100.0, 25.0)])
-    climbs = detect_climbs(g, theta=_THETA, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH)
+    climbs = detect_climbs(
+        g, min_climb_slope=_MIN_CLIMB_SLOPE, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH
+    )
     assert climbs == []
 
 
@@ -79,7 +83,9 @@ def test_undulating_chain_terminates_when_running_average_would_drop() -> None:
     # After 3 edges: cum=90/300=0.30. Adding edge 3 would give 95/500=0.19 < 0.20.
     # → climb terminates at 3 edges; length 300 m hits the min-length floor exactly.
     g = _chain_graph([(100.0, 25.0), (100.0, 30.0), (100.0, 35.0), (200.0, 5.0)])
-    climbs = detect_climbs(g, theta=_THETA, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH)
+    climbs = detect_climbs(
+        g, min_climb_slope=_MIN_CLIMB_SLOPE, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH
+    )
     assert len(climbs) == 1
     climb = climbs[0]
     assert len(climb.edges) == 3
@@ -93,14 +99,18 @@ def test_undulating_chain_terminates_when_running_average_would_drop() -> None:
 
 def test_empty_graph_returns_empty_list() -> None:
     g: nx.MultiDiGraph = nx.MultiDiGraph()
-    climbs = detect_climbs(g, theta=_THETA, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH)
+    climbs = detect_climbs(
+        g, min_climb_slope=_MIN_CLIMB_SLOPE, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH
+    )
     assert climbs == []
 
 
 def test_graph_with_no_qualifying_edges_returns_empty_list() -> None:
     # Per-edge slope 0.05 on every edge — none qualify as seeds.
     g = _chain_graph([(100.0, 5.0)] * 5)
-    climbs = detect_climbs(g, theta=_THETA, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH)
+    climbs = detect_climbs(
+        g, min_climb_slope=_MIN_CLIMB_SLOPE, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH
+    )
     assert climbs == []
 
 
@@ -119,7 +129,9 @@ def test_detect_climbs_does_not_mutate_input_graph() -> None:
         (u, v, k): (id(data), dict(data)) for u, v, k, data in g.edges(data=True, keys=True)
     }
 
-    _ = detect_climbs(g, theta=_THETA, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH)
+    _ = detect_climbs(
+        g, min_climb_slope=_MIN_CLIMB_SLOPE, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH
+    )
 
     assert g.number_of_nodes() == nodes_before
     assert g.number_of_edges() == edges_before
@@ -145,7 +157,9 @@ def test_climbs_are_edge_disjoint_across_parallel_chains() -> None:
             sac_scale="hiking",
         )
 
-    climbs = detect_climbs(g, theta=_THETA, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH)
+    climbs = detect_climbs(
+        g, min_climb_slope=_MIN_CLIMB_SLOPE, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH
+    )
     assert len(climbs) == 2
     seen: set[tuple[int, int, int]] = set()
     for climb in climbs:
@@ -159,7 +173,9 @@ def test_climbs_are_edge_disjoint_across_parallel_chains() -> None:
 def test_edge_projection_carries_full_stage7_contract() -> None:
     """Returned `Edge` carries every stage-7 attribute, with sac_scale propagated."""
     g = _chain_graph([(100.0, 25.0)] * 3)
-    climbs = detect_climbs(g, theta=_THETA, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH)
+    climbs = detect_climbs(
+        g, min_climb_slope=_MIN_CLIMB_SLOPE, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH
+    )
     assert len(climbs) == 1
     first_edge = climbs[0].edges[0]
     assert first_edge.node_u == 0
@@ -186,7 +202,9 @@ def test_sac_scale_none_propagates_through_edge_projection() -> None:
             avg_gradient=0.25,
             sac_scale=None,
         )
-    climbs = detect_climbs(g, theta=_THETA, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH)
+    climbs = detect_climbs(
+        g, min_climb_slope=_MIN_CLIMB_SLOPE, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH
+    )
     assert len(climbs) == 1
     assert all(e.sac_scale is None for e in climbs[0].edges)
 
@@ -230,7 +248,7 @@ def test_branching_picks_steepest_qualifying_continuation() -> None:
         sac_scale="hiking",
     )
 
-    climbs = detect_climbs(g, theta=_THETA, min_climb_ground_length=180.0)
+    climbs = detect_climbs(g, min_climb_slope=_MIN_CLIMB_SLOPE, min_climb_ground_length=180.0)
     # Two climbs possible: the steepest extension (0→1→3) and a leftover
     # candidate from (1,2,0) as its own seed. (1,2,0) alone is 100 m < 180 m,
     # so only the (0→1→3) climb survives.
@@ -282,7 +300,9 @@ def test_slope_tie_breaks_on_lower_node_v_then_key() -> None:
         sac_scale="hiking",
     )
 
-    climbs = detect_climbs(g, theta=_THETA, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH)
+    climbs = detect_climbs(
+        g, min_climb_slope=_MIN_CLIMB_SLOPE, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH
+    )
     assert len(climbs) == 1
     end_nodes = [(e.node_u, e.node_v) for e in climbs[0].edges]
     assert (1, 2) in end_nodes, f"tie-break picked the wrong continuation: {end_nodes}"
@@ -330,7 +350,9 @@ def test_parallel_edges_keyed_distinctly_resolve_via_key_tie_break() -> None:
         sac_scale="hiking",
     )
 
-    climbs = detect_climbs(g, theta=_THETA, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH)
+    climbs = detect_climbs(
+        g, min_climb_slope=_MIN_CLIMB_SLOPE, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH
+    )
     # Seed (0,1,0) extends through (1,2,0) (lower key wins tie). Node 2 then
     # joins visited_nodes; (1,2,1) is rejected by node-monotonicity. The
     # leftover seed (1,2,1) alone is 200 m, below the 300 m floor → no
@@ -360,7 +382,9 @@ def test_descending_only_edge_does_not_qualify_as_seed() -> None:
             avg_gradient=0.40,
             sac_scale="hiking",
         )
-    climbs = detect_climbs(g, theta=_THETA, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH)
+    climbs = detect_climbs(
+        g, min_climb_slope=_MIN_CLIMB_SLOPE, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH
+    )
     assert climbs == []
 
 
@@ -395,7 +419,9 @@ def test_node_monotonicity_blocks_zigzag_through_bidirectional_edges() -> None:
         avg_gradient=0.35,
         sac_scale="hiking",
     )
-    climbs = detect_climbs(g, theta=_THETA, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH)
+    climbs = detect_climbs(
+        g, min_climb_slope=_MIN_CLIMB_SLOPE, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH
+    )
     # Neither candidate reaches 300 m alone — without the guard, the walk
     # could chain (0,1,0) → (1,0,0) for 400 m total, which would emit a
     # zigzag "climb." The guard prevents this; both seeds fail independently.

@@ -21,8 +21,8 @@ smoothed by stage 6) and attaches four numeric metrics:
 
 Stage 8 (`detect_climbs`) walks the post-stage-7 MultiDiGraph and emits the
 maximal edge-disjoint contiguous edge-sequences whose cumulative directional
-uphill slope (`d_plus_sum / length_sum`) stays ≥ θ and whose total ground
-length is ≥ `min_climb_ground_length`. Output is a `list[Climb]`; the input
+uphill slope (`d_plus_sum / length_sum`) stays ≥ `min_climb_slope` and whose
+total ground length is ≥ `min_climb_ground_length`. Output is a `list[Climb]`; the input
 graph is never mutated. Stage 9 (graph contraction, Story 3.3) consumes the
 output to build the solver-side `ContractedGraph`.
 """
@@ -119,14 +119,14 @@ def _cumulative_2d_distance_m(verts: list[tuple[float, float, float]]) -> float:
 
 def detect_climbs(
     graph: nx.MultiDiGraph,
-    theta: float,
+    min_climb_slope: float,
     min_climb_ground_length: float,
 ) -> list[Climb]:
     """Stage 8: emit edge-disjoint contiguous edge-sequences that qualify as climbs.
 
     Walks `graph` and returns the maximal directed edge-sequences whose
     cumulative directional uphill slope (`d_plus_sum / length_sum`) stays
-    `≥ theta` from the seed onwards and whose total `length_m` is
+    `≥ min_climb_slope` from the seed onwards and whose total `length_m` is
     `≥ min_climb_ground_length`. Each underlying graph edge appears in at most
     one returned `Climb` — Story 3.3's back-mapping injectivity depends on it.
 
@@ -134,7 +134,10 @@ def detect_climbs(
         graph: post-stage-7 MultiDiGraph; every edge must carry the stage-7
             attribute contract (`length_m`, `d_plus_m`, `d_minus_m`,
             `avg_gradient`) plus `sac_scale` (may be `None`). Never mutated.
-        theta: slope floor (dimensionless gradient, e.g. 0.20 for 20 %).
+        min_climb_slope: climb-detection slope threshold — the minimum
+            running-average uphill slope (`d_plus/length`) a segment must keep
+            to qualify as a climb (dimensionless gradient, e.g. 0.20 for 20 %).
+            Distinct from the route-level floor `SolverParams.theta` (FR3 vs FR3b).
         min_climb_ground_length: minimum cumulative 2D ground length (m) for a
             candidate climb to be emitted.
 
@@ -146,7 +149,7 @@ def detect_climbs(
 
     Branching policy: at a junction with multiple unconsumed outgoing edges,
     extend with the steepest (highest per-edge `d_plus_m / length_m`) edge
-    whose addition keeps the cumulative running-average slope `≥ theta` AND
+    whose addition keeps the cumulative running-average slope `≥ min_climb_slope` AND
     whose target node has not yet been visited by the candidate (node-monotone
     walk — prevents zigzag climbs that traverse the same node pair through
     bidirectional / parallel edges). Ties on slope break on the outgoing
@@ -169,7 +172,7 @@ def detect_climbs(
         if seed in consumed:
             continue
         seed_data = edge_data[seed]
-        if not _qualifies_as_seed(seed_data, theta):
+        if not _qualifies_as_seed(seed_data, min_climb_slope):
             continue
 
         u, v, _k = seed
@@ -194,7 +197,7 @@ def detect_climbs(
                 graph,
                 edge_data,
                 head,
-                theta,
+                min_climb_slope,
                 cum_d_plus,
                 cum_length,
                 consumed,
@@ -229,8 +232,8 @@ def detect_climbs(
     return climbs
 
 
-def _qualifies_as_seed(data: dict[str, Any], theta: float) -> bool:
-    """True if a directed edge's per-edge uphill slope is `≥ theta`.
+def _qualifies_as_seed(data: dict[str, Any], min_climb_slope: float) -> bool:
+    """True if a directed edge's per-edge uphill slope is `≥ min_climb_slope`.
 
     Uses the directional metric `d_plus_m / length_m` — *not* the absolute
     stage-7 `avg_gradient` (which sums uphill + downhill churn). A descending
@@ -238,27 +241,27 @@ def _qualifies_as_seed(data: dict[str, Any], theta: float) -> bool:
     postcondition of stage 7 (same contract `compute_edge_metrics` relies on);
     we don't re-guard it here.
     """
-    return data["d_plus_m"] / data["length_m"] >= theta
+    return data["d_plus_m"] / data["length_m"] >= min_climb_slope
 
 
 def _pick_steepest_extension(
     graph: nx.MultiDiGraph,
     edge_data: dict[tuple[int, int, int], dict[str, Any]],
     head: int,
-    theta: float,
+    min_climb_slope: float,
     cum_d_plus: float,
     cum_length: float,
     consumed: set[tuple[int, int, int]],
     candidate_set: set[tuple[int, int, int]],
     visited_nodes: set[int],
 ) -> tuple[int, int, int] | None:
-    """Steepest qualifying outgoing edge from `head` keeping cum-slope `≥ theta`.
+    """Steepest qualifying outgoing edge from `head` keeping cum-slope `≥ min_climb_slope`.
 
     Returns `None` when no qualifying continuation exists (closes the candidate
     climb at the previous edge). An edge is qualifying iff it is unconsumed,
     not already in the candidate, its target node is not already in the
     candidate's path (node-monotonicity), and adding it keeps the cumulative
-    running-average slope `≥ theta`. Deterministic tie-break on
+    running-average slope `≥ min_climb_slope`. Deterministic tie-break on
     `(node_v, key)` via the sorted iteration order.
     """
     best: tuple[int, int, int] | None = None
@@ -273,7 +276,7 @@ def _pick_steepest_extension(
         ed = edge_data[edge_id]
         length: float = ed["length_m"]
         new_avg = (cum_d_plus + ed["d_plus_m"]) / (cum_length + length)
-        if new_avg < theta:
+        if new_avg < min_climb_slope:
             continue
         slope: float = ed["d_plus_m"] / length
         if slope > best_slope:

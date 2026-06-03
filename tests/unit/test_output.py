@@ -34,6 +34,7 @@ from steeproute.models import (
 # Distinctive values so a metadata-presence assertion can't match by accident.
 _PARAMS = SolverParams(
     theta=0.21,
+    min_climb_slope=0.19,
     difficulty_cap="T4",
     l_connector=222.0,
     min_climb_ground_length=333.0,
@@ -59,6 +60,7 @@ _CONVERGENCE = "budget-exhausted"
 # All distinctive metadata values that must appear in BOTH the HTML and the JSON.
 _EXPECTED_METADATA_STRINGS = [
     "0.21",  # theta
+    "0.19",  # min_climb_slope
     "T4",  # difficulty_cap
     "222.0",  # l_connector
     "333.0",  # min_climb_ground_length

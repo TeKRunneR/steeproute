@@ -44,7 +44,7 @@ _DEM_FIXTURE_PATH = _FIXTURE_DIR / "dem.tif"
 # PRD §"Initial parameter defaults" — the values shipped as click defaults
 # in `cli/_shared.py`. Pinned here so the test exercises the production
 # defaults (not arbitrary numbers).
-_THETA = 0.20
+_MIN_CLIMB_SLOPE = 0.20
 _MIN_CLIMB_GROUND_LENGTH_M = 300.0
 
 # Regression-snapshot baselines: the climb count and total D+ recorded the
@@ -95,7 +95,7 @@ def test_climb_count_within_regression_baseline(prepared_graph: nx.MultiDiGraph)
     """Climb count within ±10 % of the regression-snapshot baseline."""
     climbs = detect_climbs(
         prepared_graph,
-        theta=_THETA,
+        min_climb_slope=_MIN_CLIMB_SLOPE,
         min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH_M,
     )
     count_drift = abs(len(climbs) - _BASELINE_CLIMB_COUNT) / _BASELINE_CLIMB_COUNT
@@ -109,7 +109,7 @@ def test_total_climb_d_plus_within_regression_baseline(prepared_graph: nx.MultiD
     """Summed climb D+ within ±10 % of the regression-snapshot baseline."""
     climbs = detect_climbs(
         prepared_graph,
-        theta=_THETA,
+        min_climb_slope=_MIN_CLIMB_SLOPE,
         min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH_M,
     )
     total_d_plus = sum(c.d_plus_m for c in climbs)
@@ -124,7 +124,7 @@ def test_every_climb_meets_floor_constraints(prepared_graph: nx.MultiDiGraph) ->
     """Every emitted climb satisfies the two floor constraints by construction."""
     climbs = detect_climbs(
         prepared_graph,
-        theta=_THETA,
+        min_climb_slope=_MIN_CLIMB_SLOPE,
         min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH_M,
     )
     assert climbs, "expected ≥ 1 climb on this fixture"
@@ -132,8 +132,8 @@ def test_every_climb_meets_floor_constraints(prepared_graph: nx.MultiDiGraph) ->
         assert climb.length_m >= _MIN_CLIMB_GROUND_LENGTH_M, (
             f"climb under length floor: {climb.length_m:.1f} m < {_MIN_CLIMB_GROUND_LENGTH_M} m"
         )
-        assert climb.avg_slope >= _THETA, (
-            f"climb under slope floor: avg_slope={climb.avg_slope:.3f} < θ={_THETA}"
+        assert climb.avg_slope >= _MIN_CLIMB_SLOPE, (
+            f"climb under slope floor: avg_slope={climb.avg_slope:.3f} < min_climb_slope={_MIN_CLIMB_SLOPE}"
         )
 
 
@@ -143,7 +143,7 @@ def test_detect_climbs_does_not_mutate_real_fixture(prepared_graph: nx.MultiDiGr
     edges_before = prepared_graph.number_of_edges()
     _ = detect_climbs(
         prepared_graph,
-        theta=_THETA,
+        min_climb_slope=_MIN_CLIMB_SLOPE,
         min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH_M,
     )
     assert prepared_graph.number_of_nodes() == nodes_before
@@ -154,7 +154,7 @@ def test_climbs_are_edge_disjoint_on_real_fixture(prepared_graph: nx.MultiDiGrap
     """AC #4: real-fixture edge-disjointness — Story 3.3's back-mapping injectivity."""
     climbs = detect_climbs(
         prepared_graph,
-        theta=_THETA,
+        min_climb_slope=_MIN_CLIMB_SLOPE,
         min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH_M,
     )
     seen: set[tuple[int, int, int]] = set()
@@ -175,7 +175,7 @@ def test_aggregate_identity_holds_on_real_fixture(prepared_graph: nx.MultiDiGrap
     """
     climbs = detect_climbs(
         prepared_graph,
-        theta=_THETA,
+        min_climb_slope=_MIN_CLIMB_SLOPE,
         min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH_M,
     )
     for i, climb in enumerate(climbs):
@@ -202,7 +202,7 @@ def test_climbs_are_node_monotone_on_real_fixture(prepared_graph: nx.MultiDiGrap
     """
     climbs = detect_climbs(
         prepared_graph,
-        theta=_THETA,
+        min_climb_slope=_MIN_CLIMB_SLOPE,
         min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH_M,
     )
     for i, climb in enumerate(climbs):

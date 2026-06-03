@@ -62,6 +62,7 @@ _CENTER_LAT, _CENTER_LON, _DIST_M = _load_fixture_constants()
 def _params() -> SolverParams:
     return SolverParams(
         theta=_THETA,
+        min_climb_slope=_THETA,
         difficulty_cap=_DIFFICULTY_CAP,
         l_connector=_L_CONNECTOR,
         min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH_M,
@@ -93,7 +94,9 @@ def contracted() -> ContractedGraph:
     config = PipelineConfig(untagged_policy="include", dem_path=_DEM_FIXTURE_PATH)
     with patch("steeproute.pipeline.osm_load", _osm_load_from_fixture):
         base = run_setup_stages(area, config)
-    climbs = detect_climbs(base, theta=_THETA, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH_M)
+    climbs = detect_climbs(
+        base, min_climb_slope=_THETA, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH_M
+    )
     return contract_climbs(base, climbs, l_connector=_L_CONNECTOR)
 
 

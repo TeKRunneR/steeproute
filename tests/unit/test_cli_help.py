@@ -10,6 +10,7 @@ QUERY_FLAGS = [
     "--center",
     "--radius",
     "--theta",
+    "--min-climb-slope",
     "--difficulty-cap",
     "--l-connector",
     "--min-climb-ground-length",
@@ -47,6 +48,7 @@ SETUP_FLAGS = [
 
 QUERY_ONLY_FLAGS = [
     "--theta",
+    "--min-climb-slope",
     "--difficulty-cap",
     "--l-connector",
     "--min-climb-ground-length",

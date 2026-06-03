@@ -42,6 +42,7 @@ from steeproute.cli._shared import (
     j_max_option,
     l_connector_option,
     min_climb_ground_length_option,
+    min_climb_slope_option,
     n_option,
     osm_age_warn_days_option,
     output_dir_option,
@@ -86,6 +87,7 @@ _CONVERGENCE_STATUS: output.ConvergenceStatus = "budget-exhausted"
 @center_option
 @radius_option
 @theta_option
+@min_climb_slope_option
 @difficulty_cap_option
 @l_connector_option
 @min_climb_ground_length_option
@@ -108,6 +110,7 @@ def cli(
     center: tuple[float, float],
     radius: float,
     theta: float,
+    min_climb_slope: float,
     difficulty_cap: str,
     l_connector: float,
     min_climb_ground_length: float,
@@ -139,6 +142,7 @@ def cli(
     # zero routes. Fail-fast here, before the cache walk and the solve.
     validate_solver_options(
         theta=theta,
+        min_climb_slope=min_climb_slope,
         l_connector=l_connector,
         min_climb_ground_length=min_climb_ground_length,
         j_max=j_max,
@@ -175,6 +179,7 @@ def cli(
     # --- Journey 1 happy path: stages 8-9 → GRASP → validate → render --------
     params = SolverParams(
         theta=theta,
+        min_climb_slope=min_climb_slope,
         difficulty_cap=difficulty_cap,
         l_connector=l_connector,
         min_climb_ground_length=min_climb_ground_length,
@@ -195,7 +200,7 @@ def cli(
 
     climbs = detect_climbs(
         prepared.graph,
-        theta=theta,
+        min_climb_slope=min_climb_slope,
         min_climb_ground_length=min_climb_ground_length,
     )
     contracted = contract_climbs(prepared.graph, climbs, l_connector=l_connector)

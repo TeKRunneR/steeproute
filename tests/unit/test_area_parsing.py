@@ -83,6 +83,7 @@ def test_validate_area_size_rejects_above_cap() -> None:
 def _check_solver_options(
     *,
     theta: float = 0.20,
+    min_climb_slope: float = 0.20,
     l_connector: float = 200.0,
     min_climb_ground_length: float = 300.0,
     j_max: float = 0.30,
@@ -92,6 +93,7 @@ def _check_solver_options(
     """Call `validate_solver_options` with in-range defaults; tests override one field."""
     validate_solver_options(
         theta=theta,
+        min_climb_slope=min_climb_slope,
         l_connector=l_connector,
         min_climb_ground_length=min_climb_ground_length,
         j_max=j_max,
@@ -124,6 +126,9 @@ def test_validate_solver_options_accepts_boundary_values() -> None:
         (lambda: _check_solver_options(theta=float("nan")), "--theta"),
         (lambda: _check_solver_options(theta=float("inf")), "--theta"),
         (lambda: _check_solver_options(theta=-0.1), "--theta"),
+        (lambda: _check_solver_options(min_climb_slope=float("nan")), "--min-climb-slope"),
+        (lambda: _check_solver_options(min_climb_slope=float("inf")), "--min-climb-slope"),
+        (lambda: _check_solver_options(min_climb_slope=-0.1), "--min-climb-slope"),
         (lambda: _check_solver_options(min_climb_ground_length=0.0), "--min-climb-ground-length"),
         (lambda: _check_solver_options(min_climb_ground_length=-5.0), "--min-climb-ground-length"),
         (

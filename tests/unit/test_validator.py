@@ -49,6 +49,7 @@ def _params(*, theta: float = _THETA, j_max: float = _J_MAX) -> SolverParams:
     """`SolverParams` carrying only the fields the validator reads."""
     return SolverParams(
         theta=theta,
+        min_climb_slope=theta,
         difficulty_cap=_DIFFICULTY_CAP,
         l_connector=200.0,
         min_climb_ground_length=300.0,
