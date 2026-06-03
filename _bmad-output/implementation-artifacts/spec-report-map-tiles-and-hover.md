@@ -54,6 +54,10 @@ context: ['_bmad-output/implementation-artifacts/3-10-html-json-output-rendering
 - Given a degenerate route, when rendered, then no map/profile/linking code is emitted and nothing errors.
 - Given the full suite, when CI runs, then all four gates are green and the self-containment grep still passes.
 
+## Spec Change Log
+
+- **2026-06-03 — basemap provider (post-merge feedback).** Initial fix used Carto Voyager; in-browser testing confirmed tiles loaded but Carto's viz basemaps omit trail/path detail, making routes hard to place. Switched to **OpenTopoMap** (`tile.opentopomap.org`) — OSM-derived (FR17 holds), referer-tolerant + key-free (loads from `file://`), topographic with trails/paths/contours. `maxZoom` 17 (provider limit; ample for a 2 km area). KEEP: referer-tolerant, no-API-key, OSM-derived, JS-string URL (self-containment) — these constraints stay binding for any future provider swap.
+
 ## Design Notes
 
 Index alignment is the whole trick: `_route_vertices` produces the ordered vertex list that feeds *both* `_geojson` (map, `[lon,lat]`) and `_profile_series` (chart, one entry per vertex). So `geojson.coordinates[i]` ↔ chart data index `i` — no distance interpolation needed. Map→profile: scan the polyline latlngs for the nearest to `e.latlng`, use that index. Chart→map: `chart.getElementsAtEventForMode(e,'index',{intersect:false},true)` gives the index; convert `coords[i]` (`[lon,lat]`) to Leaflet `[lat,lon]`. Set dataset `pointHoverRadius` so the activated profile point is visible. Why a provider swap rather than a header tweak: a `file://` page has no origin, so no `referrerPolicy` value can produce the Referer `tile.openstreetmap.org` now demands — only a referer-tolerant provider fixes it for a local report.

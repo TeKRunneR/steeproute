@@ -287,18 +287,18 @@ def test_html_is_self_contained_no_external_resource_tags(tmp_path: pathlib.Path
 
 
 def test_basemap_uses_referer_tolerant_provider(tmp_path: pathlib.Path) -> None:
-    """Basemap is the OSM-derived Carto provider, not referer-gated tile.openstreetmap.org.
+    """Basemap is OSM-derived OpenTopoMap, not referer-gated tile.openstreetmap.org.
 
     The bare OSM tile server now 403s requests with no Referer (which a
-    file://-opened report cannot send); the report uses a referer-tolerant
-    OSM-derived provider with dual OSM + CARTO attribution.
+    file://-opened report cannot send); the report uses the topographic,
+    referer-tolerant OpenTopoMap provider (trails + contours) with OSM attribution.
     """
     _render(tmp_path, [_route()])
     html = (tmp_path / "route-1.html").read_text(encoding="utf-8")  # raw: tile URL is in a <script>
-    assert "basemaps.cartocdn.com" in html
+    assert "tile.opentopomap.org" in html
     assert "{s}.tile.openstreetmap.org" not in html  # the old referer-gated tile URL is gone
     assert "OpenStreetMap contributors" in html
-    assert "CARTO" in html
+    assert "OpenTopoMap" in html
 
 
 def test_map_and_profile_hover_linking_wired(tmp_path: pathlib.Path) -> None:
