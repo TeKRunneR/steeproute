@@ -10,8 +10,11 @@
          color: #1a1a1a; background: #fafafa; }
   h1 { font-size: 1.4rem; margin: 0 0 1rem; }
   h2 { font-size: 1.05rem; margin: 1.5rem 0 0.5rem; }
-  #map { height: 420px; border: 1px solid #ccc; border-radius: 4px; }
-  #elevation-profile { max-width: 100%; }
+  #map { height: 462px; border: 1px solid #ccc; border-radius: 4px; }
+  /* Fixed-height, position:relative wrapper is Chart.js's documented pattern for
+     responsive + maintainAspectRatio:false; the canvas fills it exactly. */
+  #elevation-profile-wrap { position: relative; height: 180px; }
+  #elevation-profile { display: block; width: 100%; height: 100%; }
   .banner { background: #b00020; color: #fff; padding: 1rem 1.25rem; border-radius: 4px;
             margin-bottom: 1.25rem; }
   .banner h2 { color: #fff; margin-top: 0; }
@@ -59,7 +62,7 @@
 <div id="map"></div>
 
 <h2>Elevation profile</h2>
-<canvas id="elevation-profile" height="120"></canvas>
+<div id="elevation-profile-wrap"><canvas id="elevation-profile"></canvas></div>
 {% else %}
 <h2>Geometry</h2>
 <p><em>Route geometry is unavailable — the map and elevation profile are omitted for this route.</em></p>
@@ -140,6 +143,10 @@
     },
     options: {
       responsive: true,
+      // Fill the fixed-height #elevation-profile-wrap instead of preserving the
+      // canvas aspect ratio, which would otherwise scale the profile's height with
+      // the screen width — far too tall to view alongside the map on a 1080p screen.
+      maintainAspectRatio: false,
       interaction: { mode: "index", intersect: false },
       plugins: { legend: { display: false } },
       scales: {
