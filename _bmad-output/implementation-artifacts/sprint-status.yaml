@@ -28,7 +28,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-06-04  # Story 5.2 reviewed + closed (done)
+last_updated: 2026-06-04  # Story 5.3 reviewed + closed (done); Epic 5 → done
 # Epic 4 → done (route-level slope-floor correction complete; 4.1/4.2/4.3 all done). Story 4.3 lightweight review approved (test-only diff). Epic-4 retrospective optional.
 # Epic 5 (Undirected segment-reuse semantics) inserted via correct-course 2026-06-03, sequenced next. Operational Robustness → Epic 6, Release Polish → Epic 7.
 
@@ -89,10 +89,10 @@ development_status:
   # base-segment reuse + short-connector tolerance, sequenced ahead of
   # Operational Robustness. Former Epic 5 (Operational Robustness) -> Epic 6;
   # former Epic 6 (Release Polish) -> Epic 7. Renumber is text-only (no story files).
-  epic-5: in-progress    # Undirected segment-reuse semantics
+  epic-5: done           # Undirected segment-reuse semantics (5.1/5.2/5.3 all done)
   5-1-base-segment-identity-and-connector-revival-at-contraction: done
   5-2-undirected-reuse-enforcement-solver-oracle-validator: done
-  5-3-revalidate-metamorphic-cli-and-doc-sync: backlog
+  5-3-revalidate-metamorphic-cli-and-doc-sync: done
   epic-5-retrospective: optional
 
   epic-6: backlog        # (was epic-5) Operational Robustness

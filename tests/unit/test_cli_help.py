@@ -88,6 +88,23 @@ def test_setup_help_excludes_query_only_flag(flag: str) -> None:
     assert flag not in result.output
 
 
+def test_query_help_l_connector_describes_reuse_exemption() -> None:
+    """`--l-connector` help reflects the realized FR5 reuse-exemption semantics.
+
+    Guards against regressing to the old "edge-reuse length threshold (short
+    connectors vs primary edges)" wording, which described the pre-Epic-5
+    directed/drop behaviour. The distinctive phrase below must track the help
+    string in `cli/_shared.py::l_connector_option`.
+    """
+    runner = CliRunner()
+    result = runner.invoke(query_cli, ["--help"])
+    assert result.exit_code == 0
+    # Click reflows help text across lines, so collapse whitespace before matching.
+    normalized = " ".join(result.output.split())
+    assert "reuse-exemption threshold" in normalized
+    assert "in both directions" in normalized
+
+
 def test_query_version_exits_zero() -> None:
     runner = CliRunner()
     result = runner.invoke(query_cli, ["--version"])

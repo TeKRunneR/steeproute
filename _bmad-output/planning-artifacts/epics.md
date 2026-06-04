@@ -25,7 +25,7 @@ This document provides the complete epic and story breakdown for bmad-test (prod
 - FR3: User can configure the route-level average-slope floor — minimum `(D+ + D−) / length` for a returned route as a whole.
 - FR3b: User can configure the climb-detection slope threshold — minimum running-average uphill slope (`d_plus / length`) for a segment to qualify as a climb (distinct from FR3's route-level floor).
 - FR4: User can configure the SAC difficulty ceiling for eligible route segments.
-- FR5: User can configure the length threshold distinguishing short connectors from primary edges.
+- FR5: User can configure the short-connector length threshold below which a linking segment is exempt from the once-per-route reuse limit — short connectors may be reused and traversed in both directions, while every other segment may be used at most once regardless of direction.
 - FR6: User can configure the minimum ground-length threshold for a segment to count as a climb.
 - FR7: User can configure the pairwise segment-overlap ceiling for top-N distinctness.
 - FR8: User can configure the target result count.
@@ -549,6 +549,8 @@ So that GRASP operates on the right abstraction and FR5 (L_connector) has its en
 **Then** `tests/unit/test_graph_contraction.py` asserts on synthetic graphs with known climbs: super-edge metrics sum to underlying edges' metrics; bidirectionality preserved; back-mapping round-trips; sub-`l_connector` connectors removed
 **And** an integration test on the real Grenoble fixture post-stages 8–9 asserts: contracted graph has fewer edges than base; back-expansion of every super-edge totals the same aggregate D+ and length as the original
 **And** a `hypothesis` property test asserts the back-mapping is injective (no base edge mapped to two super-edges) and contraction is pure
+
+> **Superseded by Epic 5 (Story 5.1):** the drop-shorter-connectors behaviour above is no longer current. `contract_climbs` now retains **all** connectors and tags every contracted edge with an undirected `base_segment_id` + a `reusable` flag (`length_m < l_connector`); the once-per-route reuse limit is enforced **undirected** at solve/validate time (Story 5.2), with short connectors exempt. `--l-connector` is a reuse-exemption threshold, not a contraction-time drop threshold.
 
 ### Story 3.4: TopNTracker with Jaccard distinctness
 

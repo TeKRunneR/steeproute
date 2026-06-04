@@ -47,6 +47,34 @@ detection-side monotonicity of `min_climb_slope` belongs to a climb-detection
 test, not to this solver-level suite. The `scale_elevation` invariant still
 co-scales it for intent (see that test), but the result is unaffected.
 
+Why there is no `l_connector` invariant (Story 5.3)
+===================================================
+
+The Section-4C sprint-change proposal floated a `raise l_connector → best
+objective non-decreasing` invariant. It is deliberately **omitted** here for the
+same structural reason as `min_climb_slope`: `l_connector` is a *contraction-time*
+reuse-exemption threshold consumed only by `pipeline/graph.py::contract_climbs`,
+which tags each contracted edge with a `reusable` flag (`length_m < l_connector`)
+and an undirected `base_segment_id`. The solver derives its reuse-exemption set
+purely from those per-edge tags (`solver/reuse.py`) and never reads
+`SolverParams.l_connector`. This suite builds a `ContractedGraph` **directly**,
+bypassing `contract_climbs`, so varying `l_connector` is inert — the invariant
+would be vacuous (a strict-gain guard would simply fail). Raising it would
+require routing a fixture through `contract_climbs`, which is a contraction-level
+concern, not a solver-level one.
+
+The undirected-reuse *behaviour* (out-and-back rejected, exempt connector may
+recur, undirected `base_segment_id` enforced in either direction) is proven by
+the dedicated solver/oracle/validator unit tests and the real-Grenoble-fixture
+test added in Story 5.2 — not here. This suite stays on the toy factory's
+*directed* per-edge tags (`conftest.py`) on purpose: that keeps its feasible set
+bit-identical to pre-5.2 so the 8 objective-monotonicity invariants below (which
+are orthogonal to reuse identity) and the Story 3.7 quality gate are unperturbed.
+The two invariants that *do* touch the base-segment identity — node-relabel
+isomorphism and add-edge monotonicity — exercise it explicitly (the relabel
+transform remaps the identity tuples; the add-edge transform tags the new edge
+with a fresh, non-colliding id so it cannot retro-block an existing segment).
+
 `pytest.skip`/`xfail` are forbidden here (Architecture §Cat 11c — pass-required).
 """
 
@@ -132,6 +160,14 @@ def _with_added_edge(graph: ContractedGraph) -> ContractedGraph:
             sac_scale="hiking",
         )
     )
+    # Tag the new edge with its own distinct directed base-segment id (matching
+    # the toy factory's convention, `conftest.py`). A fresh `(u, v, key)` id can
+    # never collide with an existing segment, so adding the edge cannot
+    # retro-block any segment already used by a route — the add-edge
+    # monotonicity invariant holds under undirected reuse for that reason, not by
+    # accident of the untagged-edge directed fallback in `solver/reuse.py`.
+    g.edges[u, v, key]["base_segment_id"] = frozenset({(u, v, key)})
+    g.edges[u, v, key]["reusable"] = False
     super_edge_to_base = dict(graph.super_edge_to_base)
     super_edge_to_base[(u, v, key)] = (
         Edge(u, v, key, length_m, d_plus_m, d_minus_m, avg_gradient, "hiking"),
@@ -165,6 +201,18 @@ def _relabelled(graph: ContractedGraph, offset: int) -> ContractedGraph:
     """
     mapping = {node: node + offset for node in graph.graph.nodes}
     g = nx.relabel_nodes(graph.graph, mapping, copy=True)
+    # `relabel_nodes` remaps node KEYS but not the `(u, v, key)` tuples stored
+    # inside each edge's `base_segment_id` frozenset — remap those too so the
+    # base-segment identity is a faithful isomorph of the original. Without this
+    # the tags would reference stale node ids; the objective stays identical only
+    # because each toy edge is its own directed segment, but the relabelled graph
+    # would not actually carry a relabel-invariant identity. Remapping makes the
+    # "node-id ordering never leaks into the result" property hold for the reuse
+    # identity as well as the objective.
+    for _u, _v, _key, data in g.edges(keys=True, data=True):
+        data["base_segment_id"] = frozenset(
+            (mapping[a], mapping[b], k) for (a, b, k) in data["base_segment_id"]
+        )
     super_edge_to_base: dict[tuple[int, int, int], tuple[Edge, ...]] = {}
     for (u, v, key), edges in graph.super_edge_to_base.items():
         super_edge_to_base[(mapping[u], mapping[v], key)] = tuple(

@@ -278,7 +278,11 @@ l_connector_option = click.option(
     type=click.FLOAT,
     default=200.0,
     show_default=True,
-    help="Edge-reuse length threshold in meters (short connectors vs primary edges).",
+    help=(
+        "Short-connector reuse-exemption threshold in meters: connectors shorter "
+        "than this may be reused and traversed in both directions; every other "
+        "segment may be used at most once per route, regardless of direction."
+    ),
 )
 
 min_climb_ground_length_option = click.option(
