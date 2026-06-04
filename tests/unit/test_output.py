@@ -115,6 +115,9 @@ def _base_graph() -> nx.MultiDiGraph:
     g.add_edge(1, 2, key=0, vertices_resampled=[(45.10, 6.10, 1000.0), (45.11, 6.11, 1050.0)])
     g.add_edge(2, 3, key=0, vertices_resampled=[(45.11, 6.11, 1050.0), (45.12, 6.12, 1120.0)])
     g.add_edge(3, 4, key=0, vertices_resampled=[(45.12, 6.12, 1120.0), (45.13, 6.13, 1090.0)])
+    # Reverse of the (3,4) connector, so a route can traverse the linking segment
+    # both ways (Story 5.2 reusable connector) — used by the reuse-render test.
+    g.add_edge(4, 3, key=0, vertices_resampled=[(45.13, 6.13, 1090.0), (45.12, 6.12, 1120.0)])
     return g
 
 
@@ -238,6 +241,31 @@ def test_route_with_unresolvable_edge_still_renders(tmp_path: pathlib.Path) -> N
     assert "Route geometry is unavailable" in html
     payload = json.loads((tmp_path / "route-1.json").read_text(encoding="utf-8"))
     assert payload["vertices"] == []
+
+
+def test_render_handles_reusable_connector_traversed_twice(tmp_path: pathlib.Path) -> None:
+    """A route reusing a short connector in both directions renders without error (Story 5.2).
+
+    Story 5.2 lets an exempt short connector recur (both directions) in one
+    route. The renderer iterates `route.edges` sequentially and only dedups the
+    shared join vertex, so the connector's geometry is simply drawn on each
+    traversal — confirm it does not assume edge-uniqueness and crash.
+    """
+    route = Route(
+        edges=[_edge(1, 3, 0), _edge(3, 4, 0), _edge(4, 3, 0)],  # super, conn, conn-reverse
+        metrics=RouteMetrics(length_m=400.0, d_plus_m=120.0, d_minus_m=60.0, avg_gradient=0.45),
+        validation=RouteValidation(passed=True, violations=[]),
+    )
+
+    _render(tmp_path, [route])
+
+    payload = json.loads((tmp_path / "route-1.json").read_text(encoding="utf-8"))
+    # The connector identity appears twice (each direction) — not collapsed.
+    assert payload["edges"] == [[1, 3, 0], [3, 4, 0], [4, 3, 0]]
+    # Geometry resolved for every traversal; the round trip back to node 3's
+    # vertex is present, so the polyline is non-empty and the render succeeded.
+    assert payload["vertices"], "route geometry should be rendered, not empty"
+    assert "VALIDATION FAILED" not in (tmp_path / "route-1.html").read_text(encoding="utf-8")
 
 
 def test_no_banner_when_route_clean(tmp_path: pathlib.Path) -> None:

@@ -30,13 +30,19 @@ a *solver* bug, not a validator one):
 - **Difficulty cap** rejects an edge iff `max_sac_rank(sac_scale)` is a known
   rank above the parsed cap; `None` (untagged / unrecognized SAC) passes — same
   policy as the solver and the Story 3.5 oracle.
-- **Edge-reuse limit** is the **edge-simple** invariant: each
-  `(node_u, node_v, key)` identity may appear at most once in a route. The
-  solver already guarantees this (edge-simple walks). The PRD lists "edge-reuse
-  limit" as a named constraint and the §Cat 6 table attributes it to
-  `--l-connector`, but `l_connector` is the connector *length* threshold
-  enforced at graph contraction (Story 3.3 / FR5), not a per-route reuse count;
-  the runtime constraint is the edge-simple re-check.
+- **Edge-reuse limit** is the **undirected base-segment** once-only rule (FR5,
+  Story 5.2): a non-exempt physical trail segment may appear at most once per
+  route, regardless of direction. It keys on the `base_segment_id` tags Story
+  5.1 wrote at contraction — a climb super-edge and the reverse-direction
+  connectors of the same trail share an id — so ascending a climb and descending
+  its reverse is a violation (the out-and-back). Exemption is per-id: an id is
+  exempt iff every edge carrying it is `reusable` (a short connector
+  `length_m < l_connector`), so repeated exempt short connectors are **not**
+  flagged. The non-exempt id set and per-edge blocking ids are single-sourced
+  with the solver and oracle through `solver.reuse`, so a GRASP-admitted route
+  validates by construction. This realizes the originally-intended `--l-connector`
+  semantics (a reuse-exemption threshold, per the §Cat 6 table and PRD FR5),
+  replacing the earlier directed edge-simple re-check.
 - **Graph membership** is a sanity check that every route edge exists in the
   operational contracted graph.
 
@@ -64,6 +70,7 @@ from steeproute.models import (
 )
 from steeproute.pipeline.osm import max_sac_rank, parse_difficulty_cap
 from steeproute.solver.distinctness import jaccard_distance
+from steeproute.solver.reuse import blocking_ids, non_exempt_base_segment_ids
 
 __all__ = ["validate", "validate_route", "validate_set"]
 
@@ -206,19 +213,31 @@ def _validate_edges(
                 )
             )
 
-    # Edge-reuse limit: each edge identity may appear at most once (edge-simple).
-    counts: dict[tuple[int, int, int], int] = {}
+    # Edge-reuse limit: each non-exempt base trail segment may appear at most
+    # once, regardless of direction (FR5, Story 5.2). Counts are tallied over the
+    # non-exempt base-segment ids each route edge occupies — single-sourced with
+    # the solver/oracle via `solver.reuse`, so a GRASP-admitted route never trips
+    # this. Exempt short connectors carry no non-exempt id, so repeating one (in
+    # either direction) is not a violation. Edges absent from the operational
+    # graph contribute nothing here — they are already flagged by
+    # `graph_membership` above.
+    non_exempt = non_exempt_base_segment_ids(graph)
+    segment_counts: dict[tuple[int, int, int], int] = {}
     for edge in edges:
-        edge_id = (edge.node_u, edge.node_v, edge.key)
-        counts[edge_id] = counts.get(edge_id, 0) + 1
-    for edge_id, count in counts.items():
+        data = nx_graph.get_edge_data(edge.node_u, edge.node_v, edge.key)
+        if data is None:
+            continue
+        for sid in blocking_ids(data, edge.node_u, edge.node_v, edge.key, non_exempt):
+            segment_counts[sid] = segment_counts.get(sid, 0) + 1
+    for sid, count in segment_counts.items():
         if count > 1:
             violations.append(
                 ConstraintViolation(
                     constraint_id="edge_reuse",
                     detail=(
-                        f"edge {edge_id} is traversed {count} times; "
-                        f"routes must be edge-simple (reuse limit 1)"
+                        f"base trail segment {sid} is traversed {count} times; "
+                        f"non-exempt segments may be used at most once per route, "
+                        f"in either direction (reuse limit 1)"
                     ),
                     numeric={"observed": float(count), "required": 1.0},
                 )

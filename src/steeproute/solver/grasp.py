@@ -19,9 +19,9 @@ start node by greedy-randomized walk extension:
 1. Sample a start node uniformly at random over the contracted graph's nodes
    (via the injected `numpy.random.Generator`).
 2. At each step, build the restricted candidate list (RCL): the outgoing edges
-   from the current node that pass the feasibility filters
-   (not-yet-used + SAC cap), sorted by per-edge objective
-   contribution (`d_plus_m + d_minus_m`) descending, truncated to
+   from the current node that pass the feasibility filters (directed-edge-simple
+   + no non-exempt base segment already used + SAC cap), sorted by per-edge
+   objective contribution (`d_plus_m + d_minus_m`) descending, truncated to
    `RCL_SIZE` entries.
 3. Sample one edge uniformly from the RCL; append it; advance the current
    node to its `node_v`.
@@ -42,11 +42,19 @@ Each completed `Solution` that clears the route-level floor is offered to a
 Story 3.5). This is what makes the Story 3.7 GRASP-vs-exhaustive quality
 ratio apples-to-apples: identical distinctness semantics on both sides.
 
-Walks are **edge-simple**: each `(node_u, node_v, key)` triple appears at most
-once per route. Node-revisits via distinct edges are allowed (Story 3.5 oracle
-contract). Strict containment (FR10) is guaranteed upstream — `contract_climbs`
-cuts the contracted graph to the area before the solver sees it; no `Area`
-check is performed here.
+Walks obey **undirected base-segment reuse** (Story 5.2, FR5): a route may
+traverse any non-exempt physical trail segment at most once, *in either
+direction*. The rule keys on the `base_segment_id` tags Story 5.1 wrote at
+contraction and is single-sourced through `solver/reuse.py` so GRASP, the
+exhaustive oracle, and the validator share one feasible set. Short connectors
+(`reusable`, `length_m < l_connector`) are exempt and may recur in both
+directions, so loops stay constructible; everything else — climbs and long
+connectors — is once-only. This forbids descending the reverse of a climb you
+just ascended, eliminating the degenerate out-and-back by construction.
+Node-revisits via distinct (non-conflicting) segments are still allowed (Story
+3.5 oracle contract). Strict containment (FR10) is guaranteed upstream —
+`contract_climbs` cuts the contracted graph to the area before the solver sees
+it; no `Area` check is performed here.
 
 Determinism (FR29)
 ==================
@@ -78,6 +86,7 @@ import numpy as np
 from steeproute.models import ContractedGraph, Edge, Solution, SolverParams, route_avg_gradient
 from steeproute.pipeline.osm import max_sac_rank, parse_difficulty_cap
 from steeproute.solver.distinctness import TopNTracker
+from steeproute.solver.reuse import blocking_ids, non_exempt_base_segment_ids
 
 __all__ = ["GraspSolver", "RCL_SIZE"]
 
@@ -130,6 +139,10 @@ class GraspSolver:
         # Python / networkx versions (dict-insertion order is the FR29 fragility).
         self._nodes: tuple[int, ...] = tuple(sorted(graph.graph.nodes))
         self._cap_rank: int = parse_difficulty_cap(params.difficulty_cap)
+        # Base-segment ids subject to the once-only reuse rule, computed once per
+        # graph (Story 5.2). Single-sourced with the oracle + validator via
+        # `solver/reuse.py` so all three share one feasible set.
+        self._non_exempt_ids: frozenset[tuple[int, int, int]] = non_exempt_base_segment_ids(graph)
 
     @property
     def best_so_far(self) -> list[Solution]:
@@ -164,12 +177,22 @@ class GraspSolver:
     def _construct_one(self) -> Solution:
         """Build one GRASP candidate via greedy-randomized walk extension.
 
-        Emits an **edge-simple** walk: each `(node_u, node_v, key)` is used at
-        most once (`used_ids`). Node-revisits via distinct edges are allowed,
-        and so are closed walks — including a single self-loop edge `(u, u, k)`,
-        which is a valid length-1 route here. Such pathological-but-real OSM
-        shapes (lollipop trail-ends, roundabouts) are admitted by design; the
-        runtime validator (Story 3.9) owns any policy on rejecting them.
+        Emits a walk obeying **undirected base-segment reuse** (Story 5.2): each
+        non-exempt base segment is traversed at most once, in either direction
+        (`used_segments`). The walk additionally stays **directed-edge-simple**
+        (`used_directed`) — no `(node_u, node_v, key)` triple twice — which is
+        what guarantees termination: exempt short connectors don't block on a
+        segment, so without the directed-simple bound a reusable connector could
+        be walked `a→b→a→b…` forever. An exempt connector is therefore bounded by
+        the directed-simple rule (each directed `(u, v, key)` at most once) rather
+        than the once-only segment rule — so a simple two-node connector recurs at
+        most twice (once per direction), while parallel keys over the same exempt
+        segment may each appear once. A non-exempt segment is used at most once.
+        Taking an edge records its directed id and its non-exempt base ids. Node-revisits via distinct non-conflicting segments are allowed, and
+        so are closed walks — including a single self-loop edge `(u, u, k)`, a
+        valid length-1 route. Such pathological-but-real OSM shapes (lollipop
+        trail-ends, roundabouts) are admitted by design; the runtime validator
+        (Story 3.9) owns any policy on rejecting them.
 
         A start node with no feasible extension yields an empty walk
         (`edges == ()`, `objective == 0.0`); `run()` discards those before they
@@ -178,15 +201,17 @@ class GraspSolver:
         start_idx = int(self._rng.integers(0, len(self._nodes)))
         current: int = self._nodes[start_idx]
         path_edges: list[Edge] = []
-        used_ids: set[tuple[int, int, int]] = set()
+        used_directed: set[tuple[int, int, int]] = set()
+        used_segments: set[tuple[int, int, int]] = set()
         while True:
-            rcl = self._build_rcl(current, used_ids)
+            rcl = self._build_rcl(current, used_directed, used_segments)
             if not rcl:
                 break
             choice_idx = int(self._rng.integers(0, len(rcl)))
-            chosen = rcl[choice_idx]
+            chosen, chosen_blocking = rcl[choice_idx]
             path_edges.append(chosen)
-            used_ids.add((chosen.node_u, chosen.node_v, chosen.key))
+            used_directed.add((chosen.node_u, chosen.node_v, chosen.key))
+            used_segments |= chosen_blocking
             current = chosen.node_v
         # `0.0` (not int `0`) on the empty-walk branch — `Solution.objective` is float.
         objective = sum((e.d_plus_m + e.d_minus_m for e in path_edges), 0.0)
@@ -195,13 +220,25 @@ class GraspSolver:
     def _build_rcl(
         self,
         current: int,
-        used_ids: set[tuple[int, int, int]],
-    ) -> list[Edge]:
+        used_directed: set[tuple[int, int, int]],
+        used_segments: set[tuple[int, int, int]],
+    ) -> list[tuple[Edge, frozenset[tuple[int, int, int]]]]:
         """Restricted candidate list at `current`: top-`RCL_SIZE` feasible extensions.
+
+        Returns `(edge, blocking_ids)` pairs — the blocking ids ride along so
+        `_construct_one` records them on the chosen edge without a second graph
+        lookup.
 
         Feasibility (same filters as `tests/integration/exhaustive_oracle.py`):
 
-        - Not-yet-used: `(u, v, key)` not in `used_ids` — edge-simple-walk.
+        - Reuse: an edge is rejected iff its directed `(u, v, key)` is already in
+          `used_directed` (edge-simple → termination) OR any of its non-exempt
+          base-segment ids is already in `used_segments` (undirected
+          base-segment once-only, Story 5.2). The blocking-id set is
+          single-sourced via `solver.reuse.blocking_ids` against
+          `self._non_exempt_ids`; an exempt short connector has an empty blocking
+          set, so only the directed-simple bound limits it (to once per
+          direction).
         - SAC cap: `max_sac_rank(sac_scale) > cap_rank` rejects. `None` /
           unrecognized values pass (cleared `filter_trails` upstream).
 
@@ -222,25 +259,32 @@ class GraspSolver:
         """
         nx_graph = self._graph.graph
         cap_rank = self._cap_rank
-        feasible: list[Edge] = []
+        feasible: list[tuple[Edge, frozenset[tuple[int, int, int]]]] = []
         for u, v, k, data in nx_graph.out_edges(current, keys=True, data=True):
-            eid = (u, v, k)
-            if eid in used_ids:
+            if (u, v, k) in used_directed:
+                continue
+            blocking = blocking_ids(data, u, v, k, self._non_exempt_ids)
+            if blocking & used_segments:
                 continue
             rank = max_sac_rank(data["sac_scale"])
             if rank is not None and rank > cap_rank:
                 continue
             feasible.append(
-                Edge(
-                    node_u=u,
-                    node_v=v,
-                    key=k,
-                    length_m=data["length_m"],
-                    d_plus_m=data["d_plus_m"],
-                    d_minus_m=data["d_minus_m"],
-                    avg_gradient=data["avg_gradient"],
-                    sac_scale=data["sac_scale"],
+                (
+                    Edge(
+                        node_u=u,
+                        node_v=v,
+                        key=k,
+                        length_m=data["length_m"],
+                        d_plus_m=data["d_plus_m"],
+                        d_minus_m=data["d_minus_m"],
+                        avg_gradient=data["avg_gradient"],
+                        sac_scale=data["sac_scale"],
+                    ),
+                    blocking,
                 )
             )
-        feasible.sort(key=lambda e: (-(e.d_plus_m + e.d_minus_m), e.node_v, e.key))
+        feasible.sort(
+            key=lambda pair: (-(pair[0].d_plus_m + pair[0].d_minus_m), pair[0].node_v, pair[0].key)
+        )
         return feasible[:RCL_SIZE]

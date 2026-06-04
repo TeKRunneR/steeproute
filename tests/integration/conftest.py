@@ -163,6 +163,19 @@ def make_toy_contracted_graph(
                 sac_scale=sac,
             )
         )
+        # Story 5.1 reuse tags (read by the solver/oracle via `solver.reuse`).
+        # Each synthetic edge is its own distinct base segment, keyed on its
+        # DIRECTED `(u, v, key)`: the toy graph models no two edges as the same
+        # physical trail, so opposite-direction edges between the same node pair
+        # (e.g. a spine forward edge and a back-edge over the same layers) are
+        # independent climbs that must NOT merge. Using the directed id keeps the
+        # undirected once-only rule equal to the pre-5.2 directed edge-simple
+        # feasible set, so the Story 3.7 quality gate and the Story 3.8
+        # metamorphic invariants are unperturbed. Genuine forward/reverse
+        # collisions (a climb and the reverse of its own trail) are covered by
+        # the real-fixture test and the dedicated solver/oracle/validator units.
+        g.edges[u, v, key]["base_segment_id"] = frozenset({(u, v, key)})
+        g.edges[u, v, key]["reusable"] = False
         if is_super:
             super_edge_to_base[(u, v, key)] = (
                 Edge(

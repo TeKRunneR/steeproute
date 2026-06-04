@@ -61,6 +61,11 @@ def _params(*, n: int = 1, theta: float = _THETA, j_max: float = _J_MAX) -> Solv
     )
 
 
+def _seg(u: int, v: int, key: int = 0) -> tuple[int, int, int]:
+    """Undirected base-segment id (canonical sorted node-pair + key), per Story 5.1."""
+    return (min(u, v), max(u, v), key)
+
+
 def _add_edge(
     g: nx.MultiDiGraph,
     u: int,
@@ -71,13 +76,17 @@ def _add_edge(
     d_minus_m: float = 0.0,
     sac_scale: str | None = "hiking",
     key: int = 0,
+    base_segment_id: frozenset[tuple[int, int, int]] | None = None,
+    reusable: bool = False,
 ) -> Edge:
-    """Add an edge to `g` carrying the post-stage-7 attribute contract.
+    """Add an edge to `g` carrying the post-stage-7 attribute contract + Story 5.1 reuse tags.
 
     Returns the corresponding `Edge` value so super-edge fixtures can pass it
     into `super_edge_to_base`. `avg_gradient` is computed as
     `(d_plus_m + d_minus_m) / length_m` matching `pipeline.climbs`'s
-    absolute-churn definition (stage 7).
+    absolute-churn definition (stage 7). `base_segment_id` defaults to the edge's
+    own undirected id and `reusable` to `False`; the undirected-reuse fixture
+    overrides them so a climb and its reverse share an id.
     """
     avg_gradient = (d_plus_m + d_minus_m) / length_m
     g.add_edge(
@@ -89,6 +98,10 @@ def _add_edge(
         d_minus_m=d_minus_m,
         avg_gradient=avg_gradient,
         sac_scale=sac_scale,
+        base_segment_id=base_segment_id
+        if base_segment_id is not None
+        else frozenset({_seg(u, v, key)}),
+        reusable=reusable,
     )
     return Edge(
         node_u=u,
@@ -469,6 +482,65 @@ def test_enumerate_best_admits_super_edge_at_theta_boundary() -> None:
     assert len(result) == 1
     assert _edge_set(result[0].edges) == frozenset({(0, 1, 0)})
     assert math.isclose(result[0].objective, 40.0, abs_tol=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Fixture E — undirected reuse changes the optimum (Story 5.2)
+# ---------------------------------------------------------------------------
+#
+#         climb (super)          reverse long connector
+#     0 ===============> 1   and   1 ---------------> 0
+#
+#   climb:   0→1 super, len=400, d+=200, d-=0   (avg 0.500), base_segment_id {(0,1,0)}
+#   reverse: 1→0 connector, len=400, d+=0, d-=200 (avg 0.500), base_segment_id {(0,1,0)}
+#
+# Both edges carry the SAME undirected base id (the reverse is the climb's own
+# trail walked downhill); neither is reusable. Under the OLD directed
+# edge-simple rule the two-edge walk 0→1→0 was feasible with objective
+# 200 + 200 = 400 (the degenerate out-and-back). Under undirected base-segment
+# reuse the second edge is blocked, so the best feasible route is a single edge,
+# objective 200. This fixture exists precisely to give the two rules DIFFERENT
+# optima — a regression to directed edge-simple would surface here as obj 400.
+
+
+def _build_undirected_reuse_fixture() -> ContractedGraph:
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    climb = _add_edge(
+        g, 0, 1, length_m=400.0, d_plus_m=200.0, base_segment_id=frozenset({(0, 1, 0)})
+    )
+    _add_edge(
+        g,
+        1,
+        0,
+        length_m=400.0,
+        d_plus_m=0.0,
+        d_minus_m=200.0,
+        base_segment_id=frozenset({(0, 1, 0)}),
+    )
+    return ContractedGraph(graph=g, super_edge_to_base={(0, 1, 0): (climb,)})
+
+
+def test_enumerate_best_undirected_reuse_blocks_out_and_back() -> None:
+    """Fixture E: undirected base-segment reuse forbids the out-and-back the directed rule allowed.
+
+    The best feasible route is a single climb (objective 200), not the
+    directed-edge-simple out-and-back 0→1→0 (objective 400). The two parallel
+    single-edge routes `{(0,1,0)}` and `{(1,0,0)}` are key-disjoint, so both are
+    admitted under the permissive `j_max`; neither exceeds 200. A returned route
+    with objective 400 (or two edges) means the rule regressed to directed.
+    """
+    graph = _build_undirected_reuse_fixture()
+    params = _params(n=2)
+
+    result = enumerate_best(graph, params, n=2)
+
+    assert result, "expected at least the single-climb route"
+    assert all(len(s.edges) == 1 for s in result), (
+        f"no route may chain the climb with its reverse; got {[_edge_set(s.edges) for s in result]}"
+    )
+    assert math.isclose(max(s.objective for s in result), 200.0, abs_tol=1e-9), (
+        "best objective must be the single climb (200), not the out-and-back (400)"
+    )
 
 
 # ---------------------------------------------------------------------------

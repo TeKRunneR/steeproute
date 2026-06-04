@@ -57,6 +57,11 @@ def _params(
     )
 
 
+def _seg(u: int, v: int, key: int = 0) -> tuple[int, int, int]:
+    """Undirected base-segment id (canonical sorted node-pair + key), per Story 5.1."""
+    return (min(u, v), max(u, v), key)
+
+
 def _add_edge(
     g: nx.MultiDiGraph,
     u: int,
@@ -67,8 +72,17 @@ def _add_edge(
     d_minus_m: float = 0.0,
     sac_scale: str | None = "hiking",
     key: int = 0,
+    base_segment_id: frozenset[tuple[int, int, int]] | None = None,
+    reusable: bool = False,
 ) -> Edge:
-    """Add an edge carrying the post-stage-7 attribute contract; return its `Edge` projection."""
+    """Add an edge carrying the post-stage-7 attribute contract + Story 5.1 reuse tags.
+
+    `base_segment_id` defaults to the edge's own undirected id and `reusable` to
+    `False` (a non-exempt segment) — the common case. Tests probing the
+    undirected-reuse / short-connector-exemption rule (Story 5.2) override them:
+    a reverse-of-climb connector reuses the climb's `base_segment_id`; a short
+    linking connector passes `reusable=True`.
+    """
     avg_gradient = (d_plus_m + d_minus_m) / length_m
     g.add_edge(
         u,
@@ -79,6 +93,10 @@ def _add_edge(
         d_minus_m=d_minus_m,
         avg_gradient=avg_gradient,
         sac_scale=sac_scale,
+        base_segment_id=base_segment_id
+        if base_segment_id is not None
+        else frozenset({_seg(u, v, key)}),
+        reusable=reusable,
     )
     return Edge(
         node_u=u,
@@ -277,6 +295,121 @@ def test_grasp_rcl_excludes_edges_above_sac_cap() -> None:
         f"C_fail (above-cap edge) must not appear in any route; got {all_edge_ids}"
     )
     assert (0, 1, 0) in all_edge_ids
+
+
+# ---------------------------------------------------------------------------
+# Fixture D — undirected base-segment reuse: out-and-back over a climb (Story 5.2).
+# ---------------------------------------------------------------------------
+#
+#   0 ==climb (super)==> 1
+#   1 --short reverse connector--> 0
+#
+# The climb 0→1 (super-edge, reusable=False) and the short reverse connector 1→0
+# (reusable=True, length 100 < l_connector 200) share base_segment_id {(0,1,0)} —
+# the connector is the reverse of the climb's own trail. This is exactly the
+# short-edge-climb class deferred from Story 5.1: the connector is `reusable`
+# per-edge, but its id is non-exempt (carried by the non-reusable super-edge), so
+# per-id exemption forbids descending it after ascending the climb. No route may
+# contain both — the degenerate out-and-back is rejected by construction.
+
+
+def _build_out_and_back_fixture() -> ContractedGraph:
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    climb = _add_edge(
+        g, 0, 1, length_m=400.0, d_plus_m=200.0, base_segment_id=frozenset({(0, 1, 0)})
+    )
+    # Reverse of the climb's trail: short (< l_connector) → reusable per-edge, but
+    # shares the climb's base id, so it is non-exempt for the once-only rule.
+    _add_edge(
+        g,
+        1,
+        0,
+        length_m=100.0,
+        d_plus_m=0.0,
+        d_minus_m=200.0,
+        base_segment_id=frozenset({(0, 1, 0)}),
+        reusable=True,
+    )
+    return ContractedGraph(graph=g, super_edge_to_base={(0, 1, 0): (climb,)})
+
+
+def test_grasp_rejects_out_and_back_over_a_climb() -> None:
+    """Story 5.2: ascending a climb forbids descending its reverse (per-id exemption).
+
+    The climb and its short reverse connector share a base segment that is
+    non-exempt (the super-edge carrying it is not reusable). So no returned route
+    may contain both `(0, 1, 0)` (climb) and `(1, 0, 0)` (reverse) — the
+    out-and-back is killed at the source. The climb itself must still appear
+    (non-vacuity guard).
+    """
+    graph = _build_out_and_back_fixture()
+    params = _params(iter_budget=50, n=3)
+    solver = GraspSolver(graph, params, np.random.default_rng(42))
+
+    result = solver.run()
+
+    for sol in result:
+        ids = set(_edge_ids(sol.edges))
+        assert not ({(0, 1, 0), (1, 0, 0)} <= ids), (
+            f"out-and-back over the climb must be rejected; got route {ids}"
+        )
+    all_ids = {eid for sol in result for eid in _edge_ids(sol.edges)}
+    assert (0, 1, 0) in all_ids, "the climb should still be reachable as a route"
+
+
+# ---------------------------------------------------------------------------
+# Fixture E — a genuinely-exempt short connector may recur (Story 5.2).
+# ---------------------------------------------------------------------------
+#
+#   0 <==short connector (both directions)==> 1
+#
+# Both directed connectors are reusable and share base_segment_id {(0,1,0)}, and
+# NO non-reusable edge carries that id → it is reuse-exempt. So a route may
+# legitimately traverse the linking segment in both directions (0→1→0). The
+# directed-edge-simple bound still caps it at once per direction, guaranteeing
+# termination. Both half-edges carry enough vertical to clear θ on the round trip.
+
+
+def _build_exempt_connector_loop_fixture() -> ContractedGraph:
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    _add_edge(
+        g,
+        0,
+        1,
+        length_m=100.0,
+        d_plus_m=30.0,
+        base_segment_id=frozenset({(0, 1, 0)}),
+        reusable=True,
+    )
+    _add_edge(
+        g,
+        1,
+        0,
+        length_m=100.0,
+        d_plus_m=0.0,
+        d_minus_m=30.0,
+        base_segment_id=frozenset({(0, 1, 0)}),
+        reusable=True,
+    )
+    return ContractedGraph(graph=g, super_edge_to_base={})
+
+
+def test_grasp_allows_exempt_connector_in_both_directions() -> None:
+    """Story 5.2: an exempt short connector may recur (traversed both directions).
+
+    Its base id is carried only by reusable edges, so it never blocks the
+    once-only rule; the route `0→1→0` reuses the linking segment legitimately.
+    A returned route therefore contains both `(0, 1, 0)` and `(1, 0, 0)`.
+    """
+    graph = _build_exempt_connector_loop_fixture()
+    params = _params(iter_budget=20, n=3, theta=0.20)
+    solver = GraspSolver(graph, params, np.random.default_rng(42))
+
+    result = solver.run()
+
+    assert any({(0, 1, 0), (1, 0, 0)} <= set(_edge_ids(sol.edges)) for sol in result), (
+        "an exempt short connector should be traversable in both directions in one route"
+    )
 
 
 def test_grasp_returns_empty_on_empty_graph() -> None:

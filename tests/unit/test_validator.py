@@ -87,16 +87,36 @@ def _edge(
     )
 
 
-def _graph(edges: list[Edge], super_ids: set[tuple[int, int, int]]) -> ContractedGraph:
+def _seg(u: int, v: int, key: int = 0) -> tuple[int, int, int]:
+    """Undirected base-segment id (canonical sorted node-pair + key), per Story 5.1."""
+    return (min(u, v), max(u, v), key)
+
+
+def _graph(
+    edges: list[Edge],
+    super_ids: set[tuple[int, int, int]],
+    *,
+    base_ids: dict[tuple[int, int, int], frozenset[tuple[int, int, int]]] | None = None,
+    reusable_ids: set[tuple[int, int, int]] | None = None,
+) -> ContractedGraph:
     """Build a `ContractedGraph` whose nx-graph contains exactly `edges`.
 
     `super_ids` names which `(u, v, key)` identities are super-edges (climbs);
     each gets a single-element `super_edge_to_base` entry (the back-mapping
     content is irrelevant to the validator — only membership matters).
+
+    Every edge is tagged with the Story 5.1 reuse attributes the validator now
+    reads: `base_segment_id` defaults to the edge's own undirected id and
+    `reusable` to `False`. `base_ids` / `reusable_ids` override per identity so
+    the undirected-reuse tests can make a climb and its reverse connector share
+    a base id, or mark a short connector exempt.
     """
+    base_ids = base_ids or {}
+    reusable_ids = reusable_ids or set()
     g: nx.MultiDiGraph = nx.MultiDiGraph()
     super_edge_to_base: dict[tuple[int, int, int], tuple[Edge, ...]] = {}
     for e in edges:
+        eid = (e.node_u, e.node_v, e.key)
         g.add_edge(
             e.node_u,
             e.node_v,
@@ -106,8 +126,9 @@ def _graph(edges: list[Edge], super_ids: set[tuple[int, int, int]]) -> Contracte
             d_minus_m=e.d_minus_m,
             avg_gradient=e.avg_gradient,
             sac_scale=e.sac_scale,
+            base_segment_id=base_ids.get(eid, frozenset({_seg(e.node_u, e.node_v, e.key)})),
+            reusable=eid in reusable_ids,
         )
-        eid = (e.node_u, e.node_v, e.key)
         if eid in super_ids:
             super_edge_to_base[eid] = (e,)
     return ContractedGraph(graph=g, super_edge_to_base=super_edge_to_base)
@@ -203,12 +224,12 @@ def test_validate_route_admits_edge_within_cap_and_untagged() -> None:
 
 
 # ----------------------------------------------------------------------------
-# AC #2 — edge-reuse limit (edge-simple)
+# AC #2 — edge-reuse limit (undirected base segment, Story 5.2)
 # ----------------------------------------------------------------------------
 
 
 def test_validate_route_flags_repeated_edge() -> None:
-    """The same `(u, v, key)` twice violates `edge_reuse` with observed count."""
+    """The same edge twice reuses its (non-exempt) base segment → `edge_reuse`."""
     repeated = _edge(0, 1)
     edges = [repeated, _edge(1, 2), repeated]
     graph = _graph([_edge(0, 1), _edge(1, 2)], super_ids={(0, 1, 0), (1, 2, 0)})
@@ -246,6 +267,57 @@ def test_validate_route_dedups_per_edge_violations_on_reuse() -> None:
     assert len(cap) == 1
     assert len(reuse) == 1
     assert reuse[0].numeric == {"observed": 2.0, "required": 1.0}
+
+
+# ----------------------------------------------------------------------------
+# Story 5.2 — undirected base-segment reuse + short-connector exemption
+# ----------------------------------------------------------------------------
+
+
+def test_validate_route_flags_undirected_base_segment_reuse() -> None:
+    """Ascending a climb then descending its reverse violates `edge_reuse` (FR5, Story 5.2).
+
+    The climb `(0,1,0)` (super-edge, non-reusable) and the short reverse connector
+    `(1,0,0)` share base segment `(0,1,0)`. Even though the connector is
+    `reusable` per-edge, the id is non-exempt (carried by the non-reusable
+    super-edge), so the route traverses base segment `(0,1,0)` twice → one
+    `edge_reuse` violation with observed count 2.
+    """
+    climb = _edge(0, 1, length_m=400.0, d_plus_m=200.0, d_minus_m=0.0)
+    reverse = _edge(1, 0, length_m=100.0, d_plus_m=0.0, d_minus_m=200.0)
+    graph = _graph(
+        [climb, reverse],
+        super_ids={(0, 1, 0)},
+        base_ids={(0, 1, 0): frozenset({(0, 1, 0)}), (1, 0, 0): frozenset({(0, 1, 0)})},
+        reusable_ids={(1, 0, 0)},  # short per-edge, but its id is non-exempt
+    )
+
+    result = validate_route(_route([climb, reverse]), graph, _params())
+
+    reuse = [v for v in result.violations if v.constraint_id == "edge_reuse"]
+    assert len(reuse) == 1
+    assert reuse[0].numeric == {"observed": 2.0, "required": 1.0}
+
+
+def test_validate_route_does_not_flag_repeated_exempt_connector() -> None:
+    """A genuinely-exempt short connector traversed both directions is not `edge_reuse` (Story 5.2).
+
+    Base segment `(0,1,0)` is carried only by reusable edges → reuse-exempt, so
+    walking the linking segment `0→1→0` is legitimate and raises no violation.
+    """
+    fwd = _edge(0, 1, length_m=100.0, d_plus_m=30.0, d_minus_m=0.0)
+    rev = _edge(1, 0, length_m=100.0, d_plus_m=0.0, d_minus_m=30.0)
+    graph = _graph(
+        [fwd, rev],
+        super_ids=set(),
+        base_ids={(0, 1, 0): frozenset({(0, 1, 0)}), (1, 0, 0): frozenset({(0, 1, 0)})},
+        reusable_ids={(0, 1, 0), (1, 0, 0)},
+    )
+
+    result = validate_route(_route([fwd, rev]), graph, _params())
+
+    assert result.passed is True
+    assert [v.constraint_id for v in result.violations] == []
 
 
 # ----------------------------------------------------------------------------

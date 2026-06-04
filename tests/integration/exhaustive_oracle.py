@@ -15,11 +15,16 @@ unvalidated oracle"; this module + the correctness tests close that loop.
 
 Semantics:
 
-- A **route** is an edge-simple directed walk in `graph.graph`: a sequence of
-  edges where each consecutive pair shares an endpoint and no
-  `(node_u, node_v, key)` triple repeats. Node-revisits via distinct edges are
-  allowed. Open and closed walks are both admissible; the start node is
-  unconstrained.
+- A **route** is a directed walk in `graph.graph` obeying **undirected
+  base-segment reuse** (Story 5.2, FR5): a sequence of edges where each
+  consecutive pair shares an endpoint and no non-exempt base segment is
+  traversed more than once, *in either direction*. The rule keys on the
+  `base_segment_id` tags (Story 5.1) and is single-sourced with the GRASP solver
+  and the validator through `steeproute.solver.reuse`, so the oracle and GRASP
+  enumerate the identical feasible set (this is what keeps Story 3.7's quality
+  ratio meaningful). Exempt short connectors (`reusable`) may recur; node-revisits
+  via distinct non-conflicting segments are allowed. Open and closed walks are
+  both admissible; the start node is unconstrained.
 - The **objective** is `sum(e.d_plus_m + e.d_minus_m for e in route.edges)` —
   total vertical effort per Architecture §Cat 5e / §"Stagnation definition".
   Super-edges already carry aggregated metrics (Story 3.3); the oracle never
@@ -28,9 +33,12 @@ Semantics:
     - SAC difficulty cap per edge (`max_sac_rank(sac_scale) > cap_rank` → drop).
       Edges with `sac_scale=None` or unrecognized values pass — they already
       cleared `filter_trails` upstream under the prevailing `untagged_policy`.
-    - Edge-reuse (graph-membership): enforced by the simple-walk constraint;
-      sub-`l_connector` connectors are absent from the input by construction
-      (Story 3.3), so no separate length check is needed.
+    - Undirected base-segment reuse: an edge is infeasible iff any of its
+      non-exempt base-segment ids is already used on the current walk
+      (`solver.reuse.blocking_ids` against the graph's non-exempt id set). Exempt
+      short connectors never block. Note the dedup key below stays *directed*
+      (`(node_u, node_v, key)`) — distinctness/Jaccard is unchanged (a deferred
+      open item); only the reuse-feasibility rule went undirected.
   The slope floor θ (FR3) is **not** a DFS filter — it is a route-level
   constraint, so (exactly like GRASP's `_route_slope_ok` finalization gate) it
   is applied to each fully-enumerated candidate before admission:
@@ -54,6 +62,7 @@ from typing import Any
 from steeproute.models import ContractedGraph, Edge, Solution, SolverParams, route_avg_gradient
 from steeproute.pipeline.osm import max_sac_rank, parse_difficulty_cap
 from steeproute.solver.distinctness import TopNTracker
+from steeproute.solver.reuse import blocking_ids, non_exempt_base_segment_ids
 
 __all__ = ["enumerate_best"]
 
@@ -86,6 +95,10 @@ def enumerate_best(
     """
     cap_rank = parse_difficulty_cap(params.difficulty_cap)
     nx_graph = graph.graph
+    # Base-segment ids subject to the once-only rule, computed once. Single-
+    # sourced with GRASP + the validator (`solver.reuse`) so the oracle and GRASP
+    # share one feasible set (keeps the Story 3.7 ratio honest).
+    non_exempt = non_exempt_base_segment_ids(graph)
 
     # Canonical edge-set → first-discovered Solution. Different traversal
     # orderings of the same edge-set collapse: they share an objective by
@@ -97,8 +110,10 @@ def enumerate_best(
             nx_graph=nx_graph,
             current=start,
             path_edges=[],
-            used_ids=set(),
+            used_directed=set(),
+            used_segments=set(),
             cap_rank=cap_rank,
+            non_exempt=non_exempt,
             results=candidates,
         )
 
@@ -119,16 +134,26 @@ def _dfs(
     nx_graph: Any,
     current: int,
     path_edges: list[Edge],
-    used_ids: set[tuple[int, int, int]],
+    used_directed: set[tuple[int, int, int]],
+    used_segments: set[tuple[int, int, int]],
     cap_rank: int,
+    non_exempt: frozenset[tuple[int, int, int]],
     results: dict[frozenset[tuple[int, int, int]], Solution],
 ) -> None:
     """Backtracking walk-enumerator; emits each non-empty prefix as a candidate.
 
-    Every non-empty edge-simple walk starting at the original `start` is a
-    valid route, so the function emits at every recursion depth (not only at
-    leaves). The dedup key drops duplicates produced by reaching the same
-    edge-set from different start nodes or traversal orders.
+    Every non-empty feasible walk starting at the original `start` is a valid
+    route, so the function emits at every recursion depth (not only at leaves).
+    Feasibility mirrors `GraspSolver._build_rcl` exactly (shared via
+    `solver.reuse`): an edge is skipped iff its directed `(u, v, key)` is already
+    used (`used_directed`, edge-simple → termination) or any of its non-exempt
+    base ids is already used (`used_segments`, undirected once-only, Story 5.2).
+    On recursion both are recorded then rolled back on backtrack — the non-exempt
+    ids are disjoint from `used_segments` by the skip check, so the removal is
+    exact. The directed-simple bound is what guarantees the brute-force recursion
+    terminates even when exempt connectors (empty blocking set) are present. The
+    dedup key stays the *directed* canonical edge-set — distinctness is unchanged
+    — so different traversal orders of the same edge-set still collapse.
     """
     if path_edges:
         identity = frozenset((e.node_u, e.node_v, e.key) for e in path_edges)
@@ -137,8 +162,10 @@ def _dfs(
             results[identity] = Solution(edges=tuple(path_edges), objective=objective)
 
     for u, v, k, data in nx_graph.out_edges(current, keys=True, data=True):
-        eid = (u, v, k)
-        if eid in used_ids:
+        if (u, v, k) in used_directed:
+            continue
+        blocking = blocking_ids(data, u, v, k, non_exempt)
+        if blocking & used_segments:
             continue
         rank = max_sac_rank(data["sac_scale"])
         if rank is not None and rank > cap_rank:
@@ -154,14 +181,18 @@ def _dfs(
             sac_scale=data["sac_scale"],
         )
         path_edges.append(edge)
-        used_ids.add(eid)
+        used_directed.add((u, v, k))
+        used_segments |= blocking
         _dfs(
             nx_graph=nx_graph,
             current=v,
             path_edges=path_edges,
-            used_ids=used_ids,
+            used_directed=used_directed,
+            used_segments=used_segments,
             cap_rank=cap_rank,
+            non_exempt=non_exempt,
             results=results,
         )
         path_edges.pop()
-        used_ids.discard(eid)
+        used_directed.discard((u, v, k))
+        used_segments -= blocking

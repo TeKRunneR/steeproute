@@ -36,13 +36,22 @@ import numpy as np
 import osmnx
 import pytest
 
-from steeproute.models import Area, Edge, PipelineConfig, Solution, SolverParams, route_avg_gradient
+from steeproute.models import (
+    Area,
+    ContractedGraph,
+    Edge,
+    PipelineConfig,
+    Solution,
+    SolverParams,
+    route_avg_gradient,
+)
 from steeproute.pipeline import run_setup_stages
 from steeproute.pipeline.climbs import detect_climbs
 from steeproute.pipeline.graph import contract_climbs
 from steeproute.pipeline.osm import max_sac_rank, normalize_edges, parse_difficulty_cap
 from steeproute.solver.distinctness import jaccard_distance
 from steeproute.solver.grasp import GraspSolver
+from steeproute.solver.reuse import blocking_ids, non_exempt_base_segment_ids
 
 _FIXTURE_DIR = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "grenoble_small"
 _OSM_FIXTURE_PATH = _FIXTURE_DIR / "osm_graph.graphml"
@@ -93,12 +102,13 @@ def _params() -> SolverParams:
 
 
 @pytest.fixture(scope="module")
-def grasp_result() -> list[Solution]:
-    """Run the full setup → climbs → contract → GRASP chain once.
+def solver_chain() -> tuple[ContractedGraph, list[Solution]]:
+    """Run the full setup → climbs → contract → GRASP chain once; return graph + routes.
 
     Module-scoped because every assertion operates on the same output —
     re-running construction for each test would multiply the wall-clock by the
-    test count for no semantic gain.
+    test count for no semantic gain. The contracted graph is exposed alongside
+    the routes so the Story 5.2 reuse check can read the `base_segment_id` tags.
 
     The committed `osm_graph.graphml` / `dem.tif` fixtures are required (no
     `pytest.skip` fallback — AC #8 forbids it): a missing fixture should
@@ -128,7 +138,13 @@ def grasp_result() -> list[Solution]:
     solver = GraspSolver(contracted, params, np.random.default_rng(_SEED))
     result = solver.run()
     assert result, "expected >= 1 GRASP route on the Grenoble Le Sappey fixture"
-    return result
+    return contracted, result
+
+
+@pytest.fixture(scope="module")
+def grasp_result(solver_chain: tuple[ContractedGraph, list[Solution]]) -> list[Solution]:
+    """The GRASP routes from `solver_chain` (kept as a separate fixture name for clarity)."""
+    return solver_chain[1]
 
 
 def _assert_valid_walk(sol_edges: tuple[Edge, ...]) -> None:
@@ -197,6 +213,33 @@ def test_every_edge_in_every_route_satisfies_sac_cap(
                     f"edge {(edge.node_u, edge.node_v, edge.key)} has sac_scale="
                     f"{edge.sac_scale!r} (rank {rank}) > cap_rank {cap_rank}"
                 )
+
+
+def test_no_grasp_route_reuses_a_nonexempt_base_segment(
+    solver_chain: tuple[ContractedGraph, list[Solution]],
+) -> None:
+    """Story 5.2 / FR5: no returned route walks a non-exempt base segment twice, in any direction.
+
+    Reads the `base_segment_id` tags off the real contracted graph and replays
+    the once-only rule (`solver.reuse`) over each route. This is the empirical
+    confirmation — deferred from Story 5.1 — that the undirected ids actually
+    collide on real OSM data (forward/reverse of a trail share an id), so the
+    out-and-back is killed in practice and not just on synthetic fixtures.
+    """
+    contracted, result = solver_chain
+    non_exempt = non_exempt_base_segment_ids(contracted)
+    nx_graph = contracted.graph
+    for sol in result:
+        used: set[tuple[int, int, int]] = set()
+        for edge in sol.edges:
+            data = nx_graph.get_edge_data(edge.node_u, edge.node_v, edge.key)
+            blocking = blocking_ids(data, edge.node_u, edge.node_v, edge.key, non_exempt)
+            clash = blocking & used
+            assert not clash, (
+                f"route reuses non-exempt base segment(s) {clash} at edge "
+                f"{(edge.node_u, edge.node_v, edge.key)}"
+            )
+            used |= blocking
 
 
 def test_pairwise_jaccard_distance_meets_distinctness_threshold(
