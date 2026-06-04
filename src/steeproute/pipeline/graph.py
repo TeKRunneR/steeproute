@@ -5,10 +5,11 @@
 
 `contract_climbs(base_graph, climbs, l_connector) -> ContractedGraph` folds each
 `Climb` from stage 8 into a single directed super-edge in a new `MultiDiGraph`,
-carries forward connector edges whose `length_m >= l_connector` unchanged, and
-returns the contracted graph plus a `(node_u, node_v, key) -> tuple[Edge, ...]`
-back-mapping so the validator (Story 3.9) can expand super-edges back to base
-edges for per-base-edge constraint checks.
+carries forward **all** non-climb connector edges unchanged (no length-based
+drop), and returns the contracted graph plus a
+`(node_u, node_v, key) -> tuple[Edge, ...]` back-mapping so the validator
+(Story 3.9) can expand super-edges back to base edges for per-base-edge
+constraint checks.
 
 Super-edges carry the same numeric attribute schema as base edges (`length_m`,
 `d_plus_m`, `d_minus_m`, `avg_gradient`, `sac_scale`), with `length_m` /
@@ -19,6 +20,27 @@ edges per `pipeline.osm.SAC_SCALE_RANK`, with `None` entries treated as
 below-`hiking` (so they never raise the aggregate). `geometry` and
 `vertices_resampled` stay on the base edges — consumers reach them via
 `super_edge_to_base` when they need geometry, never off the super-edge.
+
+**Undirected base-segment reuse tagging (Story 5.1, FR5).** Every contracted
+edge additionally carries two attributes the solver / oracle / validator
+(Story 5.2) use to enforce once-per-route reuse on the underlying *physical*
+trail segment, regardless of direction:
+
+- `base_segment_id` — a `frozenset[tuple[int, int, int]]` of undirected
+  base-segment identities. The identity of one base edge is its canonical
+  sorted node-pair plus key (`_base_segment_id`), so a forward edge `(u, v, k)`
+  and its reverse `(v, u, k)` resolve to the *same* id. A **connector** carries
+  a one-element set (its own id); a **super-edge** carries the set of ids of
+  the base edges it contracts. Stored as a set uniformly (not a scalar on
+  connectors) so Story 5.2 can test "any non-exempt id already used?" without
+  branching on edge kind. A climb super-edge therefore shares an id with the
+  reverse-direction connectors of the same trail — that collision is what kills
+  the degenerate out-and-back.
+- `reusable` — `True` only for a connector with `length_m < l_connector` (a
+  short linking segment, exempt from the once-only rule and traversable both
+  ways). `False` for long connectors and for every super-edge. This repurposes
+  `--l-connector` from the old graph-pruning threshold into a reuse-exemption
+  threshold (the originally-intended FR5 semantics).
 
 A super-edge is identified by dict-membership in `super_edge_to_base`:
 `(u, v, k) in contracted.super_edge_to_base` iff that triple denotes a
@@ -50,11 +72,11 @@ def contract_climbs(
     """Stage 9: build the solver-side `ContractedGraph` from stage-8 climbs.
 
     For each `Climb`, emit one directed super-edge from `climb.edges[0].node_u`
-    to `climb.edges[-1].node_v` carrying summed metrics. Non-climb edges with
-    `length_m >= l_connector` are carried over from `base_graph` unchanged
-    (entire edge-data dict, including `geometry`, `vertices_resampled`,
-    `highway`, `osm_way_id`). Shorter connectors are dropped. Nodes whose
-    degree falls to 0 after the drop are pruned.
+    to `climb.edges[-1].node_v` carrying summed metrics. **All** non-climb edges
+    are carried over from `base_graph` unchanged (entire edge-data dict,
+    including `geometry`, `vertices_resampled`, `highway`, `osm_way_id`) — no
+    length-based drop. Every contracted edge is additionally tagged with a
+    `base_segment_id` (undirected, see module docstring) and a `reusable` flag.
 
     Args:
         base_graph: post-stage-7 `MultiDiGraph` carrying the
@@ -63,15 +85,17 @@ def contract_climbs(
         climbs: stage-8 output (`pipeline.climbs.detect_climbs`); each climb's
             `edges` tuple must correspond to a contiguous edge-disjoint
             sequence in `base_graph`.
-        l_connector: minimum connector-edge length in meters; connectors
-            below this threshold are removed. Inclusive (`>=`).
+        l_connector: short-connector reuse-exemption threshold in meters. A
+            carried-over connector is tagged `reusable=True` iff
+            `length_m < l_connector` (strict). No edge is dropped on this
+            threshold any longer.
 
     Returns:
         `ContractedGraph` whose `graph` is a fresh `MultiDiGraph` (climbs as
-        super-edges + surviving connectors, orphan-pruned) and whose
-        `super_edge_to_base` maps each super-edge's `(node_u, node_v, key)`
-        triple to the underlying `tuple[Edge, ...]` from the corresponding
-        climb's `edges` field.
+        super-edges + all connectors, each tagged with `base_segment_id` +
+        `reusable`) and whose `super_edge_to_base` maps each super-edge's
+        `(node_u, node_v, key)` triple to the underlying `tuple[Edge, ...]`
+        from the corresponding climb's `edges` field.
 
     Super-edge key allocation: when a climb's `(u, v)` already has parallel
     edges in the contracted graph (from a surviving connector or from another
@@ -83,9 +107,10 @@ def contract_climbs(
     contracted: nx.MultiDiGraph = nx.MultiDiGraph()
 
     # 1. Build the set of base-edge identities consumed by climbs, then carry
-    #    over each surviving connector (non-climb edge with length >= l_connector)
-    #    unchanged. Connectors land first so super-edge key allocation in step 2
-    #    sees them and picks non-colliding keys.
+    #    over EVERY non-climb connector unchanged (no length-based drop — short
+    #    connectors are revived as reuse-exempt linking segments, Story 5.1).
+    #    Connectors land first so super-edge key allocation in step 2 sees them
+    #    and picks non-colliding keys.
     climb_edge_ids: set[tuple[int, int, int]] = set()
     for climb in climbs:
         for e in climb.edges:
@@ -94,20 +119,29 @@ def contract_climbs(
     for u, v, k, data in base_graph.edges(data=True, keys=True):
         if (u, v, k) in climb_edge_ids:
             continue
-        if data["length_m"] < l_connector:
-            continue
         # `**data` unpacking creates a fresh outer attribute dict for the
         # contracted edge — but mutable values inside (`vertices_resampled`
         # list, `geometry` LineString, list-valued `highway` / `osm_way_id`)
         # remain aliased to `base_graph`'s. `contract_climbs` itself never
         # mutates any of these, so the purity contract holds on the call.
+        # `base_segment_id` / `reusable` are NEW keys written onto the fresh
+        # contracted dict only — never back onto `base_graph`'s.
         # Downstream consumers reading the contracted graph must treat edge
         # data as read-only — same convention as `pipeline.climbs`.
-        contracted.add_edge(u, v, key=k, **data)
+        contracted.add_edge(
+            u,
+            v,
+            key=k,
+            **data,
+            base_segment_id=frozenset({_base_segment_id(u, v, k)}),
+            reusable=data["length_m"] < l_connector,
+        )
 
     # 2. Emit one super-edge per climb. Each super-edge carries the aggregated
     #    metrics + the max-rank SAC; geometry / vertices stay on base edges
-    #    reachable through `super_edge_to_base`.
+    #    reachable through `super_edge_to_base`. Its `base_segment_id` is the set
+    #    of undirected ids of the base edges it contracts (so it collides with
+    #    the reverse-direction connectors of the same trail); never reusable.
     super_edge_to_base: dict[tuple[int, int, int], tuple[Edge, ...]] = {}
     for climb in climbs:
         u_super: int = climb.edges[0].node_u
@@ -118,6 +152,9 @@ def contract_climbs(
         d_minus_m: float = sum(e.d_minus_m for e in climb.edges)
         avg_gradient: float = (d_plus_m + d_minus_m) / length_m
         sac_scale: str | None = _aggregate_sac_scale(climb.edges)
+        base_segment_id: frozenset[tuple[int, int, int]] = frozenset(
+            _base_segment_id(e.node_u, e.node_v, e.key) for e in climb.edges
+        )
         contracted.add_edge(
             u_super,
             v_super,
@@ -127,15 +164,35 @@ def contract_climbs(
             d_minus_m=d_minus_m,
             avg_gradient=avg_gradient,
             sac_scale=sac_scale,
+            base_segment_id=base_segment_id,
+            reusable=False,
         )
         super_edge_to_base[(u_super, v_super, k_super)] = climb.edges
 
-    # 3. Prune any node left with degree 0 after the connector drop (mirrors
-    #    `pipeline.__init__._drop_orphan_nodes`; local copy keeps this module
-    #    self-contained — the orchestrator's helper is module-private).
-    _drop_orphan_nodes(contracted)
-
+    # No orphan-prune step: with every connector retained, the only nodes in
+    # `contracted` are endpoints of added edges (super-edge or connector), so
+    # none can have degree 0. Climb-internal nodes are absorbed into the
+    # super-edge and simply never added unless a surviving connector touches
+    # them.
     return ContractedGraph(graph=contracted, super_edge_to_base=super_edge_to_base)
+
+
+def _base_segment_id(u: int, v: int, k: int) -> tuple[int, int, int]:
+    """Undirected base-segment identity: canonical sorted node-pair + key.
+
+    A forward edge `(u, v, k)` and its reverse-direction counterpart `(v, u, k)`
+    resolve to the same tuple, so once-only reuse keyed on this id forbids
+    re-walking a physical trail segment in either direction (Story 5.1, FR5).
+    The natural extension of the existing canonical `(node_u, node_v, key)` edge
+    identity documented on `models.Edge`.
+
+    The `key` is preserved as-is: osmnx assigns the same key (0 for a simple
+    two-way edge) to both directions, so the reverse edge collides as intended.
+    Parallel ways with mismatched keys are vanishingly rare on trail data and
+    would at worst under-merge (treat two genuinely-distinct parallel ways as
+    distinct), never over-merge unrelated segments.
+    """
+    return (u, v, k) if u <= v else (v, u, k)
 
 
 def _next_key_for(contracted: nx.MultiDiGraph, u: int, v: int) -> int:
@@ -178,17 +235,3 @@ def _aggregate_sac_scale(edges: tuple[Edge, ...]) -> str | None:
     if max_rank == 0:
         return None
     return _SAC_RANK_TO_NAME[max_rank]
-
-
-def _drop_orphan_nodes(graph: nx.MultiDiGraph) -> None:
-    """In-place: drop nodes whose degree is 0 from `graph`.
-
-    Called on the freshly-built contracted graph (which `contract_climbs`
-    owns), so the in-place mutation does not violate the purity contract on
-    the input `base_graph`. Mirrors `pipeline.__init__._drop_orphan_nodes`'s
-    behavior; duplicated here so this module is self-contained against the
-    setup-side orchestrator.
-    """
-    orphans: list[int] = [n for n, deg in graph.degree() if deg == 0]
-    for n in orphans:
-        graph.remove_node(n)

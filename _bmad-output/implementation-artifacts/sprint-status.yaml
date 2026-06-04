@@ -28,8 +28,9 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-06-03
+last_updated: 2026-06-04
 # Epic 4 → done (route-level slope-floor correction complete; 4.1/4.2/4.3 all done). Story 4.3 lightweight review approved (test-only diff). Epic-4 retrospective optional.
+# Epic 5 (Undirected segment-reuse semantics) inserted via correct-course 2026-06-03, sequenced next. Operational Robustness → Epic 6, Release Polish → Epic 7.
 
 project: bmad-test
 project_key: NOKEY
@@ -83,17 +84,28 @@ development_status:
   4-3-revalidate-metamorphic-and-cli-tests-and-doc-sync: done
   epic-4-retrospective: optional
 
-  epic-5: backlog
-  5-1-progressevent-throttled-callback-cli-renderer-with-quiet-verbose: backlog
-  5-2-time-budget-and-stagnation-termination: backlog
-  5-3-interrupt-handling-with-best-so-far-preservation: backlog
-  5-4-graceful-degradation-messaging-for-sparse-areas: backlog
-  5-5-run-summary-on-stdout: backlog
+  # Epic 5 inserted via correct-course 2026-06-03
+  # (sprint-change-proposal-2026-06-03-undirected-segment-reuse.md): undirected
+  # base-segment reuse + short-connector tolerance, sequenced ahead of
+  # Operational Robustness. Former Epic 5 (Operational Robustness) -> Epic 6;
+  # former Epic 6 (Release Polish) -> Epic 7. Renumber is text-only (no story files).
+  epic-5: in-progress    # Undirected segment-reuse semantics
+  5-1-base-segment-identity-and-connector-revival-at-contraction: done
+  5-2-undirected-reuse-enforcement-solver-oracle-validator: backlog
+  5-3-revalidate-metamorphic-cli-and-doc-sync: backlog
   epic-5-retrospective: optional
 
-  epic-6: backlog
-  6-1-regression-golden-test-harness-and-update-regression-workflow: backlog
-  6-2-pin-2-3-grenoble-regression-fixtures-with-zero-tolerance-ci-gate: backlog
-  6-3-readme-gallery-with-3-5-pre-computed-example-reports: backlog
-  6-4-readme-known-limitations-quickstart-sections: backlog
-  6-5-final-ci-threshold-tightening-and-linux-best-effort-job: backlog
+  epic-6: backlog        # (was epic-5) Operational Robustness
+  6-1-progressevent-throttled-callback-cli-renderer-with-quiet-verbose: backlog
+  6-2-time-budget-and-stagnation-termination: backlog
+  6-3-interrupt-handling-with-best-so-far-preservation: backlog
+  6-4-graceful-degradation-messaging-for-sparse-areas: backlog
+  6-5-run-summary-on-stdout: backlog
+  epic-6-retrospective: optional
+
+  epic-7: backlog        # (was epic-6) Release Polish
+  7-1-regression-golden-test-harness-and-update-regression-workflow: backlog
+  7-2-pin-2-3-grenoble-regression-fixtures-with-zero-tolerance-ci-gate: backlog
+  7-3-readme-gallery-with-3-5-pre-computed-example-reports: backlog
+  7-4-readme-known-limitations-quickstart-sections: backlog
+  7-5-final-ci-threshold-tightening-and-linux-best-effort-job: backlog

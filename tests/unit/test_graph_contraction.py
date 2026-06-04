@@ -158,8 +158,12 @@ def test_back_mapping_round_trips_to_underlying_edges() -> None:
     assert [(e.node_u, e.node_v) for e in mapped] == [(0, 1), (1, 2), (2, 3)]
 
 
-def test_short_connector_dropped_long_connector_retained() -> None:
-    """Connectors with `length_m < l_connector` drop; `length_m >= l_connector` stay."""
+def test_all_connectors_retained_short_tagged_reusable() -> None:
+    """Story 5.1: every connector is kept; short ones are tagged `reusable=True`.
+
+    Inverts the old drop behaviour — `length_m < l_connector` no longer drops
+    the edge, it flags it as a reuse-exempt short linking segment.
+    """
     long_connector = _make_edge(0, 1, length_m=300.0, d_plus_m=10.0, d_minus_m=10.0)
     short_connector = _make_edge(2, 3, length_m=100.0, d_plus_m=5.0, d_minus_m=5.0)
     g: nx.MultiDiGraph = nx.MultiDiGraph()
@@ -169,16 +173,22 @@ def test_short_connector_dropped_long_connector_retained() -> None:
     contracted = contract_climbs(g, [], l_connector=_L_CONNECTOR)
 
     assert contracted.super_edge_to_base == {}
+    # Both connectors survive — no length-based drop.
     assert contracted.graph.has_edge(0, 1)
-    assert not contracted.graph.has_edge(2, 3)
-    # Orphan-node prune: nodes 2 and 3 are gone once the only edge between
-    # them is dropped.
-    assert 2 not in contracted.graph.nodes
-    assert 3 not in contracted.graph.nodes
+    assert contracted.graph.has_edge(2, 3)
+    # Nodes that the old orphan-prune would have removed now stay.
+    assert {0, 1, 2, 3} <= set(contracted.graph.nodes)
+    # The short connector is reuse-exempt; the long one is not.
+    assert contracted.graph[2][3][0]["reusable"] is True
+    assert contracted.graph[0][1][0]["reusable"] is False
 
 
-def test_connector_exactly_at_l_connector_is_admitted() -> None:
-    """The threshold is inclusive (`length_m >= l_connector`)."""
+def test_connector_exactly_at_l_connector_is_not_reusable() -> None:
+    """The exemption threshold is strict (`length_m < l_connector`).
+
+    A connector exactly at `l_connector` is retained but NOT reuse-exempt —
+    it is a primary segment subject to the once-only rule.
+    """
     boundary_connector = _make_edge(0, 1, length_m=_L_CONNECTOR, d_plus_m=10.0, d_minus_m=10.0)
     g: nx.MultiDiGraph = nx.MultiDiGraph()
     _add_edge_from(g, boundary_connector)
@@ -186,6 +196,7 @@ def test_connector_exactly_at_l_connector_is_admitted() -> None:
     contracted = contract_climbs(g, [], l_connector=_L_CONNECTOR)
 
     assert contracted.graph.has_edge(0, 1)
+    assert contracted.graph[0][1][0]["reusable"] is False
 
 
 def test_bidirectional_base_graph_one_direction_climb() -> None:
@@ -224,19 +235,21 @@ def test_bidirectional_base_graph_one_direction_climb() -> None:
     assert super_id[0] == 0 and super_id[1] == 2
 
 
-def test_bidirectional_climb_with_short_reverse_drops_reverse_direction() -> None:
-    """`u→v` climb + short reverse-direction edges → super-edge only; reverse dropped.
+def test_bidirectional_climb_with_short_reverse_retains_reverse_as_reusable() -> None:
+    """`u→v` climb + short reverse-direction edges → super-edge + reusable reverse connectors.
 
-    Companion to `test_bidirectional_base_graph_one_direction_climb`: pins
-    the second branch of AC #2's fourth case ("the reverse direction as
-    either a connector edge (if its summed length ≥ l_connector) or
-    dropped (if shorter)").
+    Inverts the old "short reverse dropped" behaviour: the reverse-direction
+    edges are now retained as short reuse-exempt connectors. Critically, each
+    reverse connector shares its undirected `base_segment_id` with the climb's
+    super-edge — the collision that lets Story 5.2 forbid descending the trail
+    a climb just ascended.
     """
     uphill_edges = [
         _make_edge(0, 1, length_m=200.0, d_plus_m=50.0),
         _make_edge(1, 2, length_m=200.0, d_plus_m=50.0),
     ]
-    # Reverse direction: each edge 100 m, below `l_connector=200` → dropped.
+    # Reverse direction: each edge 100 m, below `l_connector=200` → now kept as
+    # reusable short connectors (previously dropped).
     reverse_edges = [
         _make_edge(2, 1, length_m=100.0, d_plus_m=0.0, d_minus_m=25.0, sac_scale="hiking"),
         _make_edge(1, 0, length_m=100.0, d_plus_m=0.0, d_minus_m=25.0, sac_scale="hiking"),
@@ -248,18 +261,24 @@ def test_bidirectional_climb_with_short_reverse_drops_reverse_direction() -> Non
 
     contracted = contract_climbs(g, [climb], l_connector=_L_CONNECTOR)
 
-    # Super-edge (0→2) is the only edge; the reverse-direction connectors are gone.
+    # Super-edge (0→2) plus the two reverse connectors all survive.
     assert contracted.graph.has_edge(0, 2)
-    assert not contracted.graph.has_edge(2, 1)
-    assert not contracted.graph.has_edge(1, 0)
-    assert contracted.graph.number_of_edges() == 1
-    # Node 1 was only reachable via the (now-dropped) reverse edges and the
-    # (now-contracted-away) uphill edges → absent from the contracted graph.
-    assert 1 not in contracted.graph.nodes
+    assert contracted.graph.has_edge(2, 1)
+    assert contracted.graph.has_edge(1, 0)
+    # Node 1, reachable via the reverse connectors, is back in the graph.
+    assert 1 in contracted.graph.nodes
+    # Reverse connectors are short → reuse-exempt.
+    assert contracted.graph[2][1][0]["reusable"] is True
+    assert contracted.graph[1][0][0]["reusable"] is True
+    # Each reverse connector's undirected id is in the super-edge's id set.
+    super_id = next(iter(contracted.super_edge_to_base.keys()))
+    super_base_ids = contracted.graph[super_id[0]][super_id[1]][super_id[2]]["base_segment_id"]
+    assert contracted.graph[2][1][0]["base_segment_id"] <= super_base_ids
+    assert contracted.graph[1][0][0]["base_segment_id"] <= super_base_ids
 
 
-def test_empty_climbs_keeps_only_long_connectors() -> None:
-    """Empty `climbs` → contracted graph holds only connectors `>= l_connector`."""
+def test_empty_climbs_keeps_all_connectors() -> None:
+    """Empty `climbs` → contracted graph holds ALL connectors, short ones reusable."""
     long_a = _make_edge(0, 1, length_m=300.0, d_plus_m=0.0, d_minus_m=0.0)
     long_b = _make_edge(1, 2, length_m=200.0, d_plus_m=0.0, d_minus_m=0.0)
     short = _make_edge(3, 4, length_m=50.0, d_plus_m=0.0, d_minus_m=0.0)
@@ -270,17 +289,23 @@ def test_empty_climbs_keeps_only_long_connectors() -> None:
     contracted = contract_climbs(g, [], l_connector=_L_CONNECTOR)
 
     assert contracted.super_edge_to_base == {}
-    assert contracted.graph.number_of_edges() == 2
+    # All three connectors retained — no drop.
+    assert contracted.graph.number_of_edges() == 3
     assert contracted.graph.has_edge(0, 1)
     assert contracted.graph.has_edge(1, 2)
-    # Nodes 3 and 4 orphaned by the short-connector drop.
-    assert 3 not in contracted.graph.nodes
-    assert 4 not in contracted.graph.nodes
+    assert contracted.graph.has_edge(3, 4)
+    # Nodes 3 and 4 stay (their short connector is no longer dropped).
+    assert {3, 4} <= set(contracted.graph.nodes)
+    assert contracted.graph[3][4][0]["reusable"] is True
+    assert contracted.graph[0][1][0]["reusable"] is False
 
 
-def test_orphan_nodes_pruned_after_connector_drop() -> None:
-    """Nodes whose only incident edge was dropped do not appear in the contracted graph."""
-    # Node 5 is reachable only via a sub-l_connector edge → orphan after drop.
+def test_no_orphan_prune_short_connector_node_retained() -> None:
+    """Story 5.1: a node reachable only via a short connector is now retained.
+
+    Replaces the old orphan-prune-after-drop test — with no drop, there are no
+    orphans to prune and the previously-pruned node survives.
+    """
     long_edge = _make_edge(0, 1, length_m=300.0, d_plus_m=0.0, d_minus_m=0.0)
     short_edge = _make_edge(0, 5, length_m=50.0, d_plus_m=0.0, d_minus_m=0.0)
     g: nx.MultiDiGraph = nx.MultiDiGraph()
@@ -289,10 +314,91 @@ def test_orphan_nodes_pruned_after_connector_drop() -> None:
 
     contracted = contract_climbs(g, [], l_connector=_L_CONNECTOR)
 
-    assert 5 not in contracted.graph.nodes
-    # Node 0 stays because (0, 1) survives.
-    assert 0 in contracted.graph.nodes
-    assert 1 in contracted.graph.nodes
+    # Node 5 — reachable only via the short connector — is no longer pruned.
+    assert 5 in contracted.graph.nodes
+    assert contracted.graph.has_edge(0, 5)
+    assert contracted.graph[0][5][0]["reusable"] is True
+    assert {0, 1}.issubset(contracted.graph.nodes)
+
+
+def test_forward_and_reverse_connectors_share_base_segment_id() -> None:
+    """AC #3: a connector and its reverse-direction counterpart get the same id.
+
+    The undirected identity is the canonical sorted node-pair + key, so
+    `(0, 1, 0)` and `(1, 0, 0)` collapse to one id — the property Story 5.2
+    relies on to forbid re-walking a segment in the opposite direction.
+    """
+    forward = _make_edge(0, 1, length_m=300.0, d_plus_m=10.0, d_minus_m=10.0)
+    reverse = _make_edge(1, 0, length_m=300.0, d_plus_m=10.0, d_minus_m=10.0)
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    _add_edge_from(g, forward)
+    _add_edge_from(g, reverse)
+
+    contracted = contract_climbs(g, [], l_connector=_L_CONNECTOR)
+
+    fwd_id = contracted.graph[0][1][0]["base_segment_id"]
+    rev_id = contracted.graph[1][0][0]["base_segment_id"]
+    assert fwd_id == rev_id
+    # Each connector carries exactly its own single base-segment id.
+    assert len(fwd_id) == 1
+
+
+def test_super_edge_base_segment_id_is_set_of_contracted_edge_ids() -> None:
+    """AC #2: a super-edge's `base_segment_id` is the set of its base edges' ids.
+
+    `reusable=False`, and the set size equals the number of contracted edges
+    (all distinct undirected segments on a simple climb chain).
+    """
+    edges = [
+        _make_edge(0, 1, length_m=150.0, d_plus_m=40.0),
+        _make_edge(1, 2, length_m=150.0, d_plus_m=40.0),
+        _make_edge(2, 3, length_m=150.0, d_plus_m=40.0),
+    ]
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    for e in edges:
+        _add_edge_from(g, e)
+    climb = _climb_from_edges(edges)
+
+    contracted = contract_climbs(g, [climb], l_connector=_L_CONNECTOR)
+
+    super_key = next(iter(contracted.graph[0][3].keys()))
+    data = contracted.graph[0][3][super_key]
+    assert data["reusable"] is False
+    expected = {(0, 1, 0), (1, 2, 0), (2, 3, 0)}
+    assert data["base_segment_id"] == expected
+
+
+def test_super_edge_shares_base_segment_id_with_reverse_connector() -> None:
+    """AC #3: a climb super-edge shares an id with the reverse connectors of its trail.
+
+    The climb ascends 0→1→2; the descent 2→1→0 survives as connectors (here
+    long, so non-reusable). Each descent connector's id must lie inside the
+    super-edge's id set — so Story 5.2 sees the out-and-back as a segment reuse.
+    """
+    uphill = [
+        _make_edge(0, 1, length_m=250.0, d_plus_m=60.0),
+        _make_edge(1, 2, length_m=250.0, d_plus_m=60.0),
+    ]
+    downhill = [
+        _make_edge(2, 1, length_m=250.0, d_plus_m=0.0, d_minus_m=60.0),
+        _make_edge(1, 0, length_m=250.0, d_plus_m=0.0, d_minus_m=60.0),
+    ]
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    for e in uphill + downhill:
+        _add_edge_from(g, e)
+    climb = _climb_from_edges(uphill)
+
+    contracted = contract_climbs(g, [climb], l_connector=_L_CONNECTOR)
+
+    super_id = next(iter(contracted.super_edge_to_base.keys()))
+    super_base_ids = contracted.graph[super_id[0]][super_id[1]][super_id[2]]["base_segment_id"]
+    # Both descent connectors are long → retained, non-reusable, and their
+    # undirected ids collide with the climb's.
+    assert contracted.graph[2][1][0]["reusable"] is False
+    assert contracted.graph[2][1][0]["base_segment_id"] <= super_base_ids
+    assert contracted.graph[1][0][0]["base_segment_id"] <= super_base_ids
+    # At least one shared id (the property the epics AC pins).
+    assert super_base_ids & contracted.graph[2][1][0]["base_segment_id"]
 
 
 def test_super_edge_sac_scale_aggregates_to_max_rank() -> None:
@@ -407,7 +513,7 @@ def test_contract_climbs_does_not_mutate_input_graph() -> None:
         _make_edge(0, 1, length_m=150.0, d_plus_m=40.0),
         _make_edge(1, 2, length_m=150.0, d_plus_m=40.0),
         _make_edge(3, 4, length_m=300.0, d_plus_m=0.0, d_minus_m=0.0),
-        _make_edge(5, 6, length_m=50.0, d_plus_m=0.0, d_minus_m=0.0),  # short → dropped
+        _make_edge(5, 6, length_m=50.0, d_plus_m=0.0, d_minus_m=0.0),  # short → reusable connector
     ]
     g: nx.MultiDiGraph = nx.MultiDiGraph()
     for e in edges:
@@ -475,12 +581,14 @@ def _chain_climb_strategy(
         next_node += 1
         climbs.append(_climb_from_edges(chain_edges))
 
-    # Sprinkle a few extra connectors — half sub-`l_connector`, half ≥.
+    # Sprinkle a few extra connectors — all retained now (no drop), with
+    # lengths bracketing `l_connector` so both `reusable` values are exercised.
     n_extra: int = draw(st.integers(min_value=0, max_value=3))
     for _ in range(n_extra):
         u: int = next_node
         v: int = next_node + 1
-        # Pick lengths bracketing the l_connector threshold so both branches exercise.
+        # Pick lengths bracketing the l_connector threshold so both reusable
+        # (short) and non-reusable (long) connectors appear.
         length_m = draw(st.floats(min_value=50.0, max_value=350.0))
         connector = _make_edge(u, v, length_m=length_m, d_plus_m=0.0, d_minus_m=0.0)
         _add_edge_from(g, connector)

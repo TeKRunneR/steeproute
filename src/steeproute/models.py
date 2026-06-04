@@ -120,11 +120,30 @@ class Climb:
 class ContractedGraph:
     """The climb-contracted graph the GRASP solver consumes (Architecture §Cat 3, stage 9).
 
-    `graph` is the contracted `networkx.MultiDiGraph` — climbs as super-edges,
-    sub-`l_connector` connectors dropped. Typed as `Any` because networkx 3.x
-    ships partial type stubs and we don't want every solver-side import to
-    fight the type checker over node/edge access (external-boundary `Any` per
-    Architecture §"Type hints and data").
+    `graph` is the contracted `networkx.MultiDiGraph` — climbs as super-edges
+    and **all** connectors retained (no length-based drop). Typed as `Any`
+    because networkx 3.x ships partial type stubs and we don't want every
+    solver-side import to fight the type checker over node/edge access
+    (external-boundary `Any` per Architecture §"Type hints and data").
+
+    On top of the base edge-attribute contract (`length_m`, `d_plus_m`,
+    `d_minus_m`, `avg_gradient`, `sac_scale`, and — on connectors only —
+    `geometry`/`vertices_resampled`/`highway`/`osm_way_id`), every edge in
+    `graph` carries two reuse-tagging attributes set at contraction
+    (Story 5.1, FR5):
+
+    - `base_segment_id`: `frozenset[tuple[int, int, int]]` of undirected
+      base-segment identities (canonical sorted node-pair + key, so a segment
+      and its reverse share the id). A connector carries a one-element set; a
+      super-edge carries the set of ids of the base edges it contracts. Stored
+      as a set on every edge for uniform downstream handling.
+    - `reusable`: `bool`, `True` only for a connector shorter than
+      `l_connector` (a short linking segment, exempt from the once-per-route
+      reuse rule and bidirectional); `False` for long connectors and every
+      super-edge.
+
+    The undirected once-only reuse rule (solver/oracle/validator, Story 5.2)
+    keys on `base_segment_id` and skips `reusable` edges.
 
     `super_edge_to_base` is the super-edge → base-`Edge`-sequence back-mapping
     (Story 3.3 AC: "back-mapping round-trips"). The key is the
@@ -155,8 +174,10 @@ class SolverParams:
       segment to qualify as a climb in pipeline stage 8 (FR3b). Drives
       `detect_climbs`; does not by itself constrain the whole route.
     - `difficulty_cap`: SAC scale ceiling (e.g. "T3"); edges above are excluded.
-    - `l_connector`: minimum connector-edge length (m); shorter connectors
-      drop out at the contraction step.
+    - `l_connector`: short-connector reuse-exemption threshold (m). Connectors
+      shorter than this are reuse-exempt linking segments — kept in the
+      contracted graph and reusable in both directions; all other segments may
+      be used at most once per route, regardless of direction (FR5).
     - `min_climb_ground_length`: minimum cumulative ground length (m) for a
       candidate climb to qualify (FR3/FR6).
     - `j_max`: pairwise Jaccard distinctness ceiling (FR11).

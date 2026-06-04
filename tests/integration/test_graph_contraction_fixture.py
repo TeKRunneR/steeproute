@@ -5,10 +5,11 @@
 Runs the full setup → climb-detection → contraction chain against the
 committed Grenoble Le Sappey fixture and asserts the two contract relations
 required by AC #3: (1) the contracted graph has strictly fewer edges than
-the post-stage-7 base graph (climbs collapse + sub-`l_connector` connectors
-prune), (2) for every super-edge the back-mapped base-edge sequence's
-`sum(e.length_m)` and `sum(e.d_plus_m)` equal the super-edge's stored
-aggregates within `math.isclose(abs_tol=1e-9)`.
+the post-stage-7 base graph (multi-edge climbs collapse into single
+super-edges; since Story 5.1 all connectors are retained, so the reduction
+comes purely from climb collapse), (2) for every super-edge the back-mapped
+base-edge sequence's `sum(e.length_m)` and `sum(e.d_plus_m)` equal the
+super-edge's stored aggregates within `math.isclose(abs_tol=1e-9)`.
 
 Reuses the `osm_load` monkeypatch + `run_setup_stages` pattern from
 `tests/integration/test_climb_detection_fixture.py`.
@@ -77,7 +78,7 @@ def base_graph() -> nx.MultiDiGraph:
 
 
 def test_contracted_graph_has_fewer_edges_than_base(base_graph: nx.MultiDiGraph) -> None:
-    """AC #3: contracted graph collapses climbs + drops sub-`l_connector` connectors."""
+    """AC #3: contracted graph is smaller via climb collapse (connectors all retained)."""
     climbs = detect_climbs(
         base_graph,
         min_climb_slope=_MIN_CLIMB_SLOPE,
