@@ -251,7 +251,7 @@ Exact file names within `pipeline/` and `solver/` are placeholders; adjust durin
 | 6 | Elevation moving-median | `pipeline/smoothing.py` |
 | 7 | Per-edge metrics (L, D+, D−, gradient) | `pipeline/climbs.py` |
 | 8 | Climb detection (parameter-dependent: `min_climb_slope`, `min_climb_ground_length`) | `pipeline/climbs.py` |
-| 9 | Climb-graph contraction | `pipeline/graph.py` |
+| 9 | Climb-graph contraction (climbs → super-edges; **all** connectors retained and tagged with an undirected `base_segment_id` + a `reusable` flag = `length_m < l_connector`; super-edges carry the base-segment-id set of the edges they contract) | `pipeline/graph.py` |
 
 **Stage boundary style (3a):** each stage is `def stage(input_graph, config) -> output_graph`. Orchestrator wires them: `g = osm_load(area); g = filter_trails(g, cfg); g = smooth_polylines(g); ...`. Pure functions → clean unit-test targets with fixture inputs, BasedPyright-friendly, easy to cache at any boundary.
 
@@ -514,7 +514,7 @@ CLI calls `validate(...)`; the underlying per-route and set-level functions are 
 | Route-level slope floor ≥ θ, `(D+ + D−)/length` | `--theta` | per-route (whole route) |
 | Climb-detection slope ≥ `min_climb_slope`, `d_plus/length` | `--min-climb-slope` | per-climb (stage 8) |
 | Difficulty cap ≤ SAC scale | `--difficulty-cap` | per-route (per-edge) |
-| Edge-reuse limit | `--l-connector` | per-route |
+| Edge-reuse limit (undirected, base-segment; short connectors `< --l-connector` exempt) | `--l-connector` | per-route |
 | Graph membership (every edge in operational graph) | derived | per-route (sanity) |
 | Pairwise Jaccard ≤ J_max | `--j-max` | set-level |
 

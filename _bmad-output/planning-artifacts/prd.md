@@ -351,7 +351,7 @@ All configuration via CLI flags. No config file in v1 (N=1, flag count manageabl
 | `--theta` | 0.20 | Route-level average-slope floor, `(D+ + D−)/length` |
 | `--min-climb-slope` | 0.20 | Min running-average uphill slope (`d_plus/length`) for a segment to count as a climb |
 | `--difficulty-cap` | T3 | SAC difficulty ceiling |
-| `--l-connector` | 200m | Edge-reuse length threshold |
+| `--l-connector` | 200m | Short-connector reuse-exemption threshold: connectors shorter than this may be reused (bidirectional); all other segments are once-per-route, undirected |
 | `--min-climb-ground-length` | 300m | Minimum climb 2D arc length |
 | `--j-max` | 0.30 | Top-N pairwise Jaccard ceiling |
 | `--n` | 5 | Target result count |
@@ -483,7 +483,7 @@ These are load-bearing for portfolio credibility. A feature-lean v1 is defensibl
 - **FR3**: User can configure the **route-level** average-slope floor — the minimum ratio of total vertical change to total length, `(D+ + D−) / length`, that a returned route as a whole must satisfy.
 - **FR3b**: User can configure the **climb-detection slope threshold** — the minimum running-average uphill slope (`d_plus / length`) for a contiguous trail segment to qualify as a climb. Distinct from the route-level floor (FR3): this governs which segments become climbs (pipeline stage 8), while FR3 governs the whole route. (Numbered FR3b to avoid renumbering FR4–FR30; final numbering at PM discretion.)
 - **FR4**: User can configure the SAC difficulty ceiling for eligible route segments.
-- **FR5**: User can configure the length threshold distinguishing short connectors from primary edges.
+- **FR5**: User can configure the short-connector length threshold below which a linking segment is exempt from the once-per-route reuse limit — short connectors may be reused and traversed in both directions, while every other segment may be used at most once regardless of direction.
 - **FR6**: User can configure the minimum ground-length threshold for a segment to count as a climb.
 - **FR7**: User can configure the pairwise segment-overlap ceiling for top-N distinctness.
 - **FR8**: User can configure the target result count.
