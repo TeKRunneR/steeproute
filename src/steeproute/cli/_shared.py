@@ -429,14 +429,7 @@ dem_version_option = click.option(
     "--dem-version",
     type=click.STRING,
     default=None,
-    help="Explicit DEM version tag for cache keying (default: derived from DEM file metadata).",
-)
-
-dem_path_option = click.option(
-    "--dem-path",
-    type=click.Path(exists=False, path_type=pathlib.Path),
-    default=None,
-    help="Location of DEM files for steeproute-setup.",
+    help="Explicit DEM version tag for cache keying (default: the IGN RGE ALTI layer tag).",
 )
 
 osm_age_warn_days_option = click.option(

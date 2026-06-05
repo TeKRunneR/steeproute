@@ -63,6 +63,9 @@ _PIPELINE_CONTENT_GLOBS: tuple[str, ...] = ("pipeline/**/*.py", "models.py")
 # stay free of stray files in case a future tool ever drops in alongside.
 _CACHE_SUBDIR: str = "steeproute"
 _AREAS_SUBDIR: str = "areas"
+# Auto-downloaded DEM rasters live alongside the `areas/` entries but in their
+# own subtree so a `dem/` listing stays separable from prepared cache entries.
+_DEM_SUBDIR: str = "dem"
 _APP_NAME: str = "steeproute"
 
 # File names inside an entry directory. Order matters for Cat 4d: graph + bounds
@@ -331,6 +334,17 @@ def entry_dir_for(cache_root: pathlib.Path, cache_key: str) -> pathlib.Path:
     use `read_entry` for validation. This is purely a layout-resolution helper.
     """
     return _areas_dir(cache_root) / cache_key
+
+
+def dem_cache_path_for(cache_root: pathlib.Path, dem_key: str) -> pathlib.Path:
+    """Return the canonical cached-DEM raster path for `dem_key` under `cache_root`.
+
+    Single source of truth for the `<cache-root>/steeproute/dem/<dem_key>.tif`
+    layout used by `pipeline.dem_download.resolve_dem`. Parallels `entry_dir_for`
+    so the auto-download path never reconstructs the layout by hand. Does not
+    check existence — that is the caller's reuse decision.
+    """
+    return cache_root / _CACHE_SUBDIR / _DEM_SUBDIR / f"{dem_key}.tif"
 
 
 def write_text_atomic(path: pathlib.Path, text: str) -> None:
@@ -876,7 +890,7 @@ def _no_prepared_cache_message(query_area: Area) -> str:
     return (
         f"No prepared cache exists yet. "
         f"Run: steeproute-setup --center {_format_lat_lon(lat, lon)} "
-        f"--radius {_format_number(query_area.radius_km)} --dem-path <your DEM>"
+        f"--radius {_format_number(query_area.radius_km)}"
     )
 
 
@@ -914,7 +928,7 @@ def _partial_coverage_message(
     # themselves (UX parity with the empty-cache message).
     widen_setup_cmd = (
         f"steeproute-setup --center {_format_lat_lon(q_lat, q_lon)} "
-        f"--radius {_format_number(query_area.radius_km)} --dem-path <your DEM>"
+        f"--radius {_format_number(query_area.radius_km)}"
     )
     if r_new > 0:
         return (

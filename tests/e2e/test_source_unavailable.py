@@ -31,6 +31,7 @@ import importlib.util
 import io
 import pathlib
 import sys
+import urllib.error
 from collections.abc import Generator
 from contextlib import contextmanager
 from unittest.mock import patch
@@ -96,20 +97,27 @@ def _osm_load_from_fixture(_area: Area) -> nx.MultiDiGraph:
     return normalize_edges(osmnx.load_graphml(_OSM_FIXTURE_PATH))
 
 
+def _resolve_dem_from_fixture(
+    _area: Area,
+    _cache_root: pathlib.Path,
+    **_kwargs: object,
+) -> pathlib.Path:
+    """Drop-in for `cli.setup.resolve_dem` returning the committed DEM fixture (offline)."""
+    return _DEM_FIXTURE_PATH
+
+
 @pytest.fixture(autouse=True)
 def _skip_if_fixtures_missing() -> None:
     if not _DEM_FIXTURE_PATH.exists() or not _OSM_FIXTURE_PATH.exists() or not _FIXTURES_LOADED:
         pytest.skip("OSM or DEM fixture not committed; source-unavailable e2e tests skipped.")
 
 
-def _base_args(*, cache_dir: pathlib.Path, dem_path: pathlib.Path) -> list[str]:
+def _base_args(*, cache_dir: pathlib.Path) -> list[str]:
     return [
         "--center",
         _CENTER_FLAG,
         "--radius",
         _RADIUS_FLAG,
-        "--dem-path",
-        str(dem_path),
         "--cache-dir",
         str(cache_dir),
     ]
@@ -170,37 +178,36 @@ def _invoke_with_wrapper(args: list[str]) -> tuple[int, str]:
 # --- AC #4: DEM source unreachable -----------------------------------------------
 
 
-def test_missing_dem_path(tmp_path: pathlib.Path) -> None:
-    """AC #4: an unreadable DEM file → exit 2 + `error: DEM source unreachable`.
+def test_dem_source_unreachable(tmp_path: pathlib.Path) -> None:
+    """AC #4: the IGN WMS download failing → exit 2 + `error: DEM source unreachable`.
 
-    A zero-byte `.tif` passes `Path.is_file()` (so the CLI's early guard doesn't fire)
-    but fails `rasterio.open` with `RasterioIOError`. The new wrap in `pipeline/dem.py`
-    maps that to `DataSourceUnavailableError → exit 2` via `run_entry_point`.
+    Patches the WMS `urlopen` to raise a `URLError` so the real `resolve_dem`
+    error-mapping fires (`DataSourceUnavailableError → exit 2` via `run_entry_point`).
     """
-    bad_dem = tmp_path / "garbage.tif"
-    bad_dem.write_bytes(b"")  # zero bytes — rasterio cannot parse a header from this.
-
-    args = _base_args(cache_dir=tmp_path / "cache", dem_path=bad_dem)
-    with patch("steeproute.pipeline.osm_load", _osm_load_from_fixture):
+    args = _base_args(cache_dir=tmp_path / "cache")
+    with patch(
+        "steeproute.pipeline.dem_download.urlopen",
+        side_effect=urllib.error.URLError("connection refused"),
+    ):
         exit_code, stderr = _invoke_with_wrapper(args)
 
     assert exit_code == 2
     assert stderr.startswith("error: DEM source unreachable"), stderr
 
 
-def test_missing_dem_path_verbose_surfaces_detail(tmp_path: pathlib.Path) -> None:
-    """AC #2: `--verbose` surfaces the wrapped `RasterioIOError` on the detail line."""
-    bad_dem = tmp_path / "garbage.tif"
-    bad_dem.write_bytes(b"")
-
-    args = [*_base_args(cache_dir=tmp_path / "cache", dem_path=bad_dem), "--verbose"]
-    with patch("steeproute.pipeline.osm_load", _osm_load_from_fixture):
+def test_dem_source_unreachable_verbose_surfaces_detail(tmp_path: pathlib.Path) -> None:
+    """AC #2: `--verbose` surfaces the wrapped WMS failure on the detail line."""
+    args = [*_base_args(cache_dir=tmp_path / "cache"), "--verbose"]
+    with patch(
+        "steeproute.pipeline.dem_download.urlopen",
+        side_effect=urllib.error.URLError("connection refused"),
+    ):
         exit_code, stderr = _invoke_with_wrapper(args)
 
     assert exit_code == 2
     assert "error: DEM source unreachable" in stderr
-    # Detail line carries the `rasterio.open(...)` failure repr.
-    assert "rasterio.open" in stderr
+    # Detail line carries the wrapped WMS-fetch failure repr.
+    assert "IGN WMS GetMap failed" in stderr
 
 
 # --- AC #5: OSM source unreachable -----------------------------------------------
@@ -213,10 +220,13 @@ def test_osm_network_failure(tmp_path: pathlib.Path) -> None:
     sits around) so the production try/except actually fires. Patching
     `pipeline.osm_load` directly would bypass the wrap entirely — wrong target.
     """
-    args = _base_args(cache_dir=tmp_path / "cache", dem_path=_DEM_FIXTURE_PATH)
-    with patch(
-        "steeproute.pipeline.osm.osmnx.graph_from_point",
-        side_effect=requests.ConnectionError("Failed to establish a new connection"),
+    args = _base_args(cache_dir=tmp_path / "cache")
+    with (
+        patch("steeproute.cli.setup.resolve_dem", _resolve_dem_from_fixture),
+        patch(
+            "steeproute.pipeline.osm.osmnx.graph_from_point",
+            side_effect=requests.ConnectionError("Failed to establish a new connection"),
+        ),
     ):
         exit_code, stderr = _invoke_with_wrapper(args)
 
@@ -226,10 +236,13 @@ def test_osm_network_failure(tmp_path: pathlib.Path) -> None:
 
 def test_osm_network_failure_verbose_surfaces_detail(tmp_path: pathlib.Path) -> None:
     """AC #2 + #5: `--verbose` rerun surfaces the wrapped `ConnectionError` on the detail line."""
-    args = [*_base_args(cache_dir=tmp_path / "cache", dem_path=_DEM_FIXTURE_PATH), "--verbose"]
-    with patch(
-        "steeproute.pipeline.osm.osmnx.graph_from_point",
-        side_effect=requests.ConnectionError("Failed to establish a new connection"),
+    args = [*_base_args(cache_dir=tmp_path / "cache"), "--verbose"]
+    with (
+        patch("steeproute.cli.setup.resolve_dem", _resolve_dem_from_fixture),
+        patch(
+            "steeproute.pipeline.osm.osmnx.graph_from_point",
+            side_effect=requests.ConnectionError("Failed to establish a new connection"),
+        ),
     ):
         exit_code, stderr = _invoke_with_wrapper(args)
 
@@ -241,10 +254,13 @@ def test_osm_network_failure_verbose_surfaces_detail(tmp_path: pathlib.Path) -> 
 
 def test_osm_pipeline_wrapping_catches_requests_timeout(tmp_path: pathlib.Path) -> None:
     """AC #1: the wrap covers the whole `requests.exceptions.RequestException` family, not just ConnectionError."""
-    args = _base_args(cache_dir=tmp_path / "cache", dem_path=_DEM_FIXTURE_PATH)
-    with patch(
-        "steeproute.pipeline.osm.osmnx.graph_from_point",
-        side_effect=requests.exceptions.Timeout("Read timeout"),
+    args = _base_args(cache_dir=tmp_path / "cache")
+    with (
+        patch("steeproute.cli.setup.resolve_dem", _resolve_dem_from_fixture),
+        patch(
+            "steeproute.pipeline.osm.osmnx.graph_from_point",
+            side_effect=requests.exceptions.Timeout("Read timeout"),
+        ),
     ):
         exit_code, stderr = _invoke_with_wrapper(args)
 
@@ -258,7 +274,6 @@ def test_osm_pipeline_wrapping_catches_requests_timeout(tmp_path: pathlib.Path) 
 def _invoke_cli_runner(
     *,
     cache_dir: pathlib.Path,
-    dem_path: pathlib.Path,
     osm_mode: str = "fixture",
     extra_args: tuple[str, ...] = (),
 ) -> tuple[int, str]:
@@ -276,7 +291,7 @@ def _invoke_cli_runner(
       hanging on a real Overpass call or appearing to succeed under the fixture.
     """
     runner = CliRunner()
-    args = [*_base_args(cache_dir=cache_dir, dem_path=dem_path), *extra_args]
+    args = [*_base_args(cache_dir=cache_dir), *extra_args]
     if osm_mode == "fixture":
         patcher = patch("steeproute.pipeline.osm_load", _osm_load_from_fixture)
     elif osm_mode == "fail_loud":
@@ -286,7 +301,9 @@ def _invoke_cli_runner(
         )
     else:
         raise ValueError(f"Unknown osm_mode: {osm_mode!r}")
-    with patcher:
+    # `resolve_dem` is always patched to the fixture so the seed (cache-miss) run
+    # never hits the IGN WMS; the cache-hit re-invocations don't call it at all.
+    with patch("steeproute.cli.setup.resolve_dem", _resolve_dem_from_fixture), patcher:
         result = runner.invoke(setup_cli, args, catch_exceptions=False)
     return result.exit_code, result.output
 
@@ -308,7 +325,7 @@ def test_osm_age_warning_emitted_on_stale_cache_hit(tmp_path: pathlib.Path) -> N
     # Seed a cache entry whose manifest is dated > 90 days ago (~2 years here for safety).
     stale_iso = "2024-01-01T00:00:00Z"
     with patch("steeproute.cli.setup.iso8601_utc_now", return_value=stale_iso):
-        seed_code, seed_output = _invoke_cli_runner(cache_dir=cache_dir, dem_path=_DEM_FIXTURE_PATH)
+        seed_code, seed_output = _invoke_cli_runner(cache_dir=cache_dir)
     assert seed_code == 0, seed_output
     assert "cache-miss" in seed_output
 
@@ -319,7 +336,6 @@ def test_osm_age_warning_emitted_on_stale_cache_hit(tmp_path: pathlib.Path) -> N
     # the fixture loader and masking the bug.
     hit_code, hit_output = _invoke_cli_runner(
         cache_dir=cache_dir,
-        dem_path=_DEM_FIXTURE_PATH,
         osm_mode="fail_loud",
     )
 
@@ -336,14 +352,13 @@ def test_osm_age_warning_silent_on_fresh_cache_hit(tmp_path: pathlib.Path) -> No
     cache_dir = tmp_path / "cache"
 
     # Seed with the real `iso8601_utc_now` — the entry's `osm_extract_date` is "now".
-    seed_code, seed_output = _invoke_cli_runner(cache_dir=cache_dir, dem_path=_DEM_FIXTURE_PATH)
+    seed_code, seed_output = _invoke_cli_runner(cache_dir=cache_dir)
     assert seed_code == 0, seed_output
 
     # Re-invoke: cache-hit on a fresh entry, no warning. Fail-loud osm_load patch
     # so a hit-path regression surfaces clearly.
     hit_code, hit_output = _invoke_cli_runner(
         cache_dir=cache_dir,
-        dem_path=_DEM_FIXTURE_PATH,
         osm_mode="fail_loud",
     )
 
@@ -368,13 +383,12 @@ def test_osm_age_warning_threshold_override(tmp_path: pathlib.Path) -> None:
     now = datetime.datetime.now(datetime.UTC)
     sixty_days_ago = (now - datetime.timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
     with patch("steeproute.cli.setup.iso8601_utc_now", return_value=sixty_days_ago):
-        _invoke_cli_runner(cache_dir=cache_dir, dem_path=_DEM_FIXTURE_PATH)
+        _invoke_cli_runner(cache_dir=cache_dir)
 
     # Cache-hit with custom threshold of 30 days — 60 > 30 → warn. Fail-loud
     # osm_load patch so a hit-path regression surfaces clearly.
     exit_code, output = _invoke_cli_runner(
         cache_dir=cache_dir,
-        dem_path=_DEM_FIXTURE_PATH,
         osm_mode="fail_loud",
         extra_args=("--osm-age-warn-days", "30"),
     )

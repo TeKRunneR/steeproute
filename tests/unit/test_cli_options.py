@@ -11,7 +11,6 @@ from steeproute.cli._shared import (
     area_cap_option,
     cache_dir_option,
     center_option,
-    dem_path_option,
     dem_version_option,
     difficulty_cap_option,
     force_refresh_option,
@@ -87,7 +86,6 @@ ALL_DECORATORS = [
     cache_dir_option,
     force_refresh_option,
     dem_version_option,
-    dem_path_option,
     osm_age_warn_days_option,
 ]
 
@@ -146,17 +144,17 @@ def test_query_cli_without_verbose_leaves_state_false(tmp_path: pathlib.Path) ->
 
 
 def test_verbose_flag_sets_verbose_state_on_setup_cli() -> None:
-    """`--verbose` is an eager click callback — state flips even when later args fail.
+    """`--verbose` is an eager click callback — state flips even when the body later fails.
 
-    The CLI now exits non-zero on missing `--dem-path` (Story 2.8), but the
-    eager-callback contract is "set state during the first parse pass", which
-    runs before BadCLIArgError propagation. Asserting `is_verbose()` after a
-    deliberately-failing invocation confirms eager evaluation still works.
+    The eager-callback contract is "set state during the first parse pass", which
+    runs before the command body raises. We trip the body with a radius above the
+    50 km ceiling (`validate_setup_radius`), which fails before any cache/network
+    work — so the assertion stays offline while still proving eager evaluation.
     """
     runner = CliRunner()
-    result = runner.invoke(setup_cli, ["--center", "45.07,6.11", "--radius", "10", "--verbose"])
-    # Missing --dem-path raises BadCLIArgError, but the eager --verbose callback
-    # has already flipped the global state.
+    result = runner.invoke(setup_cli, ["--center", "45.07,6.11", "--radius", "5000", "--verbose"])
+    # The above-ceiling radius raises BadCLIArgError, but the eager --verbose
+    # callback has already flipped the global state during parsing.
     assert isinstance(result.exception, BadCLIArgError)
     assert is_verbose() is True
 
@@ -166,7 +164,9 @@ def test_setup_cli_without_verbose_leaves_state_false() -> None:
     # `False` before this test runs, so the assertion below tests "the eager
     # callback did NOT flip the state without `--verbose`" — not just inertia
     # carried over from a previous test.
+    # Above-ceiling radius fails in the body before any cache/network work, so the
+    # invocation stays offline while still proving the callback didn't flip state.
     runner = CliRunner()
-    result = runner.invoke(setup_cli, ["--center", "45.07,6.11", "--radius", "10"])
+    result = runner.invoke(setup_cli, ["--center", "45.07,6.11", "--radius", "5000"])
     assert isinstance(result.exception, BadCLIArgError)
     assert is_verbose() is False

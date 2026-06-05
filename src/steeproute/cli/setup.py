@@ -7,12 +7,18 @@
 Wires Epic 2 pieces end-to-end (Story 2.8):
 
     parse flags
-      → resolve cache root + derive `dem_version` from --dem-version or DEM metadata
+      → resolve cache root + resolve `dem_version` (--dem-version or the default
+        IGN-layer tag)
       → compute_cache_key(area, untagged_policy, dem_version, pipeline_content_hash)
       → read_entry(cache_root, cache_key)
           - hit + not --force-refresh:    skip the pipeline, summary reports "cache-hit"
-          - miss or --force-refresh:      run_setup_stages → Manifest → write_entry
+          - miss or --force-refresh:      resolve_dem (auto-download + cache) →
+                                          run_setup_stages → Manifest → write_entry
       → print summary on stdout (always, even with --quiet, per Architecture §Cat 8)
+
+The DEM raster is fetched automatically for the area from the IGN Géoplateforme
+WMS (`pipeline.dem_download.resolve_dem`) — there is no `--dem-path` flag. Only
+the cache-miss branch downloads; a cache hit touches neither OSM nor the DEM.
 
 The summary block emits the 16-hex `cache_key_hash`, the entry path, and the
 elapsed wall-clock. `--verbose` switches the stdlib `logging` root to DEBUG on
@@ -44,7 +50,6 @@ from steeproute.cli._shared import (
     cache_dir_option,
     center_option,
     configure_cli_logging,
-    dem_path_option,
     dem_version_option,
     emit_osm_age_warning,
     force_refresh_option,
@@ -57,12 +62,12 @@ from steeproute.cli._shared import (
     verbose_option,
 )
 from steeproute.errors import (
-    BadCLIArgError,
     CacheCorruptedError,
     CacheNotFoundError,
 )
 from steeproute.models import Area, PipelineConfig
 from steeproute.pipeline import run_setup_stages
+from steeproute.pipeline.dem_download import DEFAULT_DEM_VERSION, resolve_dem
 from steeproute.provenance import get_commit_short, iso8601_utc_now
 
 _logger = logging.getLogger(__name__)
@@ -81,7 +86,6 @@ _logger = logging.getLogger(__name__)
 @cache_dir_option
 @force_refresh_option
 @dem_version_option
-@dem_path_option
 @osm_age_warn_days_option
 def cli(
     *,
@@ -93,33 +97,21 @@ def cli(
     cache_dir: pathlib.Path | None,
     force_refresh: bool,
     dem_version: str | None,
-    dem_path: pathlib.Path | None,
     osm_age_warn_days: int,
 ) -> int:
     configure_cli_logging(verbose=verbose)
 
-    if dem_path is None:
-        raise BadCLIArgError(
-            "--dem-path is required for steeproute-setup.",
-            detail="Provide a path to a local DEM GeoTIFF, e.g. --dem-path /data/grenoble.tif",
-        )
     # Numeric radius check first (pure arithmetic, no I/O) so a typo like
-    # `--radius 5000` is rejected with the most relevant error even if other
-    # arguments would also fail.
+    # `--radius 5000` is rejected before any cache or network work.
     validate_setup_radius(radius)
-    # File-existence check at the CLI boundary (the orchestrator repeats it, but
-    # the CLI does it earlier so `_derive_dem_version` can `stat()` safely).
-    if not dem_path.is_file():
-        raise BadCLIArgError(
-            f"--dem-path {dem_path} does not exist or is not a regular file.",
-            detail="Provide a path to a local DEM GeoTIFF readable by rasterio.",
-        )
 
     area = Area(center=center, radius_km=radius)
-    config = PipelineConfig(untagged_policy=untagged_trails, dem_path=dem_path)
     cache_root = resolve_cache_root(cache_dir)
 
-    resolved_dem_version = dem_version if dem_version is not None else _derive_dem_version(dem_path)
+    # The DEM is auto-downloaded for the area on a cache miss; `dem_version` is a
+    # stable IGN-layer tag (or the user's `--dem-version` override), so it's
+    # available for the cache key without touching the file.
+    resolved_dem_version = dem_version if dem_version is not None else DEFAULT_DEM_VERSION
     pipeline_content_hash = compute_pipeline_content_hash()
     cache_key = compute_cache_key(
         area=area,
@@ -162,6 +154,16 @@ def cli(
             )
 
     if not cache_hit:
+        # Auto-download the DEM for the area (cached + reused under the cache
+        # root). `--force-refresh` re-fetches it so a forced rebuild gets fresh
+        # elevation data, not a stale cached raster.
+        dem_path = resolve_dem(
+            area,
+            cache_root,
+            dem_version=resolved_dem_version,
+            force_refresh=force_refresh,
+        )
+        config = PipelineConfig(untagged_policy=untagged_trails, dem_path=dem_path)
         graph = run_setup_stages(area, config)
         now = iso8601_utc_now()
         manifest = Manifest(
@@ -187,31 +189,6 @@ def cli(
         quiet=quiet,
     )
     return 0
-
-
-def _derive_dem_version(dem_path: pathlib.Path) -> str:
-    """Derive a stable `dem_version` tag from DEM file metadata.
-
-    Architecture §Cat 4b allows either `--dem-version` (user-supplied tag) or
-    a derivation from file metadata. We use `<canonical-filename>-<size>-<mtime_ns>`:
-    a real DEM update (different release dropped on disk) changes at least one of
-    those three, so the cache key shifts; minor unrelated touches (e.g. a `chmod`)
-    leave the string stable.
-
-    `dem_path.resolve().name` canonicalizes the filename case on Windows (NTFS is
-    case-insensitive — `Grenoble.TIF` and `grenoble.tif` reference the same file
-    and must hash to the same `dem_version`). `stat.st_mtime_ns` preserves
-    nanosecond precision so two writes within the same wall-clock second don't
-    collide (a corner case mostly visible in tests doing `shutil.copyfile` in
-    tight loops, but cheap to defend against).
-
-    Hashing DEM bytes was rejected: production DEMs are multi-GB, and we'd pay
-    that I/O on every `steeproute-setup` invocation just to verify the cache
-    key — `--dem-version` is the user-supplied opt-in when content-identity
-    matters more than the surface metadata.
-    """
-    stat = dem_path.stat()
-    return f"{dem_path.resolve().name}-{stat.st_size}-{stat.st_mtime_ns}"
 
 
 def _resolve_package_version() -> str:

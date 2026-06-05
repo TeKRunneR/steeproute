@@ -59,6 +59,15 @@ def _osm_load_from_fixture(_area: Area) -> nx.MultiDiGraph:
     return normalize_edges(osmnx.load_graphml(_OSM_FIXTURE_PATH))
 
 
+def _resolve_dem_from_fixture(
+    _area: Area,
+    _cache_root: pathlib.Path,
+    **_kwargs: object,
+) -> pathlib.Path:
+    """Drop-in for `cli.setup.resolve_dem` returning the committed DEM fixture (offline)."""
+    return _DEM_FIXTURE_PATH
+
+
 @pytest.fixture(autouse=True)
 def reset_verbose_flag() -> Iterator[None]:
     """Mirror of `tests/unit/conftest.py`'s autouse reset.
@@ -78,11 +87,11 @@ def reset_verbose_flag() -> Iterator[None]:
 def seeded_cache(tmp_path: pathlib.Path) -> pathlib.Path:
     """Seed a real fixture cache entry in-process; return the cache root.
 
-    Runs the `steeproute-setup` CLI through `CliRunner` with `pipeline.osm_load`
-    patched to the committed graphml (offline). A real `uv run steeproute-setup`
-    subprocess can't be patched and would hit Overpass, so seeding stays
-    in-process — exactly the pattern `test_coverage_check.py` uses. Skips when
-    the OSM/DEM fixtures aren't committed.
+    Runs the `steeproute-setup` CLI through `CliRunner` with both `pipeline.osm_load`
+    and `cli.setup.resolve_dem` patched to the committed fixtures (offline). A real
+    `uv run steeproute-setup` subprocess can't be patched and would hit Overpass +
+    the IGN WMS, so seeding stays in-process — exactly the pattern
+    `test_coverage_check.py` uses. Skips when the OSM/DEM fixtures aren't committed.
     """
     from unittest.mock import patch
 
@@ -95,12 +104,13 @@ def seeded_cache(tmp_path: pathlib.Path) -> pathlib.Path:
         f"{_CENTER_LAT},{_CENTER_LON}",
         "--radius",
         f"{FIXTURE_SEED_RADIUS_KM}",
-        "--dem-path",
-        str(_DEM_FIXTURE_PATH),
         "--cache-dir",
         str(tmp_path),
     ]
-    with patch("steeproute.pipeline.osm_load", _osm_load_from_fixture):
+    with (
+        patch("steeproute.pipeline.osm_load", _osm_load_from_fixture),
+        patch("steeproute.cli.setup.resolve_dem", _resolve_dem_from_fixture),
+    ):
         result = runner.invoke(setup_cli, args, catch_exceptions=False)
     assert result.exit_code == 0, result.output
     return tmp_path

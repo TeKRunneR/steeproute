@@ -840,11 +840,13 @@ dependencies = [
     { name = "click" },
     { name = "jinja2" },
     { name = "networkx" },
+    { name = "numpy" },
     { name = "osmnx" },
     { name = "platformdirs" },
     { name = "rasterio" },
     { name = "requests" },
     { name = "shapely" },
+    { name = "truststore" },
 ]
 
 [package.dev-dependencies]
@@ -858,7 +860,6 @@ dev = [
     { name = "pytest-sugar" },
     { name = "rich" },
     { name = "ruff" },
-    { name = "truststore" },
 ]
 
 [package.metadata]
@@ -866,11 +867,13 @@ requires-dist = [
     { name = "click", specifier = ">=8,<9" },
     { name = "jinja2", specifier = ">=3,<4" },
     { name = "networkx", specifier = ">=3.4,<4" },
+    { name = "numpy", specifier = ">=1.26,<3" },
     { name = "osmnx", specifier = ">=2.0,<3" },
     { name = "platformdirs", specifier = ">=4,<5" },
     { name = "rasterio", specifier = ">=1.4,<2" },
     { name = "requests", specifier = ">=2,<3" },
     { name = "shapely", specifier = ">=2.0,<3" },
+    { name = "truststore", specifier = ">=0.10.4" },
 ]
 
 [package.metadata.requires-dev]
@@ -884,7 +887,6 @@ dev = [
     { name = "pytest-sugar", specifier = ">=1.1.1" },
     { name = "rich", specifier = ">=14.3.2" },
     { name = "ruff", specifier = ">=0.15.1" },
-    { name = "truststore", specifier = ">=0.10.4" },
 ]
 
 [[package]]

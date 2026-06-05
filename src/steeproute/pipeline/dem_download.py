@@ -1,0 +1,346 @@
+# pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
+# Reason: rasterio surfaces DatasetReader / profile dicts as Unknown; same
+# external-boundary pattern as pipeline/dem.py. Architecture §Type hints lists
+# DEM ingestion as the external boundary that warrants relaxation.
+"""Auto-download the DEM raster for an area from the IGN Géoplateforme WMS.
+
+Productionizes the mechanism the committed fixture's `regenerate_dem.py` proved:
+fetch IGN RGE ALTI HIGHRES (5 m native) over the public, key-less Géoplateforme
+WMS as raw IEEE-754 float32 (`image/x-bil;bits=32`), and write a single-band
+float32 GeoTIFF in WGS84 (EPSG:4326).
+
+`resolve_dem(area, cache_root)` is the entry point. It covers the OSM bbox plus
+a padding ring (so the strict-bounds `sample_elevation` never trips on osmnx
+simplification overshoot), tiles the request so any area up to the setup radius
+ceiling stays at native 5 m, mosaics the tiles, and caches the result per-area
+under `<cache-root>/steeproute/dem/`. A cached raster is reused unless
+`force_refresh` is set. Every network / payload failure maps to
+`DataSourceUnavailableError("DEM source unreachable.", …)` so `run_entry_point`
+surfaces it as exit 2 with the same wording as the existing DEM-open failure
+path (NFR6, Architecture §Cat 10).
+
+TLS routes through the OS trust store via `truststore` (same as the fixture
+script) so it works behind corporate TLS-intercepting proxies whose root CA is
+in the OS store but not in `certifi`'s vendored bundle.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+import math
+import os
+import pathlib
+import urllib.error
+import urllib.parse
+from collections.abc import Iterator
+from urllib.request import Request, urlopen
+
+import numpy as np
+import rasterio
+import truststore
+from rasterio.transform import from_bounds
+
+from steeproute.cache import dem_cache_path_for
+from steeproute.errors import DataSourceUnavailableError
+from steeproute.models import Area
+
+_logger = logging.getLogger(__name__)
+
+# IGN Géoplateforme WMS — public RGE ALTI HIGHRES (5 m native). Endpoint, layer,
+# and BIL format are kept identical to the committed fixture's `regenerate_dem.py`.
+_WMS_URL: str = "https://data.geopf.fr/wms-r/wms"
+_LAYER: str = "ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES"
+_WMS_VERSION: str = "1.3.0"
+# IGN serves float altimetry as raw little-endian IEEE-754 over `image/x-bil`
+# (byte order verified empirically by the fixture script against known elevations).
+_BIL_FORMAT: str = "image/x-bil;bits=32"
+_BIL_DTYPE: str = "<f4"  # little-endian float32
+_USER_AGENT: str = "steeproute/0.1 (DEM auto-download)"
+_HTTP_TIMEOUT_S: int = 120
+
+# Stable cache-key tag for the IGN RGE ALTI HIGHRES dataset, recorded as the
+# manifest `dem_version` when the user doesn't pass `--dem-version`. The source
+# is a fixed dataset+extent for a given area, so a constant tag is correct;
+# a real IGN release bump is handled by `--force-refresh` or an explicit
+# `--dem-version` (Architecture §Cat 4b).
+DEFAULT_DEM_VERSION: str = "ign-rgealti-highres"
+
+# Target ground resolution in meters/pixel. RGE ALTI HIGHRES is 5 m native.
+_TARGET_RES_M: float = 5.0
+
+# Padding ring (m) added around the OSM bbox half-side, so the DEM fully covers
+# trail vertices that osmnx simplification can push slightly past the fetch bbox
+# — `sample_elevation` is strict-bounds-fail-fast. Mirrors the fixture's 100 m.
+_PADDING_M: float = 100.0
+
+# Max pixels per WMS GetMap tile dimension. A single IGN request is capped; 2048
+# stays well under it and keeps each tile's BIL payload ~16 MB. Larger areas are
+# split into a grid of tiles and mosaicked, preserving native 5 m.
+_MAX_TILE_PX: int = 2048
+
+# Mean-earth meters-per-degree-latitude. Deliberately matches osmnx's spherical
+# earth model (`EARTH_RADIUS_M = 6_371_009` → 2π·R/360 ≈ 111_194.93 m/deg) rather
+# than the WGS84-equatorial 111_320, so the DEM bbox is computed on the SAME model
+# `osm_load` uses for its `dist_type="bbox"` fetch. With a matched constant the
+# `_PADDING_M` ring is a true ~100 m margin over the OSM bbox at every radius
+# (using 111_320 eroded it to ~44 m at the 50 km ceiling — review finding).
+# Longitude degrees scale by cos(lat); computed from the area center so the bbox
+# is correct away from the fixture's specific 45.26° N.
+_M_PER_DEG_LAT: float = 111_194.93
+
+# Hash truncation for the per-area DEM cache filename — same 16-hex / 64-bit
+# rationale as `cache._CACHE_KEY_HEX_LEN`.
+_DEM_KEY_HEX_LEN: int = 16
+# Coordinate rounding before hashing the cache key, so float-print noise on the
+# computed bbox doesn't produce phantom cache misses. ~11 cm at 6 decimals.
+_BBOX_DECIMALS: int = 6
+
+
+def resolve_dem(
+    area: Area,
+    cache_root: pathlib.Path,
+    *,
+    dem_version: str = DEFAULT_DEM_VERSION,
+    force_refresh: bool = False,
+) -> pathlib.Path:
+    """Return a local DEM GeoTIFF covering `area`, downloading + caching if absent.
+
+    Args:
+        area: search area (`center` is `(lat, lon)`, `radius_km` is the bbox
+            half-side). The DEM covers this bbox plus `_PADDING_M` on each side.
+        cache_root: cache root from `cache.resolve_cache_root` (honors `--cache-dir`).
+        dem_version: DEM release tag. Folded into the raster cache key so a changed
+            `--dem-version` (e.g. after an IGN dataset bump) re-downloads rather than
+            relabelling stale bytes — keeping the manifest's `dem_version` honest.
+        force_refresh: re-download even when a cached raster exists.
+
+    Returns:
+        Path to a single-band float32 WGS84 GeoTIFF readable by `sample_elevation`.
+
+    Raises:
+        DataSourceUnavailableError: the IGN WMS is unreachable, times out, returns
+            an HTTP error, or returns an unexpected / non-BIL payload.
+    """
+    west, south, east, north = _padded_bbox(area)
+    width, height = _grid_dims(west, south, east, north, area.center[0])
+    dem_key = _dem_cache_key(west, south, east, north, width, height, dem_version)
+    path = dem_cache_path_for(cache_root, dem_key)
+
+    if path.is_file() and not force_refresh:
+        _logger.debug("DEM cache hit for area %s: %s", area.center, path)
+        return path
+
+    _logger.debug(
+        "DEM cache miss for area %s; fetching %dx%d px from IGN WMS.",
+        area.center,
+        width,
+        height,
+    )
+    arr = _fetch_mosaic(west, south, east, north, width, height)
+    _write_geotiff_atomic(path, arr, west, south, east, north)
+    return path
+
+
+def _padded_bbox(area: Area) -> tuple[float, float, float, float]:
+    """Return `(west, south, east, north)` in WGS84 degrees covering area + padding."""
+    lat, lon = area.center
+    half_side_m = area.radius_km * 1000.0 + _PADDING_M
+    half_lat_deg = half_side_m / _M_PER_DEG_LAT
+    m_per_deg_lon = _M_PER_DEG_LAT * math.cos(math.radians(lat))
+    half_lon_deg = half_side_m / m_per_deg_lon
+    return (lon - half_lon_deg, lat - half_lat_deg, lon + half_lon_deg, lat + half_lat_deg)
+
+
+def _grid_dims(
+    west: float,
+    south: float,
+    east: float,
+    north: float,
+    center_lat: float,
+) -> tuple[int, int]:
+    """Pixel `(width, height)` for the bbox at ~`_TARGET_RES_M` ground resolution."""
+    m_per_deg_lon = _M_PER_DEG_LAT * math.cos(math.radians(center_lat))
+    width_m = (east - west) * m_per_deg_lon
+    height_m = (north - south) * _M_PER_DEG_LAT
+    width = max(1, round(width_m / _TARGET_RES_M))
+    height = max(1, round(height_m / _TARGET_RES_M))
+    return width, height
+
+
+def _dem_cache_key(
+    west: float,
+    south: float,
+    east: float,
+    north: float,
+    width: int,
+    height: int,
+    dem_version: str,
+) -> str:
+    """Stable 16-hex key over the bbox, grid, layer, format, and DEM version.
+
+    Includes the layer + format so a future source/format change never reuses a
+    raster fetched under the old one, and `dem_version` so a changed `--dem-version`
+    forces a fresh download instead of reusing the previously cached raster.
+    """
+    parts = (
+        f"{round(west, _BBOX_DECIMALS)}",
+        f"{round(south, _BBOX_DECIMALS)}",
+        f"{round(east, _BBOX_DECIMALS)}",
+        f"{round(north, _BBOX_DECIMALS)}",
+        str(width),
+        str(height),
+        _LAYER,
+        _BIL_FORMAT,
+        dem_version,
+    )
+    digest = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+    return digest[:_DEM_KEY_HEX_LEN]
+
+
+def _tile_ranges(n: int) -> Iterator[tuple[int, int]]:
+    """Yield `(start, end)` pixel blocks of at most `_MAX_TILE_PX` covering `[0, n)`."""
+    i = 0
+    while i < n:
+        j = min(i + _MAX_TILE_PX, n)
+        yield i, j
+        i = j
+
+
+def _fetch_mosaic(
+    west: float,
+    south: float,
+    east: float,
+    north: float,
+    width: int,
+    height: int,
+) -> np.ndarray:
+    """Fetch the DEM as one or more WMS tiles and stitch into a single float32 array.
+
+    Row 0 of the returned array is the north edge (WMS GetMap origin), matching
+    rasterio's top-left raster origin so the later `from_bounds` transform is correct.
+    """
+    truststore.inject_into_ssl()
+    arr = np.empty((height, width), dtype=_BIL_DTYPE)
+    for y0, y1 in _tile_ranges(height):
+        for x0, x1 in _tile_ranges(width):
+            tile_w = x1 - x0
+            tile_h = y1 - y0
+            # Linearly interpolate this tile's sub-bbox over the full bbox.
+            # x grows west→east; y (row index) grows north→south.
+            t_west = west + (east - west) * (x0 / width)
+            t_east = west + (east - west) * (x1 / width)
+            t_north = north - (north - south) * (y0 / height)
+            t_south = north - (north - south) * (y1 / height)
+            body = _wms_get_bil(t_west, t_south, t_east, t_north, tile_w, tile_h)
+            expected = tile_w * tile_h * 4
+            if len(body) != expected:
+                raise DataSourceUnavailableError(
+                    "DEM source unreachable.",
+                    detail=(
+                        f"IGN WMS returned {len(body)} bytes for a {tile_w}x{tile_h} "
+                        f"float32 tile (expected {expected}). The endpoint may be "
+                        f"returning an error document instead of BIL data."
+                    ),
+                )
+            tile = np.frombuffer(body, dtype=_BIL_DTYPE).reshape((tile_h, tile_w))
+            arr[y0:y1, x0:x1] = tile
+    return arr
+
+
+def _wms_get_bil(
+    west: float,
+    south: float,
+    east: float,
+    north: float,
+    width: int,
+    height: int,
+) -> bytes:
+    """Issue one WMS 1.3.0 GetMap for the bbox and return the raw BIL response body.
+
+    `crs=CRS:84` selects WGS84 lon/lat axis order, so the bbox is `west,south,
+    east,north` (EPSG:4326 under WMS 1.3.0 would be lat-first). Mirrors the
+    committed fixture script's request shape exactly.
+    """
+    params = {
+        "service": "WMS",
+        "version": _WMS_VERSION,
+        "request": "GetMap",
+        "layers": _LAYER,
+        "styles": "",
+        "crs": "CRS:84",
+        "bbox": f"{west},{south},{east},{north}",
+        "width": width,
+        "height": height,
+        "format": _BIL_FORMAT,
+    }
+    url = f"{_WMS_URL}?{urllib.parse.urlencode(params)}"
+    req = Request(url, headers={"User-Agent": _USER_AGENT})
+    try:
+        with urlopen(req, timeout=_HTTP_TIMEOUT_S) as resp:
+            content_type = resp.headers.get_content_type()
+            body = resp.read()
+    except (urllib.error.URLError, OSError) as exc:
+        # `URLError` is the base of urllib's network failures (`HTTPError`,
+        # connection refused, DNS, TLS); `OSError` covers low-level socket /
+        # timeout cases. Both map to the source-unavailable tier per Cat 10.
+        raise DataSourceUnavailableError(
+            "DEM source unreachable.",
+            detail=f"IGN WMS GetMap failed: {exc!r}",
+        ) from exc
+    # WMS reports failures as a 200-OK `ServiceExceptionReport` (XML), and proxies
+    # can interpose HTML/text error pages — any of which could coincidentally match
+    # the expected BIL byte count and be decoded as garbage elevations. Reject any
+    # textual content type up front; real BIL is a binary type (image/x-bil or
+    # application/octet-stream).
+    if any(token in content_type for token in ("xml", "html", "json", "text")):
+        raise DataSourceUnavailableError(
+            "DEM source unreachable.",
+            detail=(
+                f"IGN WMS returned a {content_type!r} document instead of BIL data "
+                f"(first 200 bytes: {body[:200]!r})."
+            ),
+        )
+    return body
+
+
+def _write_geotiff_atomic(
+    path: pathlib.Path,
+    arr: np.ndarray,
+    west: float,
+    south: float,
+    east: float,
+    north: float,
+) -> None:
+    """Write `arr` as a single-band float32 WGS84 GeoTIFF at `path`, atomically.
+
+    `.tmp` sibling + `os.replace` so a Ctrl-C mid-write never leaves a partial
+    raster the next run would treat as a cache hit (same pattern as
+    `cache.write_text_atomic`).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    height, width = arr.shape
+    transform = from_bounds(
+        west=west, south=south, east=east, north=north, width=width, height=height
+    )
+    profile = {
+        "driver": "GTiff",
+        "height": height,
+        "width": width,
+        "count": 1,
+        "dtype": "float32",
+        "crs": "EPSG:4326",
+        "transform": transform,
+        "nodata": None,
+        "compress": "deflate",
+        "predictor": 3,  # float predictor; roughly halves deflate output for float rasters.
+        "tiled": True,
+    }
+    tmp_path = path.with_name(path.name + ".tmp")
+    try:
+        with rasterio.open(tmp_path, "w", **profile) as dst:
+            dst.write(arr, 1)
+        os.replace(tmp_path, path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise

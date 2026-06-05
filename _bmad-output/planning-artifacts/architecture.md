@@ -297,7 +297,7 @@ Structured stage inputs/outputs (beyond simple tuples) use dataclasses declared 
 |---|---|---|
 | Area bounds (canonicalized) | user: `--center/--radius` | Different area → different entry |
 | Untagged-trails-policy | user: `--untagged-trails` | Different policy → different graph |
-| DEM version tag | user: `--dem-version` or derived from DEM file metadata | Different DEM release → different elevations |
+| DEM version tag | user: `--dem-version` or a stable IGN-layer default tag (DEM is auto-downloaded) | Different DEM release → different elevations |
 | Pipeline source content hash | SHA256 of `src/steeproute/pipeline/**/*.py` + `src/steeproute/models.py` | Pipeline code change → effectively invalidates all entries |
 
 One SHA256 over canonical JSON of the above → the entry's `<cache-key-hash>`.
@@ -864,7 +864,7 @@ steeproute/                              # repo root (currently `bmad-test/`; re
 
 - **Cache root**: `platformdirs.user_cache_dir("steeproute")` — e.g. `%LOCALAPPDATA%\steeproute\Cache\` on Windows. Overridable via `--cache-dir`.
 - **Output dir**: user's `--output-dir`, default `./results/`.
-- **DEM files**: user-provided via `--dem-path` to `steeproute-setup`; not checked into the repo.
+- **DEM files**: auto-downloaded by `steeproute-setup` from the IGN Géoplateforme WMS (RGE ALTI HIGHRES) for the requested area, cached under `<cache-root>/steeproute/dem/`; not checked into the repo. No `--dem-path` flag — DEM acquisition mirrors the live OSM fetch.
 
 ### Template files retained vs. dropped
 
@@ -935,7 +935,7 @@ cli/setup.py::main
   → cli/setup.py (summary)
 ```
 
-**External data sources** (setup CLI only): OSM via `osmnx`/Overpass; DEM from user-provided local path. No external runtime I/O in the query CLI.
+**External data sources** (setup CLI only): OSM via `osmnx`/Overpass; DEM auto-downloaded from the IGN Géoplateforme WMS (`pipeline/dem_download.py`). No external runtime I/O in the query CLI.
 
 ### Boundaries
 
@@ -1095,8 +1095,7 @@ Architecture introduced CLI flags not enumerated in the PRD, fulfilling architec
 | `--cache-dir PATH` | Cat 7 | Override cache root (useful for tests) |
 | `--force-refresh` | Cat 4b | Rebuild cache entry despite key match |
 | `--osm-age-warn-days N` | Cat 4f | OSM-staleness warning threshold |
-| `--dem-version TAG` | Cat 4b | Explicit DEM version tag for cache keying |
-| `--dem-path PATH` | Cat 3 / Step 6 | DEM files location for `steeproute-setup` |
+| `--dem-version TAG` | Cat 4b | Explicit DEM version tag for cache keying (overrides the IGN-layer default) |
 
 Total flag surface after additions ~22–25 across both CLIs — still below the PRD's threshold of ~25 for reconsidering a config file.
 

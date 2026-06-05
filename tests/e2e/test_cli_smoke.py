@@ -50,7 +50,6 @@ SETUP_FLAGS = [
     "--cache-dir",
     "--force-refresh",
     "--dem-version",
-    "--dem-path",
     "--osm-age-warn-days",
     "--version",
     "--help",
@@ -172,12 +171,19 @@ def test_query_negative_min_climb_slope_exits_2() -> None:
     assert "--min-climb-slope" in result.stderr
 
 
-def test_setup_missing_dem_path_exits_2() -> None:
-    """Story 2.8: `--dem-path` is now required at the setup CLI boundary."""
-    result = _run_cli("steeproute-setup", "--center", "45.0716,6.1079", "--radius", "10")
+def test_setup_dem_path_flag_removed() -> None:
+    """The DEM is auto-downloaded: `--dem-path` is no longer a recognized option."""
+    result = _run_cli(
+        "steeproute-setup",
+        "--center",
+        "45.0716,6.1079",
+        "--radius",
+        "10",
+        "--dem-path",
+        "anything.tif",
+    )
     assert result.returncode == 2, result.stderr
-    assert result.stderr.startswith("error:")
-    assert "--dem-path" in result.stderr
+    assert "no such option" in result.stderr.lower()
 
 
 def test_setup_radius_above_ceiling_exits_2() -> None:
@@ -188,8 +194,6 @@ def test_setup_radius_above_ceiling_exits_2() -> None:
         "45.0716,6.1079",
         "--radius",
         "5000",
-        "--dem-path",
-        "doesnotmatter.tif",
     )
     assert result.returncode == 2, result.stderr
     assert result.stderr.startswith("error:")

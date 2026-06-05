@@ -3,10 +3,12 @@
 # `reportUnusedFunction` relaxed for the `_skip_if_fixtures_missing` autouse fixture.
 """End-to-end coverage for `steeproute-setup` (Story 2.8).
 
-Tests exercise the click command in-process via `CliRunner` with `pipeline.osm_load`
-patched to read the committed Grenoble fixture — the same offline pattern Stories 2.5
-and 2.7 use. Subprocess-style smoke tests live in `test_cli_smoke.py`; this file is
-about the full hit / miss / `--force-refresh` flow and the on-disk cache layout.
+Tests exercise the click command in-process via `CliRunner` with both
+`pipeline.osm_load` and `cli.setup.resolve_dem` patched to read the committed
+Grenoble fixture — the same offline pattern Stories 2.5 and 2.7 use, extended so
+the DEM auto-download never touches the network. Subprocess-style smoke tests
+live in `test_cli_smoke.py`; this file is about the full hit / miss /
+`--force-refresh` flow and the on-disk cache layout.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ import importlib.util
 import json
 import pathlib
 import re
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import networkx as nx
 import osmnx
@@ -24,6 +26,7 @@ from click.testing import CliRunner, Result
 
 from steeproute.cli.setup import cli as setup_cli
 from steeproute.models import Area
+from steeproute.pipeline.dem_download import DEFAULT_DEM_VERSION
 from steeproute.pipeline.osm import normalize_edges
 
 _FIXTURE_DIR = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "grenoble_small"
@@ -59,6 +62,20 @@ def _osm_load_from_fixture(_area: Area) -> nx.MultiDiGraph:
     return normalize_edges(osmnx.load_graphml(_OSM_FIXTURE_PATH))
 
 
+def _resolve_dem_from_fixture(
+    _area: Area,
+    _cache_root: pathlib.Path,
+    **_kwargs: object,
+) -> pathlib.Path:
+    """Drop-in for `cli.setup.resolve_dem` that returns the committed DEM fixture.
+
+    Keeps the cache-miss pipeline fully offline — no IGN WMS request — while
+    preserving the resolved-local-path contract the orchestrator depends on.
+    `**_kwargs` absorbs `dem_version` / `force_refresh`.
+    """
+    return _DEM_FIXTURE_PATH
+
+
 @pytest.fixture(autouse=True)
 def _skip_if_fixtures_missing() -> None:
     if not _DEM_FIXTURE_PATH.exists() or not _OSM_FIXTURE_PATH.exists():
@@ -68,15 +85,15 @@ def _skip_if_fixtures_missing() -> None:
 def _invoke_setup(
     cache_dir: pathlib.Path,
     *extra_args: str,
-    patch_osm: bool = True,
+    patch_pipeline: bool = True,
 ) -> Result:
     """Run `setup_cli` in-process against the fixture; returns the CliRunner Result.
 
-    `patch_osm=True` (default) wraps the call in `unittest.mock.patch` so cache
-    misses can run the full pipeline offline. `patch_osm=False` skips the patch
-    so cache-hit tests can prove the hit branch never reaches `osm_load` — a
-    regression where the hit path silently re-fetches OSM would raise here
-    rather than silently succeeding under the patch.
+    `patch_pipeline=True` (default) patches both `osm_load` and `resolve_dem` so
+    cache misses run the full pipeline offline. `patch_pipeline=False` skips both
+    patches so cache-hit tests can prove the hit branch never re-fetches OSM or
+    re-downloads the DEM — a regression where the hit path reached either would
+    attempt real network I/O and raise here rather than silently passing.
     """
     runner = CliRunner()
     args = [
@@ -84,14 +101,15 @@ def _invoke_setup(
         _CENTER_FLAG,
         "--radius",
         _RADIUS_FLAG,
-        "--dem-path",
-        str(_DEM_FIXTURE_PATH),
         "--cache-dir",
         str(cache_dir),
         *extra_args,
     ]
-    if patch_osm:
-        with patch("steeproute.pipeline.osm_load", _osm_load_from_fixture):
+    if patch_pipeline:
+        with (
+            patch("steeproute.pipeline.osm_load", _osm_load_from_fixture),
+            patch("steeproute.cli.setup.resolve_dem", _resolve_dem_from_fixture),
+        ):
             return runner.invoke(setup_cli, args, catch_exceptions=False)
     return runner.invoke(setup_cli, args, catch_exceptions=False)
 
@@ -135,9 +153,9 @@ def test_setup_first_run_writes_manifest_with_complete_provenance(
     # Schema + the four key-inducing fields the CLI populated.
     assert payload["schema_version"] == 1
     assert payload["untagged_policy"] == "include"
-    # `dem_version` was derived from DEM metadata (no `--dem-version` flag): it
-    # starts with the DEM filename.
-    assert payload["dem_version"].startswith(_DEM_FIXTURE_PATH.name)
+    # With no `--dem-version` flag, `dem_version` is the stable IGN-layer default
+    # tag (the DEM is auto-downloaded, not user-supplied).
+    assert payload["dem_version"] == DEFAULT_DEM_VERSION
     assert payload["pipeline_content_hash"]
     assert payload["cache_key_hash"] == entry.name
     # Provenance: `steeproute_version` is the installed package version (or
@@ -177,17 +195,17 @@ def test_setup_graph_edge_count_within_story_2_5_baseline(tmp_path: pathlib.Path
 def test_setup_second_run_same_flags_is_cache_hit(tmp_path: pathlib.Path) -> None:
     """AC #4: re-invocation hits the cache and never re-enters `osm_load`.
 
-    Pre-seed once with the `osm_load` patch active so the miss path runs offline;
-    the second invocation runs **without** the patch. If the hit-path regressed
-    and called `osm_load`, the second invocation would attempt a real Overpass
-    fetch and (in CI without network) raise — proving the hit-path is
-    OSM-independent. Per spec Dev Notes for AC #4.
+    Pre-seed once with the pipeline patches active so the miss path runs offline;
+    the second invocation runs **without** the patches. If the hit-path regressed
+    and called `osm_load` or `resolve_dem`, the second invocation would attempt
+    real network I/O and (in CI without network) raise — proving the hit-path is
+    both OSM- and DEM-independent.
     """
-    first = _invoke_setup(tmp_path, patch_osm=True)
+    first = _invoke_setup(tmp_path, patch_pipeline=True)
     assert first.exit_code == 0
     assert "cache-miss" in first.output
 
-    second = _invoke_setup(tmp_path, patch_osm=False)
+    second = _invoke_setup(tmp_path, patch_pipeline=False)
     assert second.exit_code == 0, second.output
     assert "cache-hit" in second.output
     assert "cache-miss" not in second.output
@@ -259,22 +277,47 @@ def test_setup_index_lists_all_written_entries(tmp_path: pathlib.Path) -> None:
     assert len(index_payload["entries"]) == 2
 
 
-def test_setup_missing_dem_path_raises_bad_cli_arg_error(tmp_path: pathlib.Path) -> None:
-    """AC #1: omitting `--dem-path` raises `BadCLIArgError` before any pipeline work runs."""
-    from steeproute.errors import BadCLIArgError
+def test_setup_cache_miss_auto_downloads_dem_for_area(tmp_path: pathlib.Path) -> None:
+    """The cache-miss branch resolves the DEM via auto-download (no `--dem-path` flag).
 
+    `resolve_dem` is called exactly once, with the requested area and
+    `force_refresh=False`, and its returned path feeds the pipeline.
+    """
+    dem_mock = Mock(return_value=_DEM_FIXTURE_PATH)
     runner = CliRunner()
-    result = runner.invoke(
-        setup_cli,
-        [
-            "--center",
-            _CENTER_FLAG,
-            "--radius",
-            _RADIUS_FLAG,
-            "--cache-dir",
-            str(tmp_path),
-        ],
-        catch_exceptions=True,
-    )
-    assert isinstance(result.exception, BadCLIArgError)
-    assert "--dem-path" in result.exception.user_message
+    args = ["--center", _CENTER_FLAG, "--radius", _RADIUS_FLAG, "--cache-dir", str(tmp_path)]
+    with (
+        patch("steeproute.pipeline.osm_load", _osm_load_from_fixture),
+        patch("steeproute.cli.setup.resolve_dem", dem_mock),
+    ):
+        result = runner.invoke(setup_cli, args, catch_exceptions=False)
+
+    assert result.exit_code == 0, result.output
+    assert "cache-miss" in result.output
+    dem_mock.assert_called_once()
+    call = dem_mock.call_args
+    assert call.args[0] == Area(center=(_CENTER_LAT, _CENTER_LON), radius_km=_RADIUS_KM)
+    assert call.kwargs["force_refresh"] is False
+
+
+def test_setup_force_refresh_redownloads_dem(tmp_path: pathlib.Path) -> None:
+    """`--force-refresh` re-resolves the DEM with `force_refresh=True` so it re-downloads."""
+    dem_mock = Mock(return_value=_DEM_FIXTURE_PATH)
+    runner = CliRunner()
+    args = [
+        "--center",
+        _CENTER_FLAG,
+        "--radius",
+        _RADIUS_FLAG,
+        "--cache-dir",
+        str(tmp_path),
+        "--force-refresh",
+    ]
+    with (
+        patch("steeproute.pipeline.osm_load", _osm_load_from_fixture),
+        patch("steeproute.cli.setup.resolve_dem", dem_mock),
+    ):
+        result = runner.invoke(setup_cli, args, catch_exceptions=False)
+
+    assert result.exit_code == 0, result.output
+    assert dem_mock.call_args.kwargs["force_refresh"] is True

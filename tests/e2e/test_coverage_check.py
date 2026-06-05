@@ -71,6 +71,15 @@ def _osm_load_from_fixture(_area: Area) -> nx.MultiDiGraph:
     return normalize_edges(osmnx.load_graphml(_OSM_FIXTURE_PATH))
 
 
+def _resolve_dem_from_fixture(
+    _area: Area,
+    _cache_root: pathlib.Path,
+    **_kwargs: object,
+) -> pathlib.Path:
+    """Drop-in for `cli.setup.resolve_dem` returning the committed DEM fixture (offline)."""
+    return _DEM_FIXTURE_PATH
+
+
 @pytest.fixture(autouse=True)
 def _skip_if_fixtures_missing() -> None:
     if not _FIXTURES_LOADED or not _DEM_FIXTURE_PATH.exists() or not _OSM_FIXTURE_PATH.exists():
@@ -93,12 +102,13 @@ def _seed_setup(
         f"{lat},{lon}",
         "--radius",
         f"{radius}",
-        "--dem-path",
-        str(_DEM_FIXTURE_PATH),
         "--cache-dir",
         str(cache_dir),
     ]
-    with patch("steeproute.pipeline.osm_load", _osm_load_from_fixture):
+    with (
+        patch("steeproute.pipeline.osm_load", _osm_load_from_fixture),
+        patch("steeproute.cli.setup.resolve_dem", _resolve_dem_from_fixture),
+    ):
         return runner.invoke(setup_cli, args, catch_exceptions=False)
 
 
@@ -190,7 +200,8 @@ def test_query_no_prepared_cache_exits_2_with_setup_command(tmp_path: pathlib.Pa
     # directly copy-pasteable.
     assert f"steeproute-setup --center {_CENTER_LAT},{_CENTER_LON}" in stderr
     assert f"--radius {_FIXTURE_RADIUS_KM:g}" in stderr
-    assert "--dem-path" in stderr
+    # DEM is auto-downloaded — the suggested command no longer carries --dem-path.
+    assert "--dem-path" not in stderr
 
 
 # --- AC #7 (b): partial coverage → exit 2 with nearest-area diagnostic -------

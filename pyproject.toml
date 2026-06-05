@@ -48,6 +48,17 @@ dependencies = [
     # transitively, but a direct dep guards against a future osmnx release
     # that swaps in `httpx` / `urllib3` and breaks the transitive guarantee.
     "requests>=2,<3",
+    # `numpy` backs the DEM auto-download mosaic in `pipeline/dem_download.py`
+    # (raw BIL float32 → array → GeoTIFF). rasterio depends on numpy transitively,
+    # but `dem_download` imports it directly, so a direct dep guards the import
+    # against a future rasterio that vendors its own array type (same rationale
+    # as the direct `requests` dep above).
+    "numpy>=1.26,<3",
+    # `truststore` routes TLS through the OS trust store for the IGN WMS DEM
+    # download (`pipeline/dem_download.py`), so auto-download works behind
+    # corporate TLS-intercepting proxies whose root CA is in the OS store but not
+    # in certifi's bundle. Runtime (not dev-only) because it's on the setup path.
+    "truststore>=0.10.4",
     # Jinja2 renders the per-route HTML report (`output.py` + `templates/route.html.j2`,
     # Story 3.10 / Architecture §Cat 9). The vendored Leaflet + Chart.js assets are
     # inlined into the template, so Jinja2 is the only runtime templating dependency.
@@ -67,7 +78,6 @@ dev = [
     "rich>=14.3.2",
     "basedpyright>=1.38.0",
     "funlog>=0.2.1",
-    "truststore>=0.10.4",
     "hypothesis>=6.0",
 ]
 

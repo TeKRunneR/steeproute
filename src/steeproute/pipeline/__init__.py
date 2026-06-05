@@ -114,14 +114,18 @@ def run_setup_stages(area: Area, config: PipelineConfig) -> nx.MultiDiGraph:
             not a regular file (caught at the orchestrator boundary so the
             expensive stages 1-4 do not run on bad input).
     """
-    # Fail-fast on a bad DEM path so we don't waste minutes on OSM + smoothing
-    # stages before discovering at stage 5 that the file isn't there. Click's
-    # `exists=True` only covers the CLI; the orchestrator is also called from
-    # tests and future scripts, so the guard belongs here too.
+    # Fail-fast on a missing DEM so we don't waste minutes on OSM + smoothing
+    # stages before discovering at stage 5 that the file isn't there. In the CLI
+    # flow `cli/setup.py` resolves this path via `resolve_dem` (auto-download), so
+    # a missing file here means a corrupt/evicted cache entry; the orchestrator is
+    # also called from tests and future scripts, so the guard belongs here too.
     if not config.dem_path.is_file():
         raise BadCLIArgError(
-            f"--dem-path {config.dem_path} does not exist or is not a regular file.",
-            detail="Provide a path to a local DEM GeoTIFF readable by rasterio.",
+            f"DEM file {config.dem_path} does not exist or is not a regular file.",
+            detail=(
+                "steeproute-setup auto-downloads the DEM; a missing file here points "
+                "to a corrupt cache — re-run steeproute-setup with --force-refresh."
+            ),
         )
     graph = osm_load(area)
     graph = filter_trails(graph, config.untagged_policy, _SETUP_DIFFICULTY_CAP)

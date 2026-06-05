@@ -40,7 +40,6 @@ SETUP_FLAGS = [
     "--cache-dir",
     "--force-refresh",
     "--dem-version",
-    "--dem-path",
     "--osm-age-warn-days",
     "--version",
     "--help",

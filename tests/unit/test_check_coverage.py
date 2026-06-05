@@ -206,7 +206,8 @@ def test_no_prepared_cache_message_echoes_query_center_and_radius() -> None:
     msg = cache_mod._no_prepared_cache_message(query)
     assert msg.startswith("No prepared cache exists yet.")
     assert "steeproute-setup --center 45.0716,6.1079 --radius 10.5" in msg
-    assert "--dem-path" in msg
+    # The DEM is auto-downloaded now — the suggested command carries no --dem-path.
+    assert "--dem-path" not in msg
 
 
 def test_partial_coverage_message_names_nearest_area_and_suggests_smaller_radius() -> None:
@@ -247,7 +248,7 @@ def test_check_coverage_empty_cache_raises_with_setup_command_suggestion(
     assert exc_info.value.user_message.startswith("No prepared cache exists yet.")
     assert "steeproute-setup --center 45,6" in exc_info.value.user_message
     assert "--radius 1" in exc_info.value.user_message
-    assert "--dem-path" in exc_info.value.user_message
+    assert "--dem-path" not in exc_info.value.user_message
 
 
 def test_check_coverage_single_containing_entry_returns_prepared_data(
