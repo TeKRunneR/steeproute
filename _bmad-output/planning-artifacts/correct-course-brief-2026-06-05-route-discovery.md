@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-05
 **Prototyped on branch:** `spike/junction-aware-climbs` (base `main` @ `4a6e85a`; spike commits `6bf4965`..`643c4d6`)
-**Scope note:** The elevation-**smoothing consistency** issue is deliberately **out of scope** here. It has its own brief on branch `spike/smoothing-consistency` (`correct-course-brief-2026-06-05-elevation-smoothing.md`). Do not attempt to resolve solver-vs-display smoothing here.
+**Scope note:** The elevation-**smoothing consistency** issue was originally out of scope here, with its own brief on branch `spike/smoothing-consistency` (`correct-course-brief-2026-06-05-elevation-smoothing.md`). It has since been **prototyped and resolved** in a follow-up session — folded in below as **Item 8** (with the verified mechanism and the lessons from two failed approaches). The original smoothing brief on that branch holds the fuller background (GPS-calibration motivation, rejected options); Item 8 is self-contained enough to implement from.
 
 ## How to use this brief
 
@@ -22,6 +22,7 @@ A route the user knew should exist (a loop combining specific steep trails near 
 4. **Roads as connectors** — feature; lets routes cross short paved gaps between trails.
 5. **Elevation deadband** — a route-*selection* control (not a noise reducer).
 6. **Slope-display readability** — color saturation + longer slope baseline (display-only).
+8. **Elevation-smoothing consistency** — solver/box/display now derive from one smoothed profile (graph-Laplacian diffusion). Prototyped & verified; supersedes the separate smoothing brief.
 
 Plus a **related finding** (Item 7): solver termination flags are unimplemented and the `--help` text misleads.
 
@@ -92,7 +93,7 @@ Plus a **related finding** (Item 7): solver termination flags are unimplemented 
 
 **Key finding.** Its **aggregate** effect on total churn is small (≤8% even at 3 m). But its effect on **route selection is significant** — it changes which segments clear `min_climb_slope` / θ, flipping which routes win. **Keep it as a selection control, not as a noise reducer.** (Do not justify or dismiss it by aggregate-elevation impact.)
 
-**Decisions for proper implementation.** Finalize unit/semantics; decide setup- vs query-side. **Coordinate with the smoothing brief:** the deadband and the smoothing knob both reshape the elevation the solver scores, and neither is currently reflected in the displayed profile — the display-consistency question is shared.
+**Decisions for proper implementation.** Finalize unit/semantics; decide setup- vs query-side. **Now coupled to Item 8 (resolved there):** the display-consistency question for the deadband is answered — the deadband is reframed as a *profile transform* (it flattens sub-floor reversals out of the actual vertices), so it folds into the single canonical profile that feeds solver, box, and display alike. Implement the deadband and the smoothing together as Item 8 describes; do not re-introduce the old sum-time-only deadband.
 
 ## Item 6 — Slope-display readability (display-only)
 
@@ -104,11 +105,39 @@ Plus a **related finding** (Item 7): solver termination flags are unimplemented 
 
 `--iter-budget` defaults to a **hard-coded 2000** (`query.py::DEFAULT_ITER_BUDGET`); `--time-budget` and `--stagnation-iters` are accepted but **inert** (Epic-4 stubs; `solver/anytime.py` is empty). The `--help` text claims "unlimited until time/stagnation budget hits" — **misleading**, and it caused a wrong inference during diagnosis. Raising `--iter-budget` to ~200k materially improved results, so solve quality is iter-budget-bound. **Either wire the Epic-4 termination or fix the help text**, and decide the budget in light of Item 1's search-space growth.
 
+## Item 8 — Elevation-smoothing consistency  ★ resolved prototype
+
+**Problem.** The metric/box D+/D-, the value the solver selects on, and the plotted elevation curve disagreed. The solver/box used a **per-edge** smoothing that pinned node-boundary elevations to raw DEM values; the display used a separate **continuous** (whole-route) smoothing. They differed by ~58–78 m (symmetric in D+/D-). The deadband (Item 5) made it worse — it reshaped the metric at sum time but never touched the displayed vertices.
+
+**Unifying principle (the whole fix).** There must be **one canonical elevation profile per edge**; the box, the solver objective, and the plotted curve are all just the naive up/down sum of that single profile. Any operation that changes the metric must change the *profile itself*, not just the summation.
+
+**What works (prototype on `spike/smoothing-consistency`, commit `c39a93a`).**
+- **Smoothing = global graph-Laplacian diffusion** (`pipeline/smoothing.py::graph_smooth_elevation`). The entire resampled vertex field is treated as one connected graph; every vertex relaxes toward the mean of its chain neighbours via Jacobi iterations (`lam=0.5`). Each graph **node is a single shared variable** whose neighbours are the first interior vertex of every incident edge. Because the node value is shared, incident edges stay consistent at the join (box == curve); because diffusion is a low-pass filter, it **cannot create a slope spike** and it smooths *across* short/2-vertex edges.
+- **Deadband = profile transform** (`graph_deadband_elevation`): flatten sub-floor reversals out of the actual vertices (keep turning points where the run from the last committed reference exceeds the floor; linearly interpolate between them; endpoints pinned to the shared node value). This replaces the old sum-time hysteresis.
+- **Wiring** (`cli/query.py`): apply smoothing then deadband once to the whole graph; the SAME graph feeds `compute_edge_metrics(..., deadband_m=0.0)` (naive sum — both reshapings are already in the geometry) → climbs/contraction → solver, **and** is passed to `output.render(...)` with the render-side continuous pass disabled (`elevation_smoothing_window=1`).
+- **Display add:** cumulative D+/D- in the profile hover (`templates/route.html.j2`) — reaches the box totals at the final vertex; a one-glance consistency check.
+
+**Two approaches that FAILED (do not repeat them).**
+1. *Per-edge "average the neighbouring edges' context" at each node.* The trail graph is **junction-dominated** (~3052 degree-3 nodes vs ~90 degree-2). Each incident edge averages a different neighbour set, so every junction got a different node elevation → a jump at every junction; the gap did not collapse.
+2. *Per-edge moving average with the endpoint pinned* (to raw, or to one shared value). Pinning forces the endpoint to one value while the adjacent interior is a wide mean offset from it, dumping the whole offset into one ~10 m segment → **manufactured slope spikes** (observed ~1000%; raw-pinning even grew the max per-segment drop 35 m → 57 m). Per-edge methods also **cannot smooth across 2-vertex/short edges** (no interior to average), so big raw jumps survived. The Laplacian fixes both because it is global and never pins.
+
+**Evidence (seed 44, T4, split, repro below).** With the Laplacian: box−curve gap **0.000 m** across all routes (with and without deadband); max per-segment `|ΔElev|` reduced 34.7 m (raw) → ~9.8 m at window 10, monotonically with iterations; manufactured spikes eliminated. Residual >50% segments are **genuine steep Alpine terrain** (raw has ~5247 sustained >50% segments) — smoothing correctly leaves them; do not over-smooth to hide them.
+
+**Decisions for proper implementation.**
+- **Query-side** (decided with the user) — keeps the cache smoothing-independent, fast to sweep.
+- **`window` → iterations mapping / unit.** The prototype maps `iters ≈ window² / 6` (Gaussian-equivalent of a moving-average window) and keeps the unit in **vertices**. Two follow-ups: pick a defensible strength semantics, and **convert the unit to meters** (decouple from the 10 m resample spacing — the original smoothing brief's standing request).
+- **Remove the misleading `deadband_m` parameter** from `compute_edge_metrics` once the deadband is a profile transform — it only ever does a naive sum now, so passing `0.0` is a trap for future readers (the user flagged this).
+- **Remove the dead code:** the per-edge `mean_smooth_elevation`, the node-field prototype, and the render-side continuous-smoothing branch in `output.py` (now bypassed via `window=1`) — there is one smoothing, applied once.
+- **Short end-segment artifact (links to Item 6b).** The resampler leaves sub-5 m end-segments (min ~0.66 m); a small `ΔElev` over a tiny run reads as an extreme slope regardless of smoothing (~5–7 per route set). Item 6b's longer slope baseline addresses exactly this on the display side — resolve together.
+- **Performance.** Diffusion runs over the whole graph each query (the solver needs all candidate edges smoothed). Fine for the prototype; revisit if query latency matters.
+- Tests: smoothing/climbs unit suites pass on the prototype; add tests asserting (a) box == curve over a route, (b) max segment `|ΔElev|` never exceeds raw (no spike manufacture).
+
 ---
 
 ## Reference
 
-- **Branch:** `spike/junction-aware-climbs` (base `main` @ `4a6e85a`).
-- **Commits:** `6bf4965` roads · `6aca335` deadband · `501ad7a` SAC cap · `3c9ea9b` junction split · `eb28a72` smoothing knob* · `e5cf06e` display smoothing* · `588ef2f`/`643c4d6` color clamp. (*smoothing commits belong to the separate smoothing brief.)
-- **Verification context:** all evidence above is from center `45.260,5.788`, radius 4, `--cache-dir ./.trial-cache`, seed 44, `--l-connector 50 --j-max 0 --difficulty-cap t4 --n 10 --iter-budget 200000`.
+- **Branch (Items 1–7):** `spike/junction-aware-climbs` (base `main` @ `4a6e85a`).
+- **Commits (Items 1–7):** `6bf4965` roads · `6aca335` deadband · `501ad7a` SAC cap · `3c9ea9b` junction split · `eb28a72` smoothing knob · `e5cf06e` display smoothing · `588ef2f`/`643c4d6` color clamp.
+- **Branch (Item 8):** `spike/smoothing-consistency` (branched from `spike/junction-aware-climbs`, so Items 1–7 are present in its tree). Smoothing resolution commit **`c39a93a`**; files `pipeline/smoothing.py` (`graph_smooth_elevation`, `graph_deadband_elevation`), `cli/query.py`, `templates/route.html.j2`.
+- **Verification context:** all evidence above is from center `45.260,5.788`, radius 4, `--cache-dir ./.trial-cache`, seed 44, `--l-connector 50 --j-max 0 --difficulty-cap t4 --n 10 --iter-budget 200000`. Item 8 evidence adds `--elevation-smoothing-window 10` (and `--elevation-deadband 1.0` for the deadband-consistency check).
 - Spike prototypes are opt-in flags and are **evidence, not merge candidates**.
