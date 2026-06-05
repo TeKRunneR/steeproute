@@ -19,6 +19,7 @@ import pytest
 
 from steeproute import output
 from steeproute.models import (
+    Area,
     ConstraintViolation,
     ContractedGraph,
     Edge,
@@ -56,6 +57,8 @@ _PROVENANCE = ProvenanceInfo(
     pipeline_content_hash="abc123def456",
 )
 _CONVERGENCE = "budget-exhausted"
+# Centered on the `_base_graph` vertices (~45.1, 6.1) so the bbox brackets the route.
+_AREA = Area(center=(45.115, 6.115), radius_km=2.0)
 
 # All distinctive metadata values that must appear in BOTH the HTML and the JSON.
 _EXPECTED_METADATA_STRINGS = [
@@ -146,6 +149,7 @@ def _render(
     output.render(
         ValidatedRouteSet(routes=routes, set_violations=set_violations or []),
         _base_graph(),
+        _AREA,
         _contracted(),
         _PARAMS,
         _PROVENANCE,
@@ -339,6 +343,32 @@ def test_map_and_profile_hover_linking_wired(tmp_path: pathlib.Path) -> None:
     assert 'line.on("mousemove"' in html  # map -> profile
     assert "setActiveElements" in html  # profile point activation
     assert "onHover" in html  # profile -> map
+
+
+def test_search_area_overlay_wired(tmp_path: pathlib.Path) -> None:
+    """The 2*radius_km query bbox is drawn as an L.rectangle from the injected bbox."""
+    _render(tmp_path, [_route()])
+    html = (tmp_path / "route-1.html").read_text(encoding="utf-8")  # raw: overlay is in a <script>
+    assert "L.rectangle" in html
+    assert "searchBbox" in html
+    # The injected bbox carries the area center's degrees (equirectangular deltas).
+    # 45.115 ± 2.0/111.32 -> south ~45.097, north ~45.133 (full float in tojson).
+    assert "45.09703377650018" in html  # south
+    assert "45.13296622349982" in html  # north
+    # Initial view stays fitted to the ROUTE, not the box.
+    assert "line.getBounds()" in html
+
+
+def test_slope_tooltip_and_diverging_coloring_wired(tmp_path: pathlib.Path) -> None:
+    """The profile tooltip emits a signed slope line and coloring is signed-diverging."""
+    _render(tmp_path, [_route()])
+    html = (tmp_path / "route-1.html").read_text(encoding="utf-8")  # raw: wiring is in a <script>
+    assert "tooltip" in html
+    assert "callbacks" in html
+    assert "slope:" in html
+    # Diverging mapper keys off the sign of the slope (ascent red vs descent blue).
+    assert "gradientColor" in html
+    assert "s >= 0" in html
 
 
 def test_interrupt_mid_render_leaves_no_partial_files(

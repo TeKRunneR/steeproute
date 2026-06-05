@@ -122,7 +122,10 @@ def test_render_real_fixture_writes_parseable_reports(
     base_graph, contracted, solutions = fixture_run
     validated = validate(solutions, contracted, _params())
 
-    output.render(validated, base_graph, contracted, _params(), _PROVENANCE, "converged", tmp_path)
+    area = Area(center=(_CENTER_LAT, _CENTER_LON), radius_km=_DIST_M / 1000.0)
+    output.render(
+        validated, base_graph, area, contracted, _params(), _PROVENANCE, "converged", tmp_path
+    )
 
     n = len(validated.routes)
     assert n >= 1

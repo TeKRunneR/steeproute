@@ -31,6 +31,7 @@ import jinja2
 
 from steeproute.cache import write_json_atomic, write_text_atomic
 from steeproute.models import (
+    Area,
     ContractedGraph,
     ProvenanceInfo,
     Route,
@@ -56,6 +57,7 @@ ConvergenceStatus = Literal["converged", "budget-exhausted", "interrupted"]
 def render(
     validated_set: ValidatedRouteSet,
     base_graph: Any,
+    area: Area,
     contracted: ContractedGraph,
     params: SolverParams,
     provenance: ProvenanceInfo,
@@ -74,6 +76,9 @@ def render(
             violations. Drives both the per-route reports and the banner logic.
         base_graph: the post-stage-7 operational `MultiDiGraph` carrying the
             `vertices_resampled` edge attribute used for map + profile geometry.
+        area: the query search area (center + bbox half-side). Its `2*radius_km`
+            square is drawn as a thin overlay rectangle on the HTML map only; it
+            does not affect the JSON sidecar, metadata, or provenance.
         contracted: the `ContractedGraph` the solver/validator ran on; its
             `super_edge_to_base` expands super-edges to their base edges.
         params: solver parameters, recorded verbatim in the metadata block.
@@ -88,6 +93,7 @@ def render(
     leaflet_css = _load_asset(_LEAFLET_CSS_ASSET)
     leaflet_js = _load_asset(_LEAFLET_JS_ASSET)
     chart_js = _load_asset(_CHARTJS_JS_ASSET)
+    search_bbox = _search_bbox(area)
 
     for idx0, route in enumerate(validated_set.routes):
         display_index = idx0 + 1
@@ -125,6 +131,9 @@ def render(
             route_geojson=_geojson(vertices),
             profile_distances=distances,
             profile_elevations=elevations,
+            # The 2*radius_km query bbox, drawn as a thin overlay rectangle on the
+            # map (HTML only). Visual-only — see `_search_bbox`.
+            search_bbox=search_bbox,
         )
         sidecar = {
             "route_index": display_index,
@@ -262,6 +271,25 @@ def _extend_dedup(
         if acc and acc[-1] == vert:
             continue
         acc.append(vert)
+
+
+def _search_bbox(area: Area) -> dict[str, float]:
+    """The query area's `2*radius_km` bbox as `{south, west, north, east}` degrees.
+
+    `radius_km` is the bbox half-side (models.py `Area`), so the square spans
+    `center ± radius_km` per side. An equirectangular delta is used — this drives
+    a visual-only overlay rectangle on the map and need not byte-match osmnx's
+    bbox: `dlat = radius_km/111.32`, `dlon = radius_km/(111.32*cos(lat))`.
+    """
+    lat, lon = area.center
+    dlat = area.radius_km / 111.32
+    dlon = area.radius_km / (111.32 * math.cos(math.radians(lat)))
+    return {
+        "south": lat - dlat,
+        "west": lon - dlon,
+        "north": lat + dlat,
+        "east": lon + dlon,
+    }
 
 
 def _geojson(vertices: list[tuple[float, float, float]]) -> dict[str, Any]:

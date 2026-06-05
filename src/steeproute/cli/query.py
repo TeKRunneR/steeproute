@@ -218,6 +218,7 @@ def cli(
     output.render(
         validated,
         prepared.graph,
+        area,
         contracted,
         params,
         provenance,

@@ -107,18 +107,38 @@
       "Map data &copy; OpenStreetMap contributors, SRTM | " +
       "Style: &copy; OpenTopoMap (CC-BY-SA)",
   }).addTo(map);
+  // Search-area overlay: the 2*radius_km query bbox as a thin stroke-only
+  // rectangle, added BEFORE the route so the red polyline draws on top. Stroke
+  // only (no fill) so it covers minimal area; dashed gray-blue to read as a
+  // secondary marker distinct from the route's #b00020.
+  const searchBbox = {{ search_bbox | tojson }};
+  L.rectangle(
+    [[searchBbox.south, searchBbox.west], [searchBbox.north, searchBbox.east]],
+    { color: "#5a6b8c", weight: 2, fill: false, dashArray: "6 4" }
+  ).addTo(map);
+
   const line = L.geoJSON(routeGeoJSON, { style: { color: "#b00020", weight: 4 } }).addTo(map);
+  // Initial view stays fitted to the ROUTE, not the box — inspecting a single
+  // route is the primary use; the rectangle may fall off-screen on open (intended).
   map.fitBounds(line.getBounds(), { padding: [20, 20] });
 
   // --- Elevation profile with gradient-colored segments ---
   const distances = {{ profile_distances | tojson }};
   const elevations = {{ profile_elevations | tojson }};
-  function gradientColor(g) {
-    // g = rise/run fraction; green (flat/descending) -> red (steep climb).
-    const t = Math.max(0, Math.min(0.3, g)) / 0.3;
-    const r = Math.round(70 + t * 175);
-    const grn = Math.round(160 - t * 130);
-    return `rgb(${r},${grn},70)`;
+  function gradientColor(s) {
+    // s = signed rise/run fraction. Diverging scheme legible on white:
+    //   descending (s<0) -> blue, flat (s~0) -> neutral gray, ascending (s>0) -> red,
+    // each scaled by steepness with |s| clamped to 0.30.
+    const CLAMP = 0.30;
+    const neutral = [170, 170, 170];
+    const up = [200, 30, 30];     // steep ascent
+    const down = [30, 90, 200];   // steep descent
+    const end = s >= 0 ? up : down;
+    const t = Math.min(Math.abs(s), CLAMP) / CLAMP;
+    const r = Math.round(neutral[0] + t * (end[0] - neutral[0]));
+    const grn = Math.round(neutral[1] + t * (end[1] - neutral[1]));
+    const b = Math.round(neutral[2] + t * (end[2] - neutral[2]));
+    return `rgb(${r},${grn},${b})`;
   }
   const profileChart = new Chart(document.getElementById("elevation-profile"), {
     type: "line",
@@ -148,7 +168,33 @@
       // the screen width — far too tall to view alongside the map on a 1080p screen.
       maintainAspectRatio: false,
       interaction: { mode: "index", intersect: false },
-      plugins: { legend: { display: false } },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            // Add a signed slope line beneath the default elevation line. The
+            // slope at vertex i is the mean of its two adjacent segment slopes
+            // (single segment at the endpoints); run==0 is treated as flat.
+            afterLabel: (ctx) => {
+              const i = ctx.dataIndex;
+              const last = elevations.length - 1;
+              const seg = (a, b) => {
+                const run = distances[b] - distances[a];
+                return run !== 0 ? (elevations[b] - elevations[a]) / run : 0;
+              };
+              const parts = [];
+              if (i > 0) parts.push(seg(i - 1, i));
+              if (i < last) parts.push(seg(i, i + 1));
+              const slope = parts.length
+                ? parts.reduce((acc, v) => acc + v, 0) / parts.length
+                : 0;
+              const pct = Math.round(slope * 100);
+              const sign = pct > 0 ? "+" : pct < 0 ? "-" : "";
+              return `slope: ${sign}${Math.abs(pct)}%`;
+            },
+          },
+        },
+      },
       scales: {
         x: { title: { display: true, text: "distance (km)" } },
         y: { title: { display: true, text: "elevation (m)" } },
