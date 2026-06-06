@@ -244,24 +244,24 @@ Exact file names within `pipeline/` and `solver/` are placeholders; adjust durin
 | # | Stage | Module |
 |---|---|---|
 | 1 | OSM load via `osmnx` | `pipeline/osm.py` |
-| 2 | Trail filter (sac_scale, highway types, untagged-policy) | `pipeline/osm.py` |
+| 2 | Trail filter (sac_scale, highway types, untagged-policy); admits a curated minor-road set as connectors (no SAC grade, never climbs; tightened multi-tag handling so major roads don't leak in) | `pipeline/osm.py` |
 | 3 | 2D polyline smoothing per edge | `pipeline/smoothing.py` |
 | 4 | Resample each edge to ~10m vertex spacing | `pipeline/smoothing.py` |
 | 5 | DEM elevation sampling via `rasterio` | `pipeline/dem.py` |
-| 6 | Elevation moving-median | `pipeline/smoothing.py` |
+| 6 | Elevation smoothing — global graph-Laplacian diffusion over the whole vertex field (each graph node a single shared variable) + optional deadband as a profile transform; **runs query-side** (see 3b) | `pipeline/smoothing.py` |
 | 7 | Per-edge metrics (L, D+, D−, gradient) | `pipeline/climbs.py` |
 | 8 | Climb detection (parameter-dependent: `min_climb_slope`, `min_climb_ground_length`) | `pipeline/climbs.py` |
 | 9 | Climb-graph contraction (climbs → super-edges; **all** connectors retained and tagged with an undirected `base_segment_id` + a `reusable` flag = `length_m < l_connector`; super-edges carry the base-segment-id set of the edges they contract) | `pipeline/graph.py` |
 
 **Stage boundary style (3a):** each stage is `def stage(input_graph, config) -> output_graph`. Orchestrator wires them: `g = osm_load(area); g = filter_trails(g, cfg); g = smooth_polylines(g); ...`. Pure functions → clean unit-test targets with fixture inputs, BasedPyright-friendly, easy to cache at any boundary.
 
-**CLI split (3b):** stages 1–7 are parameter-independent (depend only on area + DEM version + OSM extract date + untagged-trails-policy) — these run in `steeproute-setup` and their output is cached. Stages 8–9 depend on query-time parameters (`min_climb_slope`, `min_climb_ground_length`, `L_connector`) — these run in `steeproute` on every query, fast enough to not need caching. The route-level slope floor `θ` is applied later still, at solve/validate time (it constrains the whole route, not climb detection). This mapping delivers Journey 2's fast-re-query behavior (changing `min_climb_slope` or `θ` hits cache for stages 1–7, re-does 8–9 + solve only).
+**CLI split (3b):** stages 1–5 are parameter-independent (depend only on area + DEM version + OSM extract date + untagged-trails-policy) — these run in `steeproute-setup` and their output is cached; the cached `vertices_resampled` hold **raw** sampled elevations. Stages 6–9 run in `steeproute` on every query: stage 6 (elevation smoothing + optional deadband) and stage 7 (per-edge metrics) depend on `--elevation-smoothing` / `--elevation-deadband`; stages 8–9 depend on `min_climb_slope`, `min_climb_ground_length`, `L_connector` — all fast enough to not need caching. The route-level slope floor `θ` is applied later still, at solve/validate time. Because smoothing is recomputed query-side from the cached raw elevations, the cache stays **smoothing-independent**: sweeping `--elevation-smoothing` re-does stages 6–9 + solve only and never re-prepares. (Moving stages 6–7 query-side changes `pipeline_content_hash`, so existing caches re-prepare once when this ships — a one-time cost.)
 
 **Edge-attribute contract (3c):** every edge in the pipeline graph carries:
 
 - `geometry` — `shapely.LineString`
-- `vertices_resampled` — list of `(lat, lon, elevation_m)` tuples after stages 4–6
-- `length_m`, `d_plus_m`, `d_minus_m`, `avg_gradient` — computed in stage 7
+- `vertices_resampled` — list of `(lat, lon, elevation_m)` tuples; cached with **raw** post-stage-5 elevations, smoothed query-side (stage 6) into the single canonical profile
+- `length_m`, `d_plus_m`, `d_minus_m`, `avg_gradient` — computed query-side in stage 7 as the naive up/down sum of that one canonical profile (the metric box, the solver objective, and the plotted curve all derive from it — no separate per-edge vs. continuous smoothing)
 - `sac_scale`, `highway`, `osm_way_id` — source attributes from OSM
 
 Structured stage inputs/outputs (beyond simple tuples) use dataclasses declared in `models.py`. No custom graph wrapper.
@@ -516,7 +516,7 @@ CLI calls `validate(...)`; the underlying per-route and set-level functions are 
 | Difficulty cap ≤ SAC scale | `--difficulty-cap` | per-route (per-edge) |
 | Edge-reuse limit (undirected, base-segment; short connectors `< --l-connector` exempt) | `--l-connector` | per-route |
 | Graph membership (every edge in operational graph) | derived | per-route (sanity) |
-| Pairwise Jaccard ≤ J_max | `--j-max` | set-level |
+| Pairwise Jaccard ≤ J_max (keyed on the undirected base-segment identity, same as reuse) | `--j-max` | set-level |
 
 ### Category 7 — Inter-CLI contract
 

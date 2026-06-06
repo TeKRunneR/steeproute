@@ -165,9 +165,9 @@ Not applicable — CLI-only project, no UI. UX Design spec deliberately omitted 
 | FR9 (untagged trails policy) | Epic 1 (flag) / Epic 2 (enforcement) | Enforced in pipeline stage 2 (trail filter) |
 | FR10 (vertical-effort objective + strict containment) | Epic 3 | GRASP + climb-graph construction |
 | FR11 (top-N distinctness) | Epic 3 | TopNTracker |
-| FR12 (graceful degradation) | Epic 6 | Run summary messaging + distinctness-tracker output |
-| FR13 (progress emission) | Epic 6 | `ProgressEvent` + throttled callback + CLI renderer |
-| FR14 (Ctrl-C best-so-far) | Epic 6 | CLI try/except around `solver.run()`; `best_so_far` flush |
+| FR12 (graceful degradation) | Epic 7 | Run summary messaging + distinctness-tracker output |
+| FR13 (progress emission) | Epic 7 | `ProgressEvent` + throttled callback + CLI renderer |
+| FR14 (Ctrl-C best-so-far) | Epic 7 | CLI try/except around `solver.run()`; `best_so_far` flush |
 | FR15 (HTML per route) | Epic 3 | `output.py` + Jinja2 |
 | FR16 (JSON sidecar) | Epic 3 | `output.py` |
 | FR17 (Leaflet map) | Epic 3 | Vendored Leaflet 1.9.4, inlined in template |
@@ -175,7 +175,7 @@ Not applicable — CLI-only project, no UI. UX Design spec deliberately omitted 
 | FR19 (report metadata) | Epic 3 | `output.py` + `provenance.py` + `models.py` |
 | FR20 (--output-dir) | Epic 1 (flag) / Epic 3 (use) | Click option + render target |
 | FR21 (stable filename pattern) | Epic 3 | `route-<i>.{html,json}` |
-| FR22 (run summary on stdout) | Epic 6 | `cli/query.py` end-of-run block |
+| FR22 (run summary on stdout) | Epic 7 | `cli/query.py` end-of-run block |
 | FR23 (steeproute-setup CLI) | Epic 2 | Entry point + stages 1–7 orchestrator |
 | FR24 (fail-fast unprepared area) | Epic 2 | `cache.py` coverage check + exit 2 |
 | FR25 (local cache + invalidation) | Epic 2 | Cache architecture + key hashing |
@@ -183,13 +183,13 @@ Not applicable — CLI-only project, no UI. UX Design spec deliberately omitted 
 | FR27 (validation-failure banner) | Epic 3 | `output.py` + `templates/route.html.j2` |
 | FR28 (exit code + write-to-disk) | Epic 3 | Exit-code coupling from `ValidatedRouteSet` |
 | FR29 (seed reproducibility) | Epic 3 | `numpy.random.Generator` threading + metadata surfacing |
-| FR30 (distinct exit codes) | Epic 1 (scaffolding) / Epic 3 (code 1) / Epic 6 (code 130) | `run_entry_point` wrapper + feature-specific returns |
+| FR30 (distinct exit codes) | Epic 1 (scaffolding) / Epic 3 (code 1) / Epic 7 (code 130) | `run_entry_point` wrapper + feature-specific returns |
 
 **NFR coverage:**
 
-- NFR1 (compute budget ≤10min design target): Epic 6 — time-budget termination, stagnation, progress reporting surfaces elapsed
-- NFR2 (16 GB memory envelope): Epic 7 — validated during gallery generation; documented if notable
-- NFR3 (Ctrl-C preserves output + cache valid): Epic 6
+- NFR1 (compute budget ≤10min design target): Epic 7 — time-budget termination, stagnation, progress reporting surfaces elapsed
+- NFR2 (16 GB memory envelope): Epic 8 — validated during gallery generation; documented if notable
+- NFR3 (Ctrl-C preserves output + cache valid): Epic 7
 - NFR4 (seeded determinism, edge-set level): Epic 3
 - NFR5 (atomic cache writes): Epic 2
 - NFR6 (OSM/DEM actionable-error on source down): Epic 2
@@ -228,13 +228,19 @@ Change the edge-reuse rule from directed (once per direction) to **undirected on
 
 **FRs covered:** FR5 (realized as undirected base-segment reuse + short-connector tolerance).
 
-### Epic 6: Operational Robustness
+### Epic 6: Route-Discovery & Elevation-Consistency Fixes
+
+Fix the stacked defects that prevented a known-good Grenoble loop from ever being discovered, plus the elevation metric/display inconsistency, before Operational Robustness. Junction-aware climb splitting and SAC cap-aware contraction make legitimate routes reachable; undirected Jaccard distinctness aligns FR11 with FR5; minor roads are admitted as connectors; and one canonical elevation profile (graph-Laplacian smoothing + deadband-as-transform) feeds solver, metric box, and plotted curve alike. The bugs were found only by manual real-area testing, so each ships with a regression test that fails on the pre-fix code and an explicit human-review checkpoint. Inserted via correct-course 2026-06-07 (see `sprint-change-proposal-2026-06-07-route-discovery.md`).
+
+**FRs covered:** none new — realizes FR10 (route discovery) and FR11 (undirected distinctness) correctly and extends the FR9 trail-policy data surface (roads as connectors).
+
+### Epic 7: Operational Robustness
 
 Deliver Journeys 2 and 3. Long-running queries emit throttled progress lines; Ctrl-C preserves best-so-far top-N with an "interrupted" convergence flag and exits 130; sparse areas return fewer than N routes with a clear explanation rather than silently loosening distinctness; stagnation detection converges the solver early when no further improvement is occurring; the final run summary on stdout reports parameters, routes returned vs. N requested, validation-failure count, and wall-clock total. Turns the tool from "happy-path only" to "usable on realistic queries."
 
 **FRs covered:** FR12, FR13, FR14, FR22, FR30 (exit code 130).
 
-### Epic 7: Release Polish
+### Epic 8: Release Polish
 
 Deliver the interview-ready state. Pinned regression golden fixtures on 2–3 real Grenoble-area cutouts lock in current-known-good behavior going forward, with a documented `uv run update-regression` workflow and commit-message discipline. The README presents a 3–5 region gallery (map screenshots + elevation profile PNGs + links to HTML files in `docs/examples/`), a first-class "Known Limitations" section covering DEM/cliff-bias and GRASP-non-optimality, and a quickstart for both CLIs. If any CI thresholds (coverage, GRASP/exhaustive ratio) were held lenient during earlier epics, they tighten to final committed values here.
 
@@ -284,7 +290,7 @@ So that every subsequent story can place tests in the right layer and the qualit
 **Given** Story 1.2 is complete
 **When** I restructure `tests/` into `tests/unit/`, `tests/integration/`, `tests/e2e/` (each with an empty `conftest.py`) plus a top-level `tests/conftest.py`, and update `.github/workflows/ci.yml` to trigger on push + PR and run `uv sync`, `uv run ruff check`, `uv run ruff format --check`, `uv run basedpyright`, and `uv run pytest --cov=src/steeproute --cov-report=xml --cov-report=term`
 **Then** the CI workflow runs on a `windows-latest` runner (primary platform per NFR7) and succeeds on a push of the current codebase
-**And** `pyproject.toml` configures `pytest-cov` with `--cov-fail-under` scaffolding in place (threshold may be 0 at this point; tightens in Epic 7)
+**And** `pyproject.toml` configures `pytest-cov` with `--cov-fail-under` scaffolding in place (threshold may be 0 at this point; tightens in Epic 8)
 **And** `uv run ruff check` and `uv run basedpyright` pass on the current codebase with zero findings
 **And** the template's legacy test file (if any) is moved into the appropriate layer or replaced with a layer-appropriate placeholder
 
@@ -585,12 +591,12 @@ So that GRASP can be validated against ground truth on small instances and the o
 
 As a developer,
 I want `solver/grasp.py::GraspSolver` with injected RNG, parameter snapshot, prepared `ContractedGraph`, and a readable `best_so_far` — driving construction + restart,
-So that FR10, FR11, FR29 have an implementation and Epic 6 can layer progress/interrupt handling on top.
+So that FR10, FR11, FR29 have an implementation and Epic 7 can layer progress/interrupt handling on top.
 
 **Acceptance Criteria:**
 
 **Given** Stories 3.1, 3.3, 3.4 are complete
-**When** I implement `GraspSolver(graph, params, rng, progress_callback=None)` with `run() -> list[Solution]` driving construction (greedy-random with restricted candidate list, TopNTracker-admitted) terminating on iter-budget (time-budget + stagnation land in Epic 6), plus `best_so_far` property returning `tracker.current_top()`, plus `solver/anytime.py` with interrupt hooks (real handling wires in Epic 6)
+**When** I implement `GraspSolver(graph, params, rng, progress_callback=None)` with `run() -> list[Solution]` driving construction (greedy-random with restricted candidate list, TopNTracker-admitted) terminating on iter-budget (time-budget + stagnation land in Epic 7), plus `best_so_far` property returning `tracker.current_top()`, plus `solver/anytime.py` with interrupt hooks (real handling wires in Epic 7)
 **Then** `tests/unit/test_grasp_construction.py` asserts one iteration is deterministic given seeded RNG (two identical-seed runs → identical candidate sequences)
 **And** `tests/integration/test_grasp_on_fixture.py` runs GRASP on the real Grenoble fixture's contracted graph and asserts: ≤ N routes returned; every route strictly contained in the query area (FR10); every route's non-connector edges have slope ≥ θ; every route's max edge difficulty ≤ difficulty_cap
 **And** `tests/integration/test_grasp_reproducible.py` asserts two runs with `--seed 42` produce byte-identical edge-sets (FR29/NFR4)
@@ -678,7 +684,7 @@ So that Journey 1 works end-to-end and FR28, FR30 (codes 0 and 1) are fulfilled.
 **Then** `tests/e2e/test_journey_1_happy_path.py` pre-prepares a fixture cache via real `uv run steeproute-setup`, then runs `uv run steeproute --center <fixture area> --radius 2 --seed 42 --output-dir <tmp> --cache-dir <tmp>`, asserts exit 0 + N HTML + N JSON files exist with the correct filename pattern + each HTML parses as valid HTML with map + profile sections present
 **And** `tests/e2e/test_seeded_reproducibility.py` runs the same command twice with `--seed 42` and asserts byte-identical JSON across runs (FR29/NFR4 verified end-to-end)
 **And** `tests/e2e/test_validation_failure_path.py` uses `monkeypatch` to inject a fake solver output that includes a deliberately-invalid Solution (e.g., references a non-existent edge), asserts exit 1, reports still on disk, HTML contains `VALIDATION FAILED` banner
-**And** Epic 6 is responsible for real progress UI and interrupt handling; this epic's CLI uses a stub no-op progress callback
+**And** Epic 7 is responsible for real progress UI and interrupt handling; this epic's CLI uses a stub no-op progress callback
 
 ## Epic 4: Route-Level Slope-Floor Correction
 
@@ -738,7 +744,7 @@ Change the edge-reuse rule from directed (once per direction) to undirected on t
 
 **FRs covered:** FR5 (realized as undirected base-segment reuse + short-connector tolerance).
 
-**Compatibility note:** the prepared stages-1–7 cache is unaffected (contraction is query-time, Architecture §3b). No regression goldens exist yet (Epic 7), so route outputs simply change on regeneration. The base-segment identity scheme (OSM way id vs. canonical sorted node-pair + key) is an implementation choice; the binding contract is that it is identical for a segment and its reverse.
+**Compatibility note:** the prepared stages-1–7 cache is unaffected (contraction is query-time, Architecture §3b). No regression goldens exist yet (Epic 8), so route outputs simply change on regeneration. The base-segment identity scheme (OSM way id vs. canonical sorted node-pair + key) is an implementation choice; the binding contract is that it is identical for a segment and its reverse.
 
 ### Story 5.1: Base-segment identity and connector revival at contraction
 
@@ -781,11 +787,62 @@ So that the change is fully covered and the PRD/architecture/epics no longer des
 **And** PRD (FR5, Config Schema `--l-connector`), architecture (stage 9, constraint table, edge-attribute contract), and this epics file describe undirected base-segment reuse with the short-connector tolerance
 **And** the full test suite (unit + integration + e2e) passes on the primary Windows platform
 
-## Epic 6: Operational Robustness
+## Epic 6: Route-Discovery & Elevation-Consistency Fixes
+
+Fix the stacked defects that prevented a known-good Grenoble loop from being discovered, plus the elevation metric/display inconsistency, before Operational Robustness. All five substantive changes were prototyped and verified on throwaway spikes (`spike/junction-aware-climbs`, `spike/smoothing-consistency`); re-implement cleanly against the architecture and test conventions — do not merge the spike commits. Inserted via correct-course 2026-06-07 (see `sprint-change-proposal-2026-06-07-route-discovery.md`).
+
+**FRs covered:** none new; realizes FR10 (route discovery) and FR11 (undirected distinctness) correctly and extends the FR9 data surface (roads as connectors).
+
+**Compatibility note:** junction-split and undirected distinctness are query-time (no cache change). Elevation smoothing moves the cache boundary (setup caches raw post-stage-5 elevation; stages 6–7 move query-side) and roads re-fetch — both change `pipeline_content_hash`, so prepared caches re-prepare once, after which `--elevation-smoothing` is a free query knob. Implementation knobs the brief defers (exact minor-road set, split-all-vs-routable junctions, smoothing strength/unit conversion to meters) are dev/architecture choices.
+
+### Story 6.1: Route-discovery bug fixes — junction split, SAC cap-aware contraction, undirected distinctness
+
+As a user,
+I want the solver to find legitimate routes that join a climb mid-way, to keep the easy majority of a climb that contains one over-cap pitch, and to treat opposite-direction reuse of the same trail as overlap,
+So that known-good routes (like the Grenoble loop that triggered this correction) are actually returned and the top-N set is genuinely distinct.
+
+**Acceptance Criteria:**
+
+**Given** Epic 3's contracted-graph solver and Epic 5's undirected `base_segment_id` edge identity
+**When** I (a) add junction-aware climb splitting to `pipeline/graph.py::contract_climbs` (split a climb at any interior node incident to a base segment outside the climb — a real trail junction; default on, preserving the `base_segment_id`/`reusable`/`super_edge_to_base` tagging), (b) run `filter_trails(..., difficulty_cap)` before `detect_climbs` in `cli/query.py` so above-cap pitches never weld into otherwise-usable climbs, and (c) key `solver/distinctness.py::_canonical_edge_set` on the undirected `base_segment_id` (single-sourced via `solver.reuse`) instead of the directed `(node_u, node_v, key)`
+**Then** three regression tests — each constructed to **fail on the pre-fix code** — assert: a climb is split at an interior trail junction and a mid-climb-turn route is constructible; at a difficulty cap below an embedded over-cap pitch, no above-cap super-edge survives and the under-cap terrain stays routable; two routes traversing one trail in opposite directions have `jaccard_distance < 1` and are rejected under `--j-max 0`
+**And** the GRASP-vs-exhaustive quality gate (Story 3.7) and the existing contraction/distinctness unit tests pass (oracle and solver share the split + undirected-distinctness feasible set)
+**And** the solver, contraction, and distinctness functions remain pure (no input mutation)
+**And** a **human-review checkpoint** (`bmad-checkpoint-preview`) on the real trigger area (seed 44, T4 — repro command in the brief) confirms all three fixes before the story is marked done: the target loop appears and opposite-direction reuse is correctly treated as overlap
+
+### Story 6.2: Roads as connectors
+
+As a user,
+I want routes to use short minor-road segments that link steep trails,
+So that loops requiring a brief paved connector (like the trigger route) become constructible.
+
+**Acceptance Criteria:**
+
+**Given** Epic 2's setup-side trail filter (`pipeline/osm.py`) excludes all road highway types at both the Overpass fetch filter and `TRAIL_HIGHWAY_TAGS`
+**When** I admit a curated minor-road set (starting point: residential, unclassified, service, living_street, tertiary) to the fetch filter and to `filter_trails` as connectors (no SAC grade, never climbs, bypassing the untagged policy), with tightened multi-tag handling so a way also tagged as a major road (e.g. motorway) does not leak in
+**Then** the two `test_osm.py` tests that assert roads are dropped are **inverted** to the new contract, and new tests assert minor roads are admitted as connectors while major roads are excluded
+**And** `pipeline_content_hash` changes so prepared caches re-prepare on next setup (documented; this is a setup-side data change)
+**And** short road connectors follow the same `--l-connector` reuse-exemption rule as short trail connectors (no separate road-cost term — the vertical-effort objective self-limits road use)
+
+### Story 6.3: Unified elevation profile, slope-display readability, and closeout
+
+As a user,
+I want the metric box, the value the solver optimizes, and the plotted elevation curve to agree, the elevation deadband to reshape the actual profile, and the displayed slope and colors to be readable,
+So that a route's reported D+/D− matches its curve and the profile is trustworthy at a glance.
+
+**Acceptance Criteria:**
+
+**Given** Stories 6.1–6.2 and the cached raw post-stage-5 elevation
+**When** I add `pipeline/smoothing.py::graph_smooth_elevation` (global graph-Laplacian diffusion; each graph node a single shared variable) and `graph_deadband_elevation` (profile transform flattening sub-floor reversals), wire them query-side in `cli/query.py` (smooth → deadband once over the whole graph → naive-sum `compute_edge_metrics` → climbs → contraction → solver, and the same graph to `output.render` with the render-side continuous pass disabled), add `--elevation-smoothing` (meters) and `--elevation-deadband` (meters) flags, raise the slope color clamp to `tan(30°)≈0.58` and compute the displayed slope over a longer baseline (±2–3 vertices), add cumulative D+/D− to the profile hover, and remove the dead per-edge `median_smooth_elevation` / render-side continuous-smoothing code (no `deadband_m` parameter on `compute_edge_metrics`)
+**Then** a regression test — constructed to **fail on the pre-fix code** — asserts over a route that box D+/D− equals the plotted-curve cumulative at the final vertex (gap ≤ tolerance) and that max per-segment `|ΔElev|` never exceeds the raw-DEM maximum (no manufactured spikes)
+**And** the 8 metamorphic invariants (Story 3.8) are re-validated under the new contraction/distinctness/smoothing (esp. `scale_elevation`, `relax_theta`, node-relabel isomorphism), `steeproute --help` lists `--elevation-smoothing` and `--elevation-deadband`, and the full suite (unit + integration + e2e) passes on the primary Windows platform
+**And** a **human-review checkpoint** (`bmad-checkpoint-preview`) on the real trigger area confirms box==curve, no manufactured slope spikes, genuine steep terrain preserved, and readable color/baseline display before the story is marked done
+
+## Epic 7: Operational Robustness
 
 Deliver Journeys 2 and 3. Long-running queries emit throttled progress lines; Ctrl-C preserves best-so-far top-N with an "interrupted" convergence flag and exits 130; sparse areas return fewer than N routes with a clear explanation rather than silently loosening distinctness; stagnation detection converges the solver early when no further improvement is occurring; the final run summary on stdout reports parameters, routes returned vs. N requested, validation-failure count, and wall-clock total. Turns the tool from "happy-path only" to "usable on realistic queries."
 
-### Story 6.1: ProgressEvent + throttled callback + CLI renderer with --quiet / --verbose
+### Story 7.1: ProgressEvent + throttled callback + CLI renderer with --quiet / --verbose
 
 As a user,
 I want `steeproute` on a long-running query to emit periodic progress lines (iteration, best-so-far, elapsed, ETA) honoring `--progress-interval` and suppressible via `--quiet`,
@@ -797,11 +854,11 @@ So that Journey 3's "can I judge whether to wait or kill this?" capability exist
 **When** I implement `progress.py::ProgressEvent` (dataclass: `iteration`, `elapsed_s`, `best_objective`, `estimated_remaining_s: float | None`, `stagnation_counter`), a throttling wrapper in `progress.py` that fires the callback at most once per `--progress-interval` seconds (wall-clock, first fire after the interval elapses from start), hook the wrapper into GRASP's iteration loop in `solver/grasp.py`, then implement a CLI renderer in `cli/query.py` that formats `ProgressEvent` as a single-line `print(...)` to stdout and installs the callback (or `None`) based on `--quiet`
 **Then** `tests/integration/test_progress.py` runs GRASP on the real Grenoble fixture with a list-collecting callback, asserts events are spaced by ≥ `--progress-interval` seconds (± timing slop), every event has all fields populated, and `stagnation_counter` increments when top-N objective is unchanged across iterations
 **And** `tests/e2e/test_progress_cli.py` runs `uv run steeproute --progress-interval 1` on the fixture and asserts progress lines appear on stdout during the solver phase
-**And** `tests/e2e/test_quiet_suppresses_progress.py` runs with `--quiet` and asserts no progress lines appear during the solver phase (final run summary from Story 6.5 remains out of scope for this story)
+**And** `tests/e2e/test_quiet_suppresses_progress.py` runs with `--quiet` and asserts no progress lines appear during the solver phase (final run summary from Story 7.5 remains out of scope for this story)
 **And** progress output goes through `print()` to stdout — never `logging.info` (Architecture §Cat 8 stream-discipline)
 **And** `--progress-interval`'s default is set to a concrete value (e.g., 5 seconds) documented as "tunable post-baseline"
 
-### Story 6.2: Time-budget and stagnation termination
+### Story 7.2: Time-budget and stagnation termination
 
 As a user,
 I want GRASP to terminate when either `--time-budget` wall-clock is exhausted OR the top-N total objective stops improving for `--stagnation-iters` consecutive iterations, with `convergence_status` set correctly,
@@ -810,14 +867,14 @@ So that NFR1's compute budget has a surfaceable termination mechanism and Journe
 **Acceptance Criteria:**
 
 **Given** Epic 3 Story 3.6 implements GRASP with only iter-budget termination
-**When** I extend `GraspSolver.run()` to also check wall-clock against `--time-budget` between iterations and check stagnation (`tracker.total_objective()` unchanged for `--stagnation-iters` consecutive iterations, activated after the first N+1 iterations), and set a `convergence_status` attribute on the solver at termination taking one of `converged` (stagnation), `budget-exhausted` (iter-budget OR time-budget), `interrupted` (set by Story 6.3's handler)
+**When** I extend `GraspSolver.run()` to also check wall-clock against `--time-budget` between iterations and check stagnation (`tracker.total_objective()` unchanged for `--stagnation-iters` consecutive iterations, activated after the first N+1 iterations), and set a `convergence_status` attribute on the solver at termination taking one of `converged` (stagnation), `budget-exhausted` (iter-budget OR time-budget), `interrupted` (set by Story 7.3's handler)
 **Then** `tests/integration/test_time_budget.py` runs GRASP on the real Grenoble fixture with `--time-budget 1` and asserts termination within ~1.5 seconds with `convergence_status == "budget-exhausted"`
 **And** `tests/integration/test_stagnation.py` runs GRASP on a small programmatic fixture where the optimum is found rapidly and asserts termination well before iter-budget with `convergence_status == "converged"`
 **And** `--stagnation-iters 0` disables the stagnation check (solver runs to iter-budget or time-budget)
 **And** the `--stagnation-iters` default is declared as a module-scope named constant `STAGNATION_ITERS_DEFAULT_PLACEHOLDER = 100` in `solver/grasp.py` with a comment marking it as a provisional value to be tuned during implementation by observing behavior on the metamorphic test suite, the time-budget/stagnation integration tests, and real-fixture runs
 **And** convergence status surfaces in every rendered report's metadata block (Story 3.10 wires `convergence_status` through `output.render`; this story now populates it with the full three-value contract)
 
-### Story 6.3: Interrupt handling with best-so-far preservation (FR14)
+### Story 7.3: Interrupt handling with best-so-far preservation (FR14)
 
 As a user,
 I want Ctrl-C during a query to preserve best-so-far top-N routes to disk with `convergence_status: "interrupted"`, exit 130, and leave the cache in a valid, reusable state,
@@ -832,7 +889,7 @@ So that Journey 3's partial-progress-preserved experience works and NFR3 is fulf
 **And** an interrupt received *before* the solver produces any solution (e.g., during pipeline stages 8–9) exits 130 with no output files but with a stderr warning `interrupted before any solution found`
 **And** post-interrupt, `uv run steeproute` re-invoked with the same args on the same cache succeeds normally — confirms cache integrity (NFR3)
 
-### Story 6.4: Graceful degradation messaging for sparse areas (FR12)
+### Story 7.4: Graceful degradation messaging for sparse areas (FR12)
 
 As a user,
 I want `steeproute` to return fewer than N routes with a clear explanation when distinctness under the current J_max cannot be satisfied, instead of silently loosening the constraint,
@@ -841,12 +898,12 @@ So that Journey 2's sparse-area experience is explicit and preserves the user's 
 **Acceptance Criteria:**
 
 **Given** Epic 3 Story 3.4 (TopNTracker) naturally returns fewer than N when admission fails under the distinctness constraint
-**When** I update `cli/query.py::main` to detect `len(validated_set.routes) < params.n`, construct a degradation explanation string naming the observed-vs-requested counts and the J_max value, and surface the explanation in the run summary (Story 6.5) AND in each emitted report's metadata
-**Then** `tests/e2e/test_degradation.py` runs `steeproute` on a real-data fixture crafted to have only 2–3 distinct routes under `--j-max 0.30` (a narrow area within the Grenoble fixture) and asserts: fewer than N reports emitted; stdout's run summary (when Story 6.5 lands) OR final output contains a line matching pattern `Only X distinct routes satisfy J_max ≤ 0.30. Returning X routes; additional candidates would exceed the overlap threshold.`; exit code is 0 (graceful degradation is a normal outcome, not an error)
+**When** I update `cli/query.py::main` to detect `len(validated_set.routes) < params.n`, construct a degradation explanation string naming the observed-vs-requested counts and the J_max value, and surface the explanation in the run summary (Story 7.5) AND in each emitted report's metadata
+**Then** `tests/e2e/test_degradation.py` runs `steeproute` on a real-data fixture crafted to have only 2–3 distinct routes under `--j-max 0.30` (a narrow area within the Grenoble fixture) and asserts: fewer than N reports emitted; stdout's run summary (when Story 7.5 lands) OR final output contains a line matching pattern `Only X distinct routes satisfy J_max ≤ 0.30. Returning X routes; additional candidates would exceed the overlap threshold.`; exit code is 0 (graceful degradation is a normal outcome, not an error)
 **And** a follow-up test `test_relaxed_jmax_produces_more_routes` runs the same query with `--j-max 0.50` on the same prepared cache and asserts: more routes returned (demonstrates iterative re-query); preprocessing cache-hit (fast re-run) — exercising Journey 2's tuning loop
 **And** the degradation explanation appears in each emitted report's metadata block so the user reading a single report can see it was part of a degraded set
 
-### Story 6.5: Run summary on stdout (FR22)
+### Story 7.5: Run summary on stdout (FR22)
 
 As a user,
 I want a clear run summary printed to stdout at the end of every `steeproute` invocation — parameters, routes returned vs. N requested, validation-failure count, graceful-degradation explanation, convergence status, wall-clock total —
@@ -854,7 +911,7 @@ So that FR22 is fulfilled and I can judge a run's outcome at a glance without op
 
 **Acceptance Criteria:**
 
-**Given** Stories 6.1–6.4 are complete
+**Given** Stories 7.1–7.4 are complete
 **When** I add a final run-summary block emitted to stdout in `cli/query.py` after `output.render(...)` returns — emitted regardless of `--quiet` (Architecture §Cat 8: final summary is always stdout; only intermediate progress is suppressible) — formatted as labeled human-readable lines with this exact structure (labels stable so tests can regex-match against them):
 ```
 --- Run summary ---
@@ -866,16 +923,16 @@ degradation: <explanation>                      # only if routes_returned < N re
 wall_clock_total: <seconds>s
 ```
 **Then** `tests/e2e/test_run_summary.py::test_happy_path` runs a successful query and regex-asserts each label line appears with values matching the invocation (`re.search(r"routes_returned:\s*(\d+)/(\d+)", stdout)`, etc.)
-**And** `tests/e2e/test_run_summary.py::test_degraded_path` asserts the `degradation:` line appears when fewer than N routes are returned (integrates with Story 5.4)
+**And** `tests/e2e/test_run_summary.py::test_degraded_path` asserts the `degradation:` line appears when fewer than N routes are returned (integrates with Story 7.4)
 **And** `tests/e2e/test_run_summary.py::test_validation_failure_path` asserts the `validation_failures:` line shows a non-zero count when some routes failed validation (integrates with Epic 3 Story 3.11)
-**And** `tests/e2e/test_run_summary.py::test_quiet_preserves_summary` runs with `--quiet` and asserts: no progress lines during the run (Story 6.1), but the run summary still appears on stdout at the end
+**And** `tests/e2e/test_run_summary.py::test_quiet_preserves_summary` runs with `--quiet` and asserts: no progress lines during the run (Story 7.1), but the run summary still appears on stdout at the end
 **And** the `--- Run summary ---` delimiter line is present so downstream scripts can split stdout on it
 
-## Epic 7: Release Polish
+## Epic 8: Release Polish
 
 Deliver the interview-ready state. Pinned regression golden fixtures on 2–3 real Grenoble-area cutouts lock in current-known-good behavior going forward, with a documented `uv run update-regression` workflow and commit-message discipline. The README presents a 3–5 region gallery (map screenshots + elevation profile PNGs + links to HTML files in `docs/examples/`), a first-class "Known Limitations" section covering DEM/cliff-bias and GRASP-non-optimality, and a quickstart for both CLIs. If any CI thresholds (coverage, GRASP/exhaustive ratio) were held lenient during earlier epics, they tighten to final committed values here.
 
-### Story 7.1: Regression golden test harness and update-regression workflow
+### Story 8.1: Regression golden test harness and update-regression workflow
 
 As a developer,
 I want a test harness that compares each pinned regression fixture's GRASP output against a committed 5-field hash tuple (`objective`, `d_plus_m`, `d_minus_m`, `edge_count`, `canonical_edge_sequence_hash`) per route, plus a single `uv run update-regression` workflow command with commit-message rationale discipline,
@@ -890,7 +947,7 @@ So that silent behavioral drift between commits is caught automatically and gold
 **And** `README.md` (dev-notes section) documents that any commit updating goldens must include an explicit rationale in the commit message
 **And** the harness uses real cache entries + real output paths — no mocking of the solver or output layers
 
-### Story 7.2: Pin 2–3 Grenoble regression fixtures with zero-tolerance CI gate
+### Story 8.2: Pin 2–3 Grenoble regression fixtures with zero-tolerance CI gate
 
 As a developer,
 I want 2–3 committed Grenoble-area regression fixtures — each a pre-prepared cache entry + a golden hash tuple at a fixed seed + fixed params — enforced in CI with zero tolerance,
@@ -898,7 +955,7 @@ So that representative real-world query regressions are caught immediately (dete
 
 **Acceptance Criteria:**
 
-**Given** Story 7.1 provides the harness + schema + update workflow
+**Given** Story 8.1 provides the harness + schema + update workflow
 **When** I pick 2–3 distinct small Grenoble-area cutouts (5–10 km radius, chosen for trail-density and terrain-character variety — e.g., one Chartreuse-style, one Belledonne-style, one Vercors-style), run `steeproute-setup` for each into a committed location (`tests/e2e/fixtures/<region_name>/cache/`), commit the prepared cache entries, then run `steeproute` with fixed params + seed on each and commit the resulting goldens to `tests/e2e/goldens/<region_name>.json`
 **Then** `test_pinned_regressions.py` is parameterized over the 2–3 fixtures and asserts exact match on all 5 hash fields per route — zero tolerance (Architecture §Cat 11c)
 **And** each fixture's cache stays under ~10 MB committed (documented per fixture; DEM excerpts shared across fixtures where geographic overlap permits)
@@ -906,7 +963,7 @@ So that representative real-world query regressions are caught immediately (dete
 **And** each fixture's regression test runs in CI in under 30 seconds; total pinned-regression CI time under 2 minutes
 **And** `pytest.skip` / `xfail` on pinned-regression tests is forbidden per Architecture §Cat 11c
 
-### Story 7.3: README gallery with 3–5 pre-computed example reports
+### Story 8.3: README gallery with 3–5 pre-computed example reports
 
 As a reader of the GitHub repo,
 I want a visible gallery in the README showing 3–5 Grenoble-area example query results — map screenshot + elevation profile PNG + link to the interactive HTML report for each —
@@ -915,14 +972,14 @@ So that portfolio credibility is established: a visiting reviewer can see the to
 **Acceptance Criteria:**
 
 **Given** Stories 3.11 and 6.5 are complete
-**When** I pick 3–5 Grenoble-area query regions demonstrating distinct terrain character (different from Story 7.2's regression fixtures — these are gallery regions, not test fixtures; full-size queries), run `steeproute-setup` + `steeproute` for each with a fixed seed + documented params, save the generated HTML files to `docs/examples/<region_name>/route-*.html`, capture a map-screenshot PNG + elevation-profile PNG for each region's route-1
+**When** I pick 3–5 Grenoble-area query regions demonstrating distinct terrain character (different from Story 8.2's regression fixtures — these are gallery regions, not test fixtures; full-size queries), run `steeproute-setup` + `steeproute` for each with a fixed seed + documented params, save the generated HTML files to `docs/examples/<region_name>/route-*.html`, capture a map-screenshot PNG + elevation-profile PNG for each region's route-1
 **Then** `README.md` has a `## Gallery` section with one row per example region containing: thumbnail map PNG, thumbnail elevation PNG, one-line area description (e.g., `Chamrousse ridgeline · 10 km radius · ~12 min query`), clickable link to the full HTML report in `docs/examples/`
 **And** `tests/e2e/test_gallery_self_contained.py` asserts each HTML file in `docs/examples/` is self-contained (zero external URL references via grep — reuses the check from Story 3.10)
 **And** `docs/examples/README.md` documents how each region was generated (exact commands + seed) so any gallery file can be regenerated
 **And** total PNG asset size committed to the repo stays under 5 MB
-**And** during gallery generation, approximate peak memory usage per query is recorded; if any region exceeds 12 GB, surface in Story 7.4's Known Limitations section as an NFR2 reality check
+**And** during gallery generation, approximate peak memory usage per query is recorded; if any region exceeds 12 GB, surface in Story 8.4's Known Limitations section as an NFR2 reality check
 
-### Story 7.4: README Known Limitations + Quickstart sections
+### Story 8.4: README Known Limitations + Quickstart sections
 
 As a reader of the GitHub repo,
 I want the README to document the tool's known failure modes (DEM/polyline cliff-bias, GRASP heuristic non-optimality) and include a Quickstart section for both CLIs,
@@ -930,25 +987,25 @@ So that the PRD's error-model documentation commitment is fulfilled and a visiti
 
 **Acceptance Criteria:**
 
-**Given** Story 7.3 populates the gallery and the full tool is feature-complete
+**Given** Story 8.3 populates the gallery and the full tool is feature-complete
 **When** I add a `## Known Limitations` section to `README.md` covering:
 - **Data-level error**: DEM / polyline-drift interaction and resulting cliff-bias risk — phantom steepness near cliffs is possible; users should cross-check cliff-proximate routes against topo maps before treating them as ideas
 - **Solver-level error**: GRASP is a heuristic, not an optimal solver; the repo's GRASP-vs-exhaustive CI ratio provides one empirical anchor on small instances but doesn't generalize to a claim of optimality on real-scale queries; the tool finds "a good route," not "*the* route"
-- **Memory envelope (NFR2)**: validated memory behavior from Story 7.3 gallery generation — "runs comfortably on a commodity 16 GB laptop" or flagged notable usage
+- **Memory envelope (NFR2)**: validated memory behavior from Story 8.3 gallery generation — "runs comfortably on a commodity 16 GB laptop" or flagged notable usage
 - **Portability (NFR7/NFR8)**: "Developed and tested on Windows. Linux is expected to work but not actively tested; macOS is not a v1 commitment."
 **And** a `## Quickstart` section with concrete install + invocation commands for both `steeproute-setup` and `steeproute`, using one of the gallery regions as the example
 **Then** the Known Limitations section appears in the top third of the README — portfolio-visible, not hidden in an appendix
 **And** `tests/e2e/test_readme_references_gallery.py` asserts every HTML filename in `docs/examples/` is referenced from `README.md` (catches README drift when gallery is regenerated)
 
-### Story 7.5: Final CI threshold tightening and Linux best-effort job
+### Story 8.5: Final CI threshold tightening and Linux best-effort job
 
 As a developer,
 I want CI coverage thresholds tightened to the committed values (80% overall / 95% on pure-logic modules), the GRASP-vs-exhaustive ratio gate revisited against observed baseline, and a Linux matrix job running alongside Windows for NFR8 best-effort coverage,
-So that Epic 7's quality commitments are enforceable in CI and the repo can credibly claim its quality bar.
+So that Epic 8's quality commitments are enforceable in CI and the repo can credibly claim its quality bar.
 
 **Acceptance Criteria:**
 
-**Given** Epics 1–6 and Stories 7.1–7.4 are complete; the full test suite passes on main
+**Given** Epics 1–7 and Stories 8.1–8.4 are complete; the full test suite passes on main
 **When** I update CI configuration to: set `--cov-fail-under=80` for overall coverage and `--cov-fail-under=95` targeted at `src/steeproute/pipeline/`, `src/steeproute/solver/distinctness.py`, `src/steeproute/validator.py`, `src/steeproute/cache.py` (Architecture §Cat 11e); revisit Story 3.7's `QUALITY_THRESHOLD = 0.80` against observed baseline — if the baseline supports it, tighten to a higher value (target 0.85–0.90 per Architecture) with the new value recorded in the commit message and updated in the Story 3.7 test's module-scope constant; add a `ubuntu-latest` matrix job to `.github/workflows/ci.yml` running the same pytest + ruff + basedpyright gates
 **Then** CI passes on the current main on Windows (primary) and produces a Linux run whose status is visible in CI
 **And** coverage thresholds are enforced — any PR dropping below either threshold fails CI

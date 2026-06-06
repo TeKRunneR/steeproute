@@ -188,3 +188,8 @@ cython_debug/
 .claude/settings.local.json
 .claude/worktrees/
 
+# Local trial / diagnostic run outputs (prototyping & manual testing — never commit)
+/.trial-*/
+/.oracle-cache/
+/results*/
+

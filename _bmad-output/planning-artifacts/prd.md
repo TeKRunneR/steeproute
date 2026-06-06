@@ -97,7 +97,7 @@ The project has no business dimension (N=1, no revenue, no adoption target). Its
 
 **Data pipeline**
 
-- OSM via `osmnx`, configurable untagged-trails policy (default **include**)
+- OSM via `osmnx`, configurable untagged-trails policy (default **include**); a curated set of minor road types (e.g. residential, unclassified, service) is admitted as **connectors** (no SAC grade, never climbs) so routes can cross short paved gaps between trails — the vertical-effort objective self-limits road use
 - IGN RGE ALTI 5m DEM sampled via `rasterio`
 - Elevation mitigation: DEM-resample + 2D polyline smoothing + moving-median on elevation
 - Caching keyed on all inputs affecting output (see **Domain-Specific Requirements → Data Provenance & Versioning**)
@@ -357,6 +357,8 @@ All configuration via CLI flags. No config file in v1 (N=1, flag count manageabl
 | `--n` | 5 | Target result count |
 | `--area-cap` | ~500 km² | Hard area-size cap |
 | `--untagged-trails` | `include` | Policy for OSM trails without sac_scale |
+| `--elevation-smoothing` | (meters; tuned) | Strength of the global elevation smoothing (graph-Laplacian diffusion), in meters — one canonical profile feeds solver, metric box, and plotted curve |
+| `--elevation-deadband` | 0 (off) | Hysteresis floor (m): flattens sub-floor up/down reversals out of the elevation profile, reshaping which segments clear the slope thresholds (a route-selection control, not a noise reducer) |
 
 **Solver**
 
@@ -489,7 +491,7 @@ These are load-bearing for portfolio credibility. A feature-lean v1 is defensibl
 - **FR8**: User can configure the target result count.
 - **FR9**: User can configure the policy for untagged OSM trails (include or exclude).
 - **FR10**: System searches for routes maximizing total vertical effort (D+ + D−) subject to the configured constraints, with returned routes strictly contained within the specified search area (soft containment deferred to Phase 2).
-- **FR11**: System returns up to N distinct routes, where distinctness is defined by a pairwise segment-overlap ceiling.
+- **FR11**: System returns up to N distinct routes, where distinctness is defined by a pairwise segment-overlap ceiling measured on the undirected base-trail-segment identity (the same identity as the FR5 reuse limit — two routes differing only in the direction they walk a shared trail are not counted as distinct).
 - **FR12**: System gracefully returns fewer than N routes with a clear explanation when the distinctness constraint cannot be satisfied.
 
 ### Progress & Interrupt Handling
