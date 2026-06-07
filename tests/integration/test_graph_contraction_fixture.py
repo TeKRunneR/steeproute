@@ -92,8 +92,10 @@ def test_contracted_graph_has_fewer_edges_than_base(base_graph: nx.MultiDiGraph)
         f"contracted graph not smaller: "
         f"{contracted.graph.number_of_edges()} >= {base_graph.number_of_edges()}"
     )
-    # Sanity: super-edge count matches climb count (one per climb).
-    assert len(contracted.super_edge_to_base) == len(climbs)
+    # Sanity: at least one super-edge per climb. Junction-aware splitting (Story
+    # 6.1, default on) can break a climb into several super-edges at interior
+    # trail junctions, so the count is `>= len(climbs)` rather than `==`.
+    assert len(contracted.super_edge_to_base) >= len(climbs)
 
 
 def test_super_edge_aggregates_match_back_expanded_base_metrics(

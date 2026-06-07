@@ -48,7 +48,12 @@ from typing import Any
 
 from steeproute.models import ContractedGraph
 
-__all__ = ["base_segment_ids", "blocking_ids", "non_exempt_base_segment_ids"]
+__all__ = [
+    "base_segment_id_map",
+    "base_segment_ids",
+    "blocking_ids",
+    "non_exempt_base_segment_ids",
+]
 
 
 def base_segment_ids(
@@ -66,6 +71,24 @@ def base_segment_ids(
     if stored is None:
         return frozenset({(u, v, k)})
     return stored
+
+
+def base_segment_id_map(
+    graph: ContractedGraph,
+) -> dict[tuple[int, int, int], frozenset[tuple[int, int, int]]]:
+    """Map each contracted edge's directed `(u, v, k)` identity → its undirected base ids.
+
+    The single source of the directed-edge → undirected-base-segment projection
+    (Story 6.1). `solver/distinctness.py` consumes this so Jaccard distinctness
+    keys on the *same* `base_segment_id` the reuse rule uses — a route walking a
+    trail and another walking its reverse then count as overlapping, aligning
+    FR11 distinctness with FR5 undirected reuse. An edge missing its tag degrades
+    to its directed identity via `base_segment_ids` (test-graph robustness).
+    """
+    return {
+        (u, v, k): base_segment_ids(data, u, v, k)
+        for u, v, k, data in graph.graph.edges(keys=True, data=True)
+    }
 
 
 def non_exempt_base_segment_ids(graph: ContractedGraph) -> frozenset[tuple[int, int, int]]:

@@ -62,6 +62,7 @@ from steeproute.cli._shared import (
 from steeproute.models import Area, ProvenanceInfo, SolverParams, ValidatedRouteSet
 from steeproute.pipeline.climbs import detect_climbs
 from steeproute.pipeline.graph import contract_climbs
+from steeproute.pipeline.osm import filter_trails
 from steeproute.solver.grasp import GraspSolver
 from steeproute.validator import validate
 
@@ -198,12 +199,27 @@ def cli(
     )
     provenance = _build_provenance(prepared.manifest)
 
+    # SAC cap-aware contraction (Story 6.1, FR4/FR10): drop above-cap edges
+    # *before* climb detection so a single over-cap pitch can no longer weld
+    # itself into an otherwise-usable climb (the max-rank SAC aggregation in
+    # `contract_climbs` would otherwise reject the whole climb at the RCL). The
+    # query-side cap keeps the prepared cache difficulty-independent (setup pins
+    # T6; the cache key omits `difficulty_cap`), so `--difficulty-cap` stays a
+    # fast query knob. `filter_trails` re-applies the trail-highway + untagged
+    # filters too — idempotent on the already-setup-filtered graph — and never
+    # mutates its input. The solver's per-edge RCL SAC filter is kept as cheap
+    # defense (it now never triggers on real GRASP output). The filtered graph
+    # feeds detection and contraction; `output.render` keeps the full
+    # `prepared.graph` for geometry lookups (read-only, strictly a superset — so
+    # FR28 failed-route rendering can never lose a route edge's geometry).
+    routable_graph = filter_trails(prepared.graph, untagged_trails, difficulty_cap)
+
     climbs = detect_climbs(
-        prepared.graph,
+        routable_graph,
         min_climb_slope=min_climb_slope,
         min_climb_ground_length=min_climb_ground_length,
     )
-    contracted = contract_climbs(prepared.graph, climbs, l_connector=l_connector)
+    contracted = contract_climbs(routable_graph, climbs, l_connector=l_connector)
 
     # No-op progress callback for Epic 3 (Story 4.1 wires the throttled renderer);
     # seed threads straight into the RNG so `--seed` produces byte-identical

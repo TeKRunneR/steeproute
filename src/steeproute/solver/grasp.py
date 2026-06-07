@@ -86,7 +86,11 @@ import numpy as np
 from steeproute.models import ContractedGraph, Edge, Solution, SolverParams, route_avg_gradient
 from steeproute.pipeline.osm import max_sac_rank, parse_difficulty_cap
 from steeproute.solver.distinctness import TopNTracker
-from steeproute.solver.reuse import blocking_ids, non_exempt_base_segment_ids
+from steeproute.solver.reuse import (
+    base_segment_id_map,
+    blocking_ids,
+    non_exempt_base_segment_ids,
+)
 
 __all__ = ["GraspSolver", "RCL_SIZE"]
 
@@ -134,7 +138,14 @@ class GraspSolver:
         self._rng: np.random.Generator = rng
         # Accepted but not invoked here — Story 4.1 wires throttled callback dispatch.
         self._progress_callback: Callable[[Any], None] | None = progress_callback
-        self._tracker: TopNTracker = TopNTracker(params.n, params.j_max)
+        # Undirected base-segment distinctness (Story 6.1): the tracker keys
+        # Jaccard on the same `base_segment_id` identity the reuse rule uses, so
+        # opposite-direction reuse of one trail counts as overlap. Single-sourced
+        # with the oracle + validator via `solver/reuse.py`.
+        self._segment_map: dict[tuple[int, int, int], frozenset[tuple[int, int, int]]] = (
+            base_segment_id_map(graph)
+        )
+        self._tracker: TopNTracker = TopNTracker(params.n, params.j_max, self._segment_map)
         # Sort nodes ascending so start-node sampling is deterministic across
         # Python / networkx versions (dict-insertion order is the FR29 fragility).
         self._nodes: tuple[int, ...] = tuple(sorted(graph.graph.nodes))

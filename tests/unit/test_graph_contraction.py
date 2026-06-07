@@ -501,6 +501,104 @@ def test_two_climbs_share_endpoints_get_distinct_super_edge_keys() -> None:
     assert len(super_ids_for_zero_three) == 2
 
 
+# ----------------------------------------------------------------------------
+# Story 6.1: junction-aware climb splitting
+# ----------------------------------------------------------------------------
+
+
+def test_climb_split_at_interior_trail_junction_default_on() -> None:
+    """Story 6.1: a climb splits at an interior node where a different trail joins.
+
+    Climb 0→1→2→3; a side trail (10→2) joins at interior node 2 — a real
+    junction. Splitting is on by default, so the atomic whole-climb super-edge
+    (0→3) must NOT appear; instead two super-edges (0→2 and 2→3) emerge and the
+    junction node 2 becomes a real node a route can board at. On the pre-fix
+    (atomic-climb) code this fails — node 2 is absorbed and only (0, 3) exists.
+    """
+    climb_edges = [
+        _make_edge(0, 1, length_m=150.0, d_plus_m=40.0),
+        _make_edge(1, 2, length_m=150.0, d_plus_m=40.0),
+        _make_edge(2, 3, length_m=150.0, d_plus_m=40.0),
+    ]
+    # External segment incident to interior node 2 — a different physical trail.
+    side_trail = _make_edge(10, 2, length_m=300.0, d_plus_m=10.0, d_minus_m=10.0)
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    for e in [*climb_edges, side_trail]:
+        _add_edge_from(g, e)
+    climb = _climb_from_edges(climb_edges)
+
+    contracted = contract_climbs(g, [climb], l_connector=_L_CONNECTOR)
+
+    # Split at node 2 → two super-edges; no atomic (0, 3) super-edge.
+    assert contracted.graph.has_edge(0, 2)
+    assert contracted.graph.has_edge(2, 3)
+    assert not contracted.graph.has_edge(0, 3)
+    # Junction node 2 survives as a real node; non-junction interior node 1 is
+    # still absorbed.
+    assert 2 in contracted.graph.nodes
+    assert 1 not in contracted.graph.nodes
+    # One super-edge per sub-segment.
+    super_ids = [sid for sid in contracted.super_edge_to_base if sid[0] in (0, 2)]
+    assert len(super_ids) == 2
+    # Each sub-super-edge's metrics are the sum of ITS base edges (split is exact).
+    seg_0_2 = next(sid for sid in contracted.super_edge_to_base if (sid[0], sid[1]) == (0, 2))
+    seg_2_3 = next(sid for sid in contracted.super_edge_to_base if (sid[0], sid[1]) == (2, 3))
+    assert math.isclose(contracted.graph[0][2][seg_0_2[2]]["d_plus_m"], 80.0, abs_tol=1e-9)
+    assert math.isclose(contracted.graph[2][3][seg_2_3[2]]["d_plus_m"], 40.0, abs_tol=1e-9)
+    # base_segment_id / reusable tagging is preserved on the split super-edges.
+    assert contracted.graph[0][2][seg_0_2[2]]["reusable"] is False
+    assert contracted.graph[0][2][seg_0_2[2]]["base_segment_id"] == {(0, 1, 0), (1, 2, 0)}
+
+
+def test_no_split_when_split_at_junctions_disabled() -> None:
+    """`split_at_junctions=False` reproduces the pre-fix atomic-climb behaviour."""
+    climb_edges = [
+        _make_edge(0, 1, length_m=150.0, d_plus_m=40.0),
+        _make_edge(1, 2, length_m=150.0, d_plus_m=40.0),
+        _make_edge(2, 3, length_m=150.0, d_plus_m=40.0),
+    ]
+    side_trail = _make_edge(10, 2, length_m=300.0, d_plus_m=10.0, d_minus_m=10.0)
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    for e in [*climb_edges, side_trail]:
+        _add_edge_from(g, e)
+    climb = _climb_from_edges(climb_edges)
+
+    contracted = contract_climbs(g, [climb], l_connector=_L_CONNECTOR, split_at_junctions=False)
+
+    # Atomic whole-climb super-edge 0→3; no split super-edges at the junction.
+    assert contracted.graph.has_edge(0, 3)
+    assert not contracted.graph.has_edge(0, 2)
+    assert not contracted.graph.has_edge(2, 3)
+    assert len([sid for sid in contracted.super_edge_to_base if (sid[0], sid[1]) == (0, 3)]) == 1
+    assert len(contracted.super_edge_to_base) == 1
+
+
+def test_no_split_at_same_trail_reverse_only_interior_node() -> None:
+    """An interior node touched only by the climb's own reverse direction is not a junction.
+
+    Climb 0→1→2 with the same trail's descent 2→1→0 present. Node 1 is interior
+    but every incident base segment is the climb's own (undirected ids collide),
+    so the climb must NOT split there — one super-edge 0→2, as before.
+    """
+    uphill = [
+        _make_edge(0, 1, length_m=250.0, d_plus_m=60.0),
+        _make_edge(1, 2, length_m=250.0, d_plus_m=60.0),
+    ]
+    downhill = [
+        _make_edge(2, 1, length_m=250.0, d_plus_m=0.0, d_minus_m=60.0),
+        _make_edge(1, 0, length_m=250.0, d_plus_m=0.0, d_minus_m=60.0),
+    ]
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    for e in [*uphill, *downhill]:
+        _add_edge_from(g, e)
+    climb = _climb_from_edges(uphill)
+
+    contracted = contract_climbs(g, [climb], l_connector=_L_CONNECTOR)
+
+    assert contracted.graph.has_edge(0, 2)
+    assert len([sid for sid in contracted.super_edge_to_base if (sid[0], sid[1]) == (0, 2)]) == 1
+
+
 def test_contract_climbs_does_not_mutate_input_graph() -> None:
     """AC #4 purity: input `base_graph` topology and every edge-data dict preserved.
 

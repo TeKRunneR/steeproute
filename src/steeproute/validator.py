@@ -50,7 +50,11 @@ Jaccard identity is single-sourced from `solver/distinctness.py` (routes are
 wrapped as transient `Solution`s and fed to `jaccard_distance`) so set-level
 distinctness uses byte-identical semantics to `TopNTracker`'s admission:
 two routes overlap iff their Jaccard *similarity* exceeds `j_max`
-(equivalently `jaccard_distance < 1 - j_max`).
+(equivalently `jaccard_distance < 1 - j_max`). Like the reuse rule, the Jaccard
+identity is the **undirected** `base_segment_id` (Story 6.1, sourced via
+`solver.reuse.base_segment_id_map`), so two routes walking the same trail in
+opposite directions count as overlapping — FR11 distinctness aligned with FR5
+undirected reuse.
 """
 
 from __future__ import annotations
@@ -70,7 +74,11 @@ from steeproute.models import (
 )
 from steeproute.pipeline.osm import max_sac_rank, parse_difficulty_cap
 from steeproute.solver.distinctness import jaccard_distance
-from steeproute.solver.reuse import blocking_ids, non_exempt_base_segment_ids
+from steeproute.solver.reuse import (
+    base_segment_id_map,
+    blocking_ids,
+    non_exempt_base_segment_ids,
+)
 
 __all__ = ["validate", "validate_route", "validate_set"]
 
@@ -85,19 +93,30 @@ def validate_route(route: Route, graph: ContractedGraph, params: SolverParams) -
     return _validate_edges(route.edges, graph, params)
 
 
-def validate_set(routes: list[Route], params: SolverParams) -> list[PairwiseViolation]:
+def validate_set(
+    routes: list[Route], params: SolverParams, graph: ContractedGraph | None = None
+) -> list[PairwiseViolation]:
     """Return one `PairwiseViolation` per route pair exceeding `j_max` (§Cat 6b).
 
     Iterates pairs in ascending `(a, b)` index order for deterministic output
     (FR29). A pair violates iff its Jaccard similarity is strictly greater than
     `params.j_max` — the exact complement of `TopNTracker`'s overlap test, so a
     set the tracker admitted yields no violations here.
+
+    When `graph` is supplied, Jaccard keys on the **undirected** `base_segment_id`
+    identity (Story 6.1, single-sourced via `solver.reuse.base_segment_id_map`),
+    matching `TopNTracker`'s admission so a GRASP-admitted set validates by
+    construction. With `graph=None` it falls back to the directed
+    `(node_u, node_v, key)` identity (pre-6.1 behaviour).
     """
+    segment_map = base_segment_id_map(graph) if graph is not None else None
     overlap_threshold = 1.0 - params.j_max
     violations: list[PairwiseViolation] = []
     for a in range(len(routes)):
         for b in range(a + 1, len(routes)):
-            distance = jaccard_distance(_as_solution(routes[a]), _as_solution(routes[b]))
+            distance = jaccard_distance(
+                _as_solution(routes[a]), _as_solution(routes[b]), segment_map
+            )
             if distance < overlap_threshold:
                 violations.append(
                     PairwiseViolation(
@@ -139,7 +158,7 @@ def validate(
                 validation=_validate_edges(edges, graph, params),
             )
         )
-    return ValidatedRouteSet(routes=routes, set_violations=validate_set(routes, params))
+    return ValidatedRouteSet(routes=routes, set_violations=validate_set(routes, params, graph))
 
 
 def _validate_edges(
@@ -262,8 +281,9 @@ def _route_metrics(edges: list[Edge]) -> RouteMetrics:
 def _as_solution(route: Route) -> Solution:
     """Wrap a `Route` as a transient `Solution` for `jaccard_distance` reuse.
 
-    `jaccard_distance` keys on the canonical `(node_u, node_v, key)` identity and
-    ignores `objective`, so wrapping with `objective=0.0` reuses the single
+    `jaccard_distance` keys on the edge identity (directed `(node_u, node_v,
+    key)`, or the undirected `base_segment_id` when a segment map is supplied)
+    and ignores `objective`, so wrapping with `objective=0.0` reuses the single
     source of Jaccard truth (`solver/distinctness.py`) without duplicating the
     edge-identity projection here.
     """

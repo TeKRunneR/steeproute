@@ -36,20 +36,24 @@ Semantics:
     - Undirected base-segment reuse: an edge is infeasible iff any of its
       non-exempt base-segment ids is already used on the current walk
       (`solver.reuse.blocking_ids` against the graph's non-exempt id set). Exempt
-      short connectors never block. Note the dedup key below stays *directed*
-      (`(node_u, node_v, key)`) — distinctness/Jaccard is unchanged (a deferred
-      open item); only the reuse-feasibility rule went undirected.
+      short connectors never block. Note the *candidate-dedup* key below stays
+      *directed* (`(node_u, node_v, key)`) — its only job is to collapse
+      different traversal orderings of the same directed edge-set. The
+      **distinctness/Jaccard** step (the `TopNTracker` below) keys on the
+      *undirected* `base_segment_id` (Story 6.1), so opposite-direction reuse of
+      one trail counts as overlap — matching GRASP and the validator.
   The slope floor θ (FR3) is **not** a DFS filter — it is a route-level
   constraint, so (exactly like GRASP's `_route_slope_ok` finalization gate) it
   is applied to each fully-enumerated candidate before admission:
   `(Σ d_plus_m + Σ d_minus_m) / Σ length_m ≥ θ`. This keeps the oracle's and
   GRASP's feasible sets identical, which is what makes Story 3.7's quality
   ratio meaningful.
-- **Top-N + distinctness:** the full enumeration is deduplicated by canonical
-  edge-set (different traversal orderings of the same edge-set collapse), then
-  sorted objective-descending and fed through `TopNTracker(n, params.j_max)` —
-  the same admission semantics GRASP will use in Story 3.6. This is what makes
-  Story 3.7's quality ratio meaningful.
+- **Top-N + distinctness:** the full enumeration is deduplicated by directed
+  canonical edge-set (different traversal orderings of the same edge-set
+  collapse), then sorted objective-descending and fed through
+  `TopNTracker(n, params.j_max, base_segment_id_map(graph))` — the same
+  undirected-distinctness admission semantics GRASP uses (Story 3.6 + Story
+  6.1). This is what makes Story 3.7's quality ratio meaningful.
 
 Pure: takes no shared state, mutates no inputs. Lives under `tests/` and is
 never imported from `src/steeproute/` — strictly testing infrastructure.
@@ -62,7 +66,11 @@ from typing import Any
 from steeproute.models import ContractedGraph, Edge, Solution, SolverParams, route_avg_gradient
 from steeproute.pipeline.osm import max_sac_rank, parse_difficulty_cap
 from steeproute.solver.distinctness import TopNTracker
-from steeproute.solver.reuse import blocking_ids, non_exempt_base_segment_ids
+from steeproute.solver.reuse import (
+    base_segment_id_map,
+    blocking_ids,
+    non_exempt_base_segment_ids,
+)
 
 __all__ = ["enumerate_best"]
 
@@ -123,7 +131,10 @@ def enumerate_best(
     # the Story 3.7 ratio honest).
     feasible = (s for s in candidates.values() if route_avg_gradient(s.edges) >= params.theta)
     sorted_candidates = sorted(feasible, key=lambda s: -s.objective)
-    tracker = TopNTracker(n, params.j_max)
+    # Undirected base-segment distinctness (Story 6.1), single-sourced with GRASP
+    # + the validator via `solver.reuse` so the oracle and GRASP keep one
+    # feasible/distinct set (the Story 3.7 quality ratio stays apples-to-apples).
+    tracker = TopNTracker(n, params.j_max, base_segment_id_map(graph))
     for sol in sorted_candidates:
         tracker.consider(sol)
     return tracker.current_top()

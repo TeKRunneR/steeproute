@@ -93,8 +93,8 @@ development_status:
   5-3-revalidate-metamorphic-cli-and-doc-sync: done
   epic-5-retrospective: optional
 
-  epic-6: backlog        # Route-Discovery & Elevation-Consistency Fixes (inserted via correct-course 2026-06-07)
-  6-1-route-discovery-bug-fixes-junction-split-sac-cap-undirected-distinctness: backlog
+  epic-6: in-progress        # Route-Discovery & Elevation-Consistency Fixes (inserted via correct-course 2026-06-07)
+  6-1-route-discovery-bug-fixes-junction-split-sac-cap-undirected-distinctness: done
   6-2-roads-as-connectors: backlog
   6-3-unified-elevation-profile-slope-display-readability-and-closeout: backlog
   epic-6-retrospective: optional

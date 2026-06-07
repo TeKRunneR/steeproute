@@ -4,10 +4,15 @@
 Convention pinned in one place (Architecture §Cat 6b + §"Numerical and data
 discipline"):
 
-- `jaccard_distance(a, b)` returns `1 - |E(a) ∩ E(b)| / |E(a) ∪ E(b)|` over the
-  canonical edge-identity sets (each edge collapsed to its `(node_u, node_v,
-  key)` triple). Identical edge-sets give `0.0`; disjoint edge-sets give
-  `1.0`. Both-empty is defined as `0.0` (identical empty sets — keeps the
+- `jaccard_distance(a, b, segment_map)` returns `1 - |E(a) ∩ E(b)| / |E(a) ∪
+  E(b)|` over the canonical edge-identity sets. With `segment_map=None` each
+  edge collapses to its directed `(node_u, node_v, key)` triple; with a
+  `segment_map` (directed id → undirected `base_segment_id`, from
+  `solver.reuse.base_segment_id_map`) each edge collapses to the **undirected**
+  base segments it occupies, so a route and the reverse-direction traversal of
+  the same physical trail count as overlapping (Story 6.1 — aligns FR11
+  distinctness with FR5 undirected reuse). Identical sets give `0.0`; disjoint
+  give `1.0`. Both-empty is defined as `0.0` (identical empty sets — keeps the
   function total for the otherwise-illegal zero-edge `Solution`).
 - `TopNTracker` reads `j_max` as the **similarity ceiling** (FR7's
   `--j-max`): two solutions overlap iff
@@ -22,34 +27,52 @@ CLI / config dependency: `n` and `j_max` arrive as raw constructor args.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 
 from steeproute.models import Solution
 
 __all__ = ["TopNTracker", "jaccard_distance"]
 
+# Directed edge identity `(node_u, node_v, key)` → the undirected base-segment
+# ids it occupies. Built once per graph by `solver.reuse.base_segment_id_map`
+# and threaded in so distinctness keys on the same identity as the reuse rule.
+SegmentMap = Mapping[tuple[int, int, int], frozenset[tuple[int, int, int]]]
 
-def _canonical_edge_set(solution: Solution) -> frozenset[tuple[int, int, int]]:
-    """Project a `Solution` onto its canonical edge-identity set.
 
-    Each edge collapses to `(node_u, node_v, key)` per Architecture §"Numerical
-    and data discipline" — the same tuple used for cache-key hashing — so two
-    `Edge` values that differ on metrics but share identity collapse together.
+def _canonical_edge_set(
+    solution: Solution, segment_map: SegmentMap | None = None
+) -> frozenset[tuple[int, int, int]]:
+    """Project a `Solution` onto its canonical identity set.
+
+    With `segment_map=None`, each edge collapses to its directed `(node_u,
+    node_v, key)` triple per Architecture §"Numerical and data discipline" — the
+    same tuple used for cache-key hashing. With a `segment_map`, each edge
+    collapses to the **undirected** base-segment ids it occupies (Story 6.1), so
+    opposite-direction traversals of the same trail share identity. An edge
+    absent from the map degrades to its own directed identity.
     """
-    return frozenset((e.node_u, e.node_v, e.key) for e in solution.edges)
+    if segment_map is None:
+        return frozenset((e.node_u, e.node_v, e.key) for e in solution.edges)
+    ids: set[tuple[int, int, int]] = set()
+    for e in solution.edges:
+        edge_id = (e.node_u, e.node_v, e.key)
+        ids |= segment_map.get(edge_id, frozenset({edge_id}))
+    return frozenset(ids)
 
 
-def jaccard_distance(a: Solution, b: Solution) -> float:
-    """Return `1 - |E(a) ∩ E(b)| / |E(a) ∪ E(b)|` over canonical edge-identity sets.
+def jaccard_distance(a: Solution, b: Solution, segment_map: SegmentMap | None = None) -> float:
+    """Return `1 - |E(a) ∩ E(b)| / |E(a) ∪ E(b)|` over canonical identity sets.
 
-    Range `[0.0, 1.0]`. Identical edge-sets → `0.0`; disjoint → `1.0`. Both
+    Range `[0.0, 1.0]`. Identical sets → `0.0`; disjoint → `1.0`. Both
     solutions empty → `0.0` by definition (the `0/0` trap; an empty
     `Solution` is illegal at the validator stage but defining the math here
-    keeps the primitive total).
+    keeps the primitive total). `segment_map` selects directed (`None`) vs
+    undirected base-segment identity — see `_canonical_edge_set`.
 
     Pure: takes no shared state, mutates nothing.
     """
-    edges_a = _canonical_edge_set(a)
-    edges_b = _canonical_edge_set(b)
+    edges_a = _canonical_edge_set(a, segment_map)
+    edges_b = _canonical_edge_set(b, segment_map)
     union = edges_a | edges_b
     if not union:
         return 0.0
@@ -113,13 +136,17 @@ class TopNTracker:
     other references either.
     """
 
-    def __init__(self, n: int, j_max: float) -> None:
+    def __init__(self, n: int, j_max: float, segment_map: SegmentMap | None = None) -> None:
         if n < 1:
             raise ValueError(f"n must be >= 1, got {n}")
         if not (0.0 <= j_max <= 1.0):
             raise ValueError(f"j_max must be in [0.0, 1.0], got {j_max}")
         self._n: int = n
         self._j_max: float = j_max
+        # `None` → directed `(u, v, key)` distinctness; a map → undirected
+        # base-segment distinctness (Story 6.1), shared with the reuse rule so
+        # admission and the validator's set-level check see one identity.
+        self._segment_map: SegmentMap | None = segment_map
         self._held: list[Solution] = []
 
     def consider(self, solution: Solution) -> bool:
@@ -137,7 +164,11 @@ class TopNTracker:
         if not math.isfinite(solution.objective):
             raise ValueError(f"solution.objective must be finite, got {solution.objective}")
         overlap_threshold = 1.0 - self._j_max
-        overlapping = [s for s in self._held if jaccard_distance(solution, s) < overlap_threshold]
+        overlapping = [
+            s
+            for s in self._held
+            if jaccard_distance(solution, s, self._segment_map) < overlap_threshold
+        ]
 
         if not overlapping:
             if len(self._held) < self._n:

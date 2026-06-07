@@ -68,15 +68,30 @@ def contract_climbs(
     base_graph: nx.MultiDiGraph,
     climbs: list[Climb],
     l_connector: float,
+    split_at_junctions: bool = True,
 ) -> ContractedGraph:
     """Stage 9: build the solver-side `ContractedGraph` from stage-8 climbs.
 
-    For each `Climb`, emit one directed super-edge from `climb.edges[0].node_u`
-    to `climb.edges[-1].node_v` carrying summed metrics. **All** non-climb edges
+    For each `Climb`, emit one directed super-edge per contiguous sub-segment
+    (see `split_at_junctions`) carrying summed metrics. **All** non-climb edges
     are carried over from `base_graph` unchanged (entire edge-data dict,
     including `geometry`, `vertices_resampled`, `highway`, `osm_way_id`) — no
     length-based drop. Every contracted edge is additionally tagged with a
     `base_segment_id` (undirected, see module docstring) and a `reusable` flag.
+
+    **Junction-aware splitting (Story 6.1, FR10).** A climb is collapsed into
+    one atomic super-edge from `climb.edges[0].node_u` to `climb.edges[-1].
+    node_v`, deleting its interior nodes. That makes a trail joining the climb
+    *partway up* (at a real interior junction) unable to board it — the solver
+    can only enter/leave at the two endpoints. With `split_at_junctions=True`
+    (default), the climb is split at every interior node that is a real trail
+    junction — incident, in `base_graph`, to a base segment whose undirected
+    identity is *outside* the climb's own segment set (the climb's own
+    reverse-direction edges share ids, so they never trigger a split). Each
+    resulting sub-segment becomes its own super-edge and the junction node
+    survives as a real node a connector can board at. Single-edge climbs and
+    junction-free climbs are unaffected. `split_at_junctions=False` reproduces
+    the pre-fix atomic-climb behaviour (diagnostics only).
 
     Args:
         base_graph: post-stage-7 `MultiDiGraph` carrying the
@@ -89,19 +104,22 @@ def contract_climbs(
             carried-over connector is tagged `reusable=True` iff
             `length_m < l_connector` (strict). No edge is dropped on this
             threshold any longer.
+        split_at_junctions: when `True` (default), split each climb at its
+            interior trail junctions (one super-edge per sub-segment); when
+            `False`, emit one atomic super-edge per climb.
 
     Returns:
-        `ContractedGraph` whose `graph` is a fresh `MultiDiGraph` (climbs as
-        super-edges + all connectors, each tagged with `base_segment_id` +
-        `reusable`) and whose `super_edge_to_base` maps each super-edge's
-        `(node_u, node_v, key)` triple to the underlying `tuple[Edge, ...]`
-        from the corresponding climb's `edges` field.
+        `ContractedGraph` whose `graph` is a fresh `MultiDiGraph` (climb
+        sub-segments as super-edges + all connectors, each tagged with
+        `base_segment_id` + `reusable`) and whose `super_edge_to_base` maps each
+        super-edge's `(node_u, node_v, key)` triple to the underlying
+        `tuple[Edge, ...]` it contracts.
 
-    Super-edge key allocation: when a climb's `(u, v)` already has parallel
+    Super-edge key allocation: when a sub-segment's `(u, v)` already has parallel
     edges in the contracted graph (from a surviving connector or from another
-    climb ending on the same endpoints), the new super-edge gets the smallest
-    non-conflicting `key` — `max existing key for (u, v) in contracted` + 1,
-    or 0 if no existing edge. Order: connectors added first, then climbs in
+    sub-segment ending on the same endpoints), the new super-edge gets the
+    smallest non-conflicting `key` — `max existing key for (u, v) in contracted`
+    + 1, or 0 if no existing edge. Order: connectors added first, then climbs in
     input order, so connector keys land first and super-edges layer on top.
     """
     contracted: nx.MultiDiGraph = nx.MultiDiGraph()
@@ -137,37 +155,43 @@ def contract_climbs(
             reusable=data["length_m"] < l_connector,
         )
 
-    # 2. Emit one super-edge per climb. Each super-edge carries the aggregated
-    #    metrics + the max-rank SAC; geometry / vertices stay on base edges
-    #    reachable through `super_edge_to_base`. Its `base_segment_id` is the set
-    #    of undirected ids of the base edges it contracts (so it collides with
-    #    the reverse-direction connectors of the same trail); never reusable.
+    # 2. Emit one super-edge per climb sub-segment (junction-split, Story 6.1).
+    #    Each super-edge carries the aggregated metrics + the max-rank SAC;
+    #    geometry / vertices stay on base edges reachable through
+    #    `super_edge_to_base`. Its `base_segment_id` is the set of undirected ids
+    #    of the base edges it contracts (so it collides with the reverse-direction
+    #    connectors of the same trail); never reusable.
     super_edge_to_base: dict[tuple[int, int, int], tuple[Edge, ...]] = {}
     for climb in climbs:
-        u_super: int = climb.edges[0].node_u
-        v_super: int = climb.edges[-1].node_v
-        k_super: int = _next_key_for(contracted, u_super, v_super)
-        length_m: float = sum(e.length_m for e in climb.edges)
-        d_plus_m: float = sum(e.d_plus_m for e in climb.edges)
-        d_minus_m: float = sum(e.d_minus_m for e in climb.edges)
-        avg_gradient: float = (d_plus_m + d_minus_m) / length_m
-        sac_scale: str | None = _aggregate_sac_scale(climb.edges)
-        base_segment_id: frozenset[tuple[int, int, int]] = frozenset(
-            _base_segment_id(e.node_u, e.node_v, e.key) for e in climb.edges
-        )
-        contracted.add_edge(
-            u_super,
-            v_super,
-            key=k_super,
-            length_m=length_m,
-            d_plus_m=d_plus_m,
-            d_minus_m=d_minus_m,
-            avg_gradient=avg_gradient,
-            sac_scale=sac_scale,
-            base_segment_id=base_segment_id,
-            reusable=False,
-        )
-        super_edge_to_base[(u_super, v_super, k_super)] = climb.edges
+        for seg_edges in _split_climb_at_junctions(base_graph, climb.edges, split_at_junctions):
+            u_super: int = seg_edges[0].node_u
+            v_super: int = seg_edges[-1].node_v
+            k_super: int = _next_key_for(contracted, u_super, v_super)
+            length_m: float = sum(e.length_m for e in seg_edges)
+            d_plus_m: float = sum(e.d_plus_m for e in seg_edges)
+            d_minus_m: float = sum(e.d_minus_m for e in seg_edges)
+            # Guard against a zero-length sub-segment (a junction-isolated run of
+            # degenerate zero-length base edges) — mirrors `models.route_avg_gradient`'s
+            # `length_m > 0 else 0.0` convention. Splitting newly exposes this: the
+            # atomic-climb path summed over the whole (min-length-guaranteed) climb.
+            avg_gradient: float = (d_plus_m + d_minus_m) / length_m if length_m > 0 else 0.0
+            sac_scale: str | None = _aggregate_sac_scale(seg_edges)
+            base_segment_id: frozenset[tuple[int, int, int]] = frozenset(
+                _base_segment_id(e.node_u, e.node_v, e.key) for e in seg_edges
+            )
+            contracted.add_edge(
+                u_super,
+                v_super,
+                key=k_super,
+                length_m=length_m,
+                d_plus_m=d_plus_m,
+                d_minus_m=d_minus_m,
+                avg_gradient=avg_gradient,
+                sac_scale=sac_scale,
+                base_segment_id=base_segment_id,
+                reusable=False,
+            )
+            super_edge_to_base[(u_super, v_super, k_super)] = seg_edges
 
     # No orphan-prune step: with every connector retained, the only nodes in
     # `contracted` are endpoints of added edges (super-edge or connector), so
@@ -175,6 +199,63 @@ def contract_climbs(
     # super-edge and simply never added unless a surviving connector touches
     # them.
     return ContractedGraph(graph=contracted, super_edge_to_base=super_edge_to_base)
+
+
+def _split_climb_at_junctions(
+    base_graph: nx.MultiDiGraph,
+    climb_edges: tuple[Edge, ...],
+    split_at_junctions: bool,
+) -> list[tuple[Edge, ...]]:
+    """Partition a climb's ordered edges into sub-segments at interior junctions.
+
+    Returns the climb whole (one element) when `split_at_junctions` is `False`
+    or the climb has fewer than two edges (no interior node to split at).
+    Otherwise cuts the edge sequence at every interior boundary node that
+    `_is_junction` flags — a node incident to a base segment outside the climb —
+    so a trail joining mid-climb can board at the junction. Each returned tuple
+    is a contiguous, non-empty edge run; concatenated in order they reproduce
+    `climb_edges`, so the split is a pure partition (back-mapping stays
+    injective). Reads `base_graph` only — never mutates it.
+    """
+    if not split_at_junctions or len(climb_edges) < 2:
+        return [tuple(climb_edges)]
+    climb_segment_ids: frozenset[tuple[int, int, int]] = frozenset(
+        _base_segment_id(e.node_u, e.node_v, e.key) for e in climb_edges
+    )
+    segments: list[tuple[Edge, ...]] = []
+    current: list[Edge] = [climb_edges[0]]
+    for prev_edge, next_edge in zip(climb_edges, climb_edges[1:], strict=False):
+        # The boundary node between two consecutive climb edges is an interior
+        # node; cut there iff it is a real trail junction.
+        if _is_junction(base_graph, prev_edge.node_v, climb_segment_ids):
+            segments.append(tuple(current))
+            current = []
+        current.append(next_edge)
+    segments.append(tuple(current))
+    return segments
+
+
+def _is_junction(
+    base_graph: nx.MultiDiGraph,
+    node: int,
+    climb_segment_ids: frozenset[tuple[int, int, int]],
+) -> bool:
+    """`True` iff `node` is incident (in `base_graph`) to a segment outside the climb.
+
+    A real trail junction: some base edge touching `node` — in either direction —
+    has an undirected `_base_segment_id` not among the climb's own segment ids.
+    The climb's own reverse-direction edges canonicalize to ids already in
+    `climb_segment_ids`, so a bidirectional trail does not split itself at every
+    interior node — only a genuinely different trail (or a parallel way with a
+    different key) triggers a split.
+    """
+    for u, v, k in base_graph.out_edges(node, keys=True):
+        if _base_segment_id(u, v, k) not in climb_segment_ids:
+            return True
+    for u, v, k in base_graph.in_edges(node, keys=True):
+        if _base_segment_id(u, v, k) not in climb_segment_ids:
+            return True
+    return False
 
 
 def _base_segment_id(u: int, v: int, k: int) -> tuple[int, int, int]:
