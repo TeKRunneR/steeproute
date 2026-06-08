@@ -412,6 +412,8 @@ Exit codes mirror `steeproute`: `0` on success, `2` on pre-execution error (bad 
 - **Visual design / UX principles / touch interactions**: explicitly skipped per project-type config.
 - **Config file** (YAML/TOML): deferred; reconsider if flag count grows past ~25 or if parameter presets become useful.
 
+Post-v1 feature ideas are collected in a running backlog at [future-ideas.md](future-ideas.md) — promoted into epics/stories (or a correct-course) if and when picked up.
+
 ### Implementation Considerations (Deferred)
 
 Flagged here for visibility, not decided:
