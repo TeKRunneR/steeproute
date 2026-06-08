@@ -7,8 +7,9 @@ Implements Architecture §Cat 5's solver shape: a class with an injected RNG,
 parameter snapshot, prepared `ContractedGraph`, and a continuously-readable
 `best_so_far`. Termination handled here covers only the iter-budget; the
 time-budget, stagnation, and KeyboardInterrupt branches in §Cat 5e land in
-Epic 4 (Stories 4.2 / 4.3) at the CLI layer. The `progress_callback` parameter
-is accepted but not yet invoked — Story 4.1 wires the throttled call.
+Epic 7 (Stories 7.2 / 7.3) at the CLI layer. The `progress_callback` is invoked
+once per iteration with a `ProgressEvent` (Story 7.1); the CLI wraps it with
+`progress.throttle(...)` so emission honours `--progress-interval`.
 
 Construction shape
 ==================
@@ -61,6 +62,9 @@ Determinism (FR29)
 
 All randomness flows through the injected `numpy.random.Generator`. No
 ambient `numpy.random.seed`, no `random` stdlib usage, no time-derived seeds.
+The `time.monotonic()` reads in `run()` feed only the `ProgressEvent`'s
+`elapsed_s` / ETA — a pure reporting side-effect that never touches the RNG or
+the iteration count, so progress timing cannot perturb the route output.
 Two `GraspSolver` instances built with `numpy.random.default_rng(seed)` on
 the same `ContractedGraph` and `SolverParams` produce byte-identical
 `list[Solution]` results — including the edges' traversal order. The two
@@ -78,13 +82,13 @@ networkx versions, where dict-insertion order is not a contract (see
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Any
+import time
 
 import numpy as np
 
 from steeproute.models import ContractedGraph, Edge, Solution, SolverParams, route_avg_gradient
 from steeproute.pipeline.osm import max_sac_rank, parse_difficulty_cap
+from steeproute.progress import ProgressCallback, ProgressEvent, estimate_remaining
 from steeproute.solver.distinctness import TopNTracker
 from steeproute.solver.reuse import (
     base_segment_id_map,
@@ -115,7 +119,7 @@ class GraspSolver:
 
     `run()` performs `params.iter_budget` GRASP iterations and returns the
     final `tracker.current_top()`. It does not catch `KeyboardInterrupt` —
-    Architecture §Cat 5b puts that at the CLI layer (Story 4.3 wires the
+    Architecture §Cat 5b puts that at the CLI layer (Story 7.3 wires the
     try/except).
     """
 
@@ -124,7 +128,7 @@ class GraspSolver:
         graph: ContractedGraph,
         params: SolverParams,
         rng: np.random.Generator,
-        progress_callback: Callable[[Any], None] | None = None,
+        progress_callback: ProgressCallback | None = None,
     ) -> None:
         if params.iter_budget < 1:
             # Fail loud at the boundary, symmetric with `TopNTracker`'s `n >= 1`
@@ -136,8 +140,10 @@ class GraspSolver:
         self._graph: ContractedGraph = graph
         self._params: SolverParams = params
         self._rng: np.random.Generator = rng
-        # Accepted but not invoked here — Story 4.1 wires throttled callback dispatch.
-        self._progress_callback: Callable[[Any], None] | None = progress_callback
+        # Invoked once per iteration in `run()` (Story 7.1). The CLI passes a
+        # `progress.throttle(...)`-wrapped renderer; `None` disables emission
+        # (e.g. `--quiet`, or non-CLI callers like the quality-gate tests).
+        self._progress_callback: ProgressCallback | None = progress_callback
         # Undirected base-segment distinctness (Story 6.1): the tracker keys
         # Jaccard on the same `base_segment_id` identity the reuse rule uses, so
         # opposite-direction reuse of one trail counts as overlap. Single-sourced
@@ -161,13 +167,47 @@ class GraspSolver:
         return self._tracker.current_top()
 
     def run(self) -> list[Solution]:
-        """Drive `params.iter_budget` GRASP iterations; return final top-N."""
+        """Drive `params.iter_budget` GRASP iterations; return final top-N.
+
+        Emits a `ProgressEvent` to `self._progress_callback` (if set) after each
+        iteration's `tracker.consider(...)`. `stagnation_counter` counts
+        consecutive iterations whose top-N total objective was unchanged — the
+        tracker's value changes iff a candidate was admitted, so this is exactly
+        "iterations since the last admission" (Story 7.2 acts on it). All
+        progress bookkeeping is gated behind the callback check so the
+        no-progress path (e.g. `--quiet`, quality-gate tests) carries zero
+        timing/objective overhead and stays trivially deterministic.
+        """
         if not self._nodes:
             return self._tracker.current_top()
-        for _ in range(self._params.iter_budget):
+        callback = self._progress_callback
+        start = time.monotonic() if callback is not None else 0.0
+        last_objective = self._tracker.total_objective()
+        stagnation_counter = 0
+        for i in range(self._params.iter_budget):
             solution = self._construct_one()
             if solution.edges and self._route_slope_ok(solution):
                 self._tracker.consider(solution)
+            if callback is not None:
+                current_objective = self._tracker.total_objective()
+                if current_objective != last_objective:
+                    stagnation_counter = 0
+                    last_objective = current_objective
+                else:
+                    stagnation_counter += 1
+                iteration = i + 1
+                elapsed_s = time.monotonic() - start
+                callback(
+                    ProgressEvent(
+                        iteration=iteration,
+                        elapsed_s=elapsed_s,
+                        best_objective=current_objective,
+                        estimated_remaining_s=estimate_remaining(
+                            iteration, self._params.iter_budget, elapsed_s
+                        ),
+                        stagnation_counter=stagnation_counter,
+                    )
+                )
         return self._tracker.current_top()
 
     def _route_slope_ok(self, solution: Solution) -> bool:

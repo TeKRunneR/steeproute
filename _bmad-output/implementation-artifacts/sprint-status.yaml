@@ -99,8 +99,8 @@ development_status:
   6-3-unified-elevation-profile-slope-display-readability-and-closeout: done
   epic-6-retrospective: optional
 
-  epic-7: backlog        # (was epic-6) Operational Robustness
-  7-1-progressevent-throttled-callback-cli-renderer-with-quiet-verbose: backlog
+  epic-7: in-progress        # (was epic-6) Operational Robustness
+  7-1-progressevent-throttled-callback-cli-renderer-with-quiet-verbose: done
   7-2-time-budget-and-stagnation-termination: backlog
   7-3-interrupt-handling-with-best-so-far-preservation: backlog
   7-4-graceful-degradation-messaging-for-sparse-areas: backlog

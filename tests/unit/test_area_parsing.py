@@ -91,6 +91,7 @@ def _check_solver_options(
     j_max: float = 0.30,
     n: int = 5,
     iter_budget: int | None = None,
+    progress_interval: float = 5.0,
 ) -> None:
     """Call `validate_solver_options` with in-range defaults; tests override one field."""
     validate_solver_options(
@@ -103,6 +104,7 @@ def _check_solver_options(
         j_max=j_max,
         n=n,
         iter_budget=iter_budget,
+        progress_interval=progress_interval,
     )
 
 
@@ -149,6 +151,12 @@ def test_validate_solver_options_accepts_boundary_values() -> None:
         (lambda: _check_solver_options(elevation_deadband=float("nan")), "--elevation-deadband"),
         (lambda: _check_solver_options(elevation_deadband=float("inf")), "--elevation-deadband"),
         (lambda: _check_solver_options(elevation_deadband=-1.0), "--elevation-deadband"),
+        # Story 7.1 flag: NaN/inf would make the throttle never fire (silent
+        # no-progress); 0/negative would forward every iteration (stdout flood).
+        (lambda: _check_solver_options(progress_interval=float("nan")), "--progress-interval"),
+        (lambda: _check_solver_options(progress_interval=float("inf")), "--progress-interval"),
+        (lambda: _check_solver_options(progress_interval=0.0), "--progress-interval"),
+        (lambda: _check_solver_options(progress_interval=-1.0), "--progress-interval"),
     ],
 )
 def test_validate_solver_options_rejects_out_of_range(
@@ -194,6 +202,17 @@ def test_query_cli_rejects_out_of_range_n() -> None:
     result = runner.invoke(query_cli, ["--center", "45.0716,6.1079", "--radius", "10", "--n", "0"])
     assert isinstance(result.exception, BadCLIArgError)
     assert "--n" in result.exception.user_message
+
+
+def test_query_cli_rejects_nonfinite_progress_interval() -> None:
+    """`--progress-interval nan` surfaces BadCLIArgError (Story 7.1) — proves it's threaded into validate_solver_options."""
+    runner = CliRunner()
+    result = runner.invoke(
+        query_cli,
+        ["--center", "45.0716,6.1079", "--radius", "10", "--progress-interval", "nan"],
+    )
+    assert isinstance(result.exception, BadCLIArgError)
+    assert "--progress-interval" in result.exception.user_message
 
 
 def test_query_cli_happy_path_passes_parsing_then_hits_coverage_check(

@@ -15,8 +15,10 @@ Story 3.11 wires the full Journey-1 happy path on top of that: climb detection
 `0` when every route passes, `1` when any route fails validation or any
 set-level pairwise distinctness violation exists. Outputs are always written to
 disk *before* the exit code is computed, so disk state is correct regardless of
-exit code (FR28). Progress UI + interrupt handling (real `progress_callback`,
-Ctrl-C → exit 130) land in Epic 4; this CLI passes a no-op callback (`None`).
+exit code (FR28). Story 7.1 wires the progress UI: a throttled `ProgressEvent`
+renderer is installed on the solver (suppressed by `--quiet`). Interrupt
+handling (Ctrl-C → best-so-far flush → exit 130) and the end-of-run summary land
+later in Epic 7 (Stories 7.3 / 7.5).
 """
 
 from __future__ import annotations
@@ -66,6 +68,7 @@ from steeproute.pipeline import operationalize_graph
 from steeproute.pipeline.climbs import detect_climbs
 from steeproute.pipeline.graph import contract_climbs
 from steeproute.pipeline.osm import filter_trails
+from steeproute.progress import ProgressCallback, ProgressEvent, throttle
 from steeproute.solver.grasp import GraspSolver
 from steeproute.validator import validate
 
@@ -130,7 +133,7 @@ def cli(
     iter_budget: int | None,
     time_budget: float,
     stagnation_iters: int | None,
-    progress_interval: float | None,
+    progress_interval: float,
     output_dir: pathlib.Path,
     verbose: bool,
     quiet: bool,
@@ -158,6 +161,7 @@ def cli(
         j_max=j_max,
         n=n,
         iter_budget=iter_budget,
+        progress_interval=progress_interval,
     )
     # Create the output directory now so an unusable `--output-dir` fails as a
     # clean exit 2 rather than an `OSError` traceback mid-render.
@@ -240,10 +244,17 @@ def cli(
     )
     contracted = contract_climbs(routable_graph, climbs, l_connector=l_connector)
 
-    # No-op progress callback for Epic 3 (Story 4.1 wires the throttled renderer);
-    # seed threads straight into the RNG so `--seed` produces byte-identical
-    # edge-sets (FR29). An unseeded run passes `None` → non-deterministic.
-    solver = GraspSolver(contracted, params, np.random.default_rng(seed), progress_callback=None)
+    # Progress UI (Story 7.1, FR13): install a throttled stdout renderer unless
+    # `--quiet`. The throttle is a pure reporting side-effect — `seed` threads
+    # straight into the RNG, so `--seed` produces byte-identical edge-sets (FR29)
+    # regardless of whether progress fires. An unseeded run passes `None` seed →
+    # non-deterministic by design.
+    progress_callback: ProgressCallback | None = (
+        None if quiet else throttle(_render_progress, progress_interval)
+    )
+    solver = GraspSolver(
+        contracted, params, np.random.default_rng(seed), progress_callback=progress_callback
+    )
     solutions = solver.run()
 
     validated = validate(solutions, contracted, params)
@@ -261,15 +272,28 @@ def cli(
         output_dir,
     )
 
-    # Acknowledge the Epic-4 kwargs (progress UI) so basedpyright doesn't flag them.
-    _ = (progress_interval, quiet)
-
     # Exit-code coupling (§Cat 6c / FR28 / FR30): 1 if any route failed validation
     # OR any set-level pairwise violation exists; 0 otherwise. `ctx.exit(code)`
     # raises SystemExit, which `_invoke_command` maps to the process exit code —
     # returning the int from this callback would be discarded by click's
     # standalone mode (it always exits 0 on a plain return).
     click.get_current_context().exit(_exit_code_for(validated))
+
+
+def _render_progress(event: ProgressEvent) -> None:
+    """Format one `ProgressEvent` as a single stdout line (Architecture §Cat 8).
+
+    Progress goes through `print()` to stdout — never `logging` (which §Cat 8
+    binds to stderr for diagnostics/warnings). The `progress:` prefix is a stable
+    sentinel: the run summary (Story 7.5) uses its own delimiter, so downstream
+    tooling and the e2e quiet test can distinguish progress lines unambiguously.
+    `eta=?` marks an as-yet-unmeasurable ETA (`estimated_remaining_s is None`).
+    """
+    eta = f"{event.estimated_remaining_s:.0f}s" if event.estimated_remaining_s is not None else "?"
+    print(
+        f"progress: iter={event.iteration} best_objective={event.best_objective:.1f} "
+        f"elapsed={event.elapsed_s:.1f}s eta={eta} stagnation={event.stagnation_counter}"
+    )
 
 
 def _build_provenance(manifest: Manifest) -> ProvenanceInfo:

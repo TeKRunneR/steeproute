@@ -176,6 +176,7 @@ def validate_solver_options(
     j_max: float,
     n: int,
     iter_budget: int | None,
+    progress_interval: float,
 ) -> None:
     """Query-side solver-parameter sanity checks at the CLI boundary (§Cat 10 → exit 2).
 
@@ -188,6 +189,12 @@ def validate_solver_options(
     does: `click.FLOAT` parses `"nan"`/`"inf"`, and `nan` then slips past every
     downstream comparison (IEEE-754), silently yielding zero/garbage climbs.
 
+    `progress_interval` doesn't reach the solver — it gates `progress.throttle`
+    (Story 7.1) — but it is validated here alongside its siblings: a `nan`/`inf`
+    interval makes `now >= next_fire` perpetually false (progress silently never
+    fires), and a non-positive interval forwards every iteration (stdout flood).
+    Both are §Cat 10 garbage-in, so they map to `BadCLIArgError → exit 2`.
+
     Checks are fail-fast (first violation wins) and ordered finiteness-then-range
     so a `nan` is reported as non-finite rather than as a confusing range message.
     """
@@ -199,6 +206,7 @@ def validate_solver_options(
         ("--elevation-smoothing", elevation_smoothing),
         ("--elevation-deadband", elevation_deadband),
         ("--j-max", j_max),
+        ("--progress-interval", progress_interval),
     ):
         if not math.isfinite(value):
             raise BadCLIArgError(f"{name} {value!r} must be a finite number.")
@@ -222,6 +230,10 @@ def validate_solver_options(
         raise BadCLIArgError(
             f"--min-climb-ground-length {min_climb_ground_length:g} must be positive."
         )
+    # Strictly positive: 0 (and negatives) would fire progress every iteration —
+    # a stdout flood. "Seconds between prints" is only meaningful when > 0.
+    if progress_interval <= 0.0:
+        raise BadCLIArgError(f"--progress-interval {progress_interval:g} must be positive.")
     if not 0.0 <= j_max <= 1.0:
         raise BadCLIArgError(f"--j-max {j_max:g} must be in [0, 1].")
     if n < 1:
@@ -398,11 +410,18 @@ stagnation_iters_option = click.option(
     help="Early-termination window: iterations without top-N improvement (default: TBD).",
 )
 
+# Wall-clock seconds between progress prints. A concrete default so a long run is
+# legible out of the box; "tunable post-baseline" per Architecture §Cat 8 — the
+# right cadence depends on typical real-query duration, observed once Epic 7's
+# time/stagnation termination (Story 7.2) lands.
+PROGRESS_INTERVAL_DEFAULT_S: float = 5.0
+
 progress_interval_option = click.option(
     "--progress-interval",
     type=click.FLOAT,
-    default=None,
-    help="Seconds between progress prints (default: TBD).",
+    default=PROGRESS_INTERVAL_DEFAULT_S,
+    show_default=True,
+    help="Seconds between progress prints (tunable post-baseline).",
 )
 
 # --- Output ---
