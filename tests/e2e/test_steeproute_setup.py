@@ -33,11 +33,11 @@ _FIXTURE_DIR = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "greno
 _OSM_FIXTURE_PATH = _FIXTURE_DIR / "osm_graph.graphml"
 _DEM_FIXTURE_PATH = _FIXTURE_DIR / "dem.tif"
 
-# Fixture baseline carried over from Story 2.5's `test_pipeline_end_to_end.py`.
-# Story 2.8 only smoke-checks the edge count is in that band — the orchestrator
-# tests are the authority on exact numbers; we just need "did the pipeline ran
-# end-to-end and produce a sane cache entry?"
-_BASELINE_EDGES = 1208
+# Fixture baseline carried over from `test_pipeline_end_to_end.py` (updated for
+# Story 6.2's road-inclusive fixture). Story 2.8 only smoke-checks the edge count
+# is in that band — the orchestrator tests are the authority on exact numbers; we
+# just need "did the pipeline run end-to-end and produce a sane cache entry?"
+_BASELINE_EDGES = 2086
 _DRIFT_TOLERANCE = 0.10
 
 

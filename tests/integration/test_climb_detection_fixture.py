@@ -53,8 +53,8 @@ _MIN_CLIMB_GROUND_LENGTH_M = 300.0
 # ±10 % drift band absorbs OSM / DEM regeneration noise, not algorithm
 # changes; an algorithm change that shifts these is intentional and
 # requires re-recording the baselines.
-_BASELINE_CLIMB_COUNT = 42
-_BASELINE_TOTAL_D_PLUS_M = 7172.0
+_BASELINE_CLIMB_COUNT = 50
+_BASELINE_TOTAL_D_PLUS_M = 8065.5
 _DRIFT_TOLERANCE = 0.10
 
 

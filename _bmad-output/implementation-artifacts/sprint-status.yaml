@@ -28,7 +28,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-06-07
+last_updated: 2026-06-08
 
 project: bmad-test
 project_key: NOKEY
@@ -95,7 +95,7 @@ development_status:
 
   epic-6: in-progress        # Route-Discovery & Elevation-Consistency Fixes (inserted via correct-course 2026-06-07)
   6-1-route-discovery-bug-fixes-junction-split-sac-cap-undirected-distinctness: done
-  6-2-roads-as-connectors: backlog
+  6-2-roads-as-connectors: done
   6-3-unified-elevation-profile-slope-display-readability-and-closeout: backlog
   epic-6-retrospective: optional
 

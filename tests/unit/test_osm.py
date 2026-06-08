@@ -14,7 +14,9 @@ import shapely
 from steeproute.errors import BadCLIArgError
 from steeproute.models import Area
 from steeproute.pipeline.osm import (
+    MINOR_ROAD_HIGHWAY_TAGS,
     TRAIL_HIGHWAY_TAGS,
+    classify_highway,
     filter_trails,
     max_sac_rank,
     normalize_edges,
@@ -80,21 +82,27 @@ def test_normalized_fixture_has_sac_scale_key_on_every_edge(
 # --- include-vs-exclude policy ---
 
 
-def test_filter_trails_include_vs_exclude_diff_equals_untagged_count(
+def test_filter_trails_include_vs_exclude_diff_equals_untagged_trail_count(
     fixture_graph: nx.MultiDiGraph,
 ) -> None:
-    """The two policies must differ by exactly the count of untagged edges."""
-    untagged_count = sum(
+    """The two policies differ by exactly the count of untagged *trail* edges.
+
+    The untagged-trails policy only governs trails with no `sac_scale`. Minor-road
+    connectors also have `sac_scale=None` but are admitted under *both* policies
+    (Story 6.2), so they must be excluded from the expected diff — counting all
+    `sac_scale=None` edges would over-count by the road edges.
+    """
+    untagged_trail_count = sum(
         1
         for _u, _v, _k, data in fixture_graph.edges(data=True, keys=True)
-        if data.get("sac_scale") is None
+        if data.get("sac_scale") is None and classify_highway(data.get("highway")) == "trail"
     )
-    assert untagged_count > 0, (
-        "Fixture sanity check: needs both tagged and untagged edges to discriminate."
+    assert untagged_trail_count > 0, (
+        "Fixture sanity check: needs both tagged and untagged trails to discriminate."
     )
     included = filter_trails(fixture_graph, "include", "T6")
     excluded = filter_trails(fixture_graph, "exclude", "T6")
-    assert included.number_of_edges() - excluded.number_of_edges() == untagged_count
+    assert included.number_of_edges() - excluded.number_of_edges() == untagged_trail_count
 
 
 def test_filter_trails_does_not_mutate_input(
@@ -155,6 +163,28 @@ def test_fixture_contains_multi_way_merged_edges(
     )
 
 
+def test_fixture_contains_admitted_road_connectors(
+    fixture_graph: nx.MultiDiGraph,
+) -> None:
+    """The committed fixture carries minor-road connectors that survive filter_trails.
+
+    Story 6.2: the fixture is fetched with the road-inclusive production filter, so
+    the road-as-connector path gets real end-to-end coverage. A regeneration that
+    silently drops roads (e.g. a reverted fetch filter) fails here.
+    """
+    road_edges = [
+        (u, v, k)
+        for u, v, k, data in fixture_graph.edges(data=True, keys=True)
+        if classify_highway(data.get("highway")) == "connector"
+    ]
+    assert len(road_edges) > 0, "Fixture has no minor-road connectors — road filter reverted?"
+
+    out = filter_trails(fixture_graph, "exclude", "T6")
+    surviving = {(u, v, k) for u, v, k in out.edges(keys=True)}
+    # Roads survive even under the strict untagged policy (they bypass it).
+    assert any(edge in surviving for edge in road_edges)
+
+
 def test_fixture_geometry_synthesis_runs(
     fixture_graph: nx.MultiDiGraph,
 ) -> None:
@@ -198,32 +228,115 @@ def test_filter_trails_single_untagged_edge_include_keeps_exclude_strips() -> No
     assert dropped.number_of_edges() == 0
 
 
-def test_filter_trails_one_edge_per_highway_type_keeps_only_trail_tags() -> None:
-    """A graph with one edge per known highway type keeps only TRAIL_HIGHWAY_TAGS values."""
+def test_filter_trails_one_edge_per_highway_type_keeps_trails_and_minor_roads() -> None:
+    """One edge per highway type: trails + minor roads survive; major/bike roads drop.
+
+    Story 6.2 inverts the pre-6.2 contract (where every non-trail dropped): minor
+    roads are now admitted as connectors, while major roads (motorway, primary)
+    and bike-only cycleway are still excluded.
+    """
     graph: nx.MultiDiGraph = nx.MultiDiGraph()
     trail_tags = sorted(TRAIL_HIGHWAY_TAGS)
-    non_trail_tags = ["motorway", "primary", "service", "cycleway", "residential"]
+    minor_road_tags = sorted(MINOR_ROAD_HIGHWAY_TAGS)
+    excluded_tags = ["motorway", "primary", "cycleway"]
 
     next_node = 1
-    for tag in trail_tags + non_trail_tags:
+    for tag in trail_tags + minor_road_tags + excluded_tags:
         graph.add_edge(next_node, next_node + 1, key=0, **_make_edge_attrs(tag, "hiking"))
         next_node += 2
 
     out = filter_trails(graph, "include", "T6")
 
     surviving_highways = {data["highway"] for _u, _v, _k, data in out.edges(data=True, keys=True)}
-    assert surviving_highways == set(trail_tags)
+    assert surviving_highways == set(trail_tags) | set(minor_road_tags)
 
 
-def test_filter_trails_keeps_multi_tag_edge_if_any_tag_is_trail() -> None:
-    """osmnx-style list-valued highway: an edge tagged ['steps','footway'] is a trail."""
+def test_filter_trails_multi_tag_admission_rules() -> None:
+    """List-valued highway: trails win permissively; minor roads veto on any major tag.
+
+    - `['steps','footway']` → trail (any trail tag admits).
+    - `['service','residential']` → minor-road connector (all tags are minor roads).
+    - `['motorway','service']` → dropped: the major-road tag vetoes admission even
+      though `service` alone would qualify (Story 6.2 tightened multi-tag handling).
+    """
     graph: nx.MultiDiGraph = nx.MultiDiGraph()
     graph.add_edge(1, 2, key=0, **_make_edge_attrs(["steps", "footway"], "hiking"))
-    graph.add_edge(3, 4, key=0, **_make_edge_attrs(["motorway", "service"], "hiking"))
+    graph.add_edge(3, 4, key=0, **_make_edge_attrs(["service", "residential"], None))
+    graph.add_edge(5, 6, key=0, **_make_edge_attrs(["motorway", "service"], "hiking"))
 
     out = filter_trails(graph, "include", "T6")
 
-    assert out.number_of_edges() == 1
+    assert out.has_edge(1, 2)
+    assert out.has_edge(3, 4)
+    assert not out.has_edge(5, 6)
+    assert out.number_of_edges() == 2
+
+
+def test_filter_trails_admits_minor_road_connector_regardless_of_policy_and_cap() -> None:
+    """A minor road (no sac_scale) is admitted under either untagged policy and any cap.
+
+    Roads carry no SAC grade, so they bypass the untagged-trails policy and the
+    difficulty cap — unlike untagged *trails*, which `exclude` would drop.
+    """
+    graph: nx.MultiDiGraph = nx.MultiDiGraph()
+    graph.add_edge(1, 2, key=0, **_make_edge_attrs("service", None))
+
+    assert filter_trails(graph, "include", "T6").number_of_edges() == 1
+    assert filter_trails(graph, "exclude", "T6").number_of_edges() == 1
+    assert filter_trails(graph, "exclude", "T1").number_of_edges() == 1
+
+
+def test_filter_trails_sac_tagged_road_respects_difficulty_cap() -> None:
+    """A road that *does* carry an over-cap sac_scale respects the cap, like a trail.
+
+    Roads almost never carry a SAC grade, but when one does we don't let it
+    bypass `--difficulty-cap`: a `service` way tagged `alpine_hiking` (T4) is
+    dropped at T1 and kept at T6.
+    """
+    graph: nx.MultiDiGraph = nx.MultiDiGraph()
+    graph.add_edge(1, 2, key=0, **_make_edge_attrs("service", "alpine_hiking"))
+
+    assert filter_trails(graph, "include", "T1").number_of_edges() == 0
+    assert filter_trails(graph, "include", "T6").number_of_edges() == 1
+
+
+def test_filter_trails_tolerates_trailing_whitespace_in_highway_tag() -> None:
+    """Dirty OSM highway values (`"service "`, `"path "`) are stripped before lookup.
+
+    Mirrors `max_sac_rank`'s existing whitespace tolerance so a road/trail isn't
+    silently dropped over a stray space.
+    """
+    graph: nx.MultiDiGraph = nx.MultiDiGraph()
+    graph.add_edge(1, 2, key=0, **_make_edge_attrs("service ", None))
+    graph.add_edge(3, 4, key=0, **_make_edge_attrs(" path", "hiking"))
+
+    out = filter_trails(graph, "include", "T6")
+
+    assert out.has_edge(1, 2)
+    assert out.has_edge(3, 4)
+
+
+@pytest.mark.parametrize(
+    ("highway", "expected"),
+    [
+        ("path", "trail"),
+        ("steps", "trail"),
+        ("service", "connector"),
+        ("tertiary", "connector"),
+        ("motorway", None),
+        ("cycleway", None),
+        (["steps", "footway"], "trail"),  # any trail tag → trail
+        (["service", "footway"], "trail"),  # trail wins over road
+        (["service", "residential"], "connector"),  # all minor roads → connector
+        (["motorway", "service"], None),  # major-road tag vetoes admission
+        (["service", "cycleway"], None),  # bike-only tag vetoes admission
+        (None, None),
+        ([], None),
+        (["service", 7], None),  # non-string member vetoes road admission
+    ],
+)
+def test_classify_highway(highway: object, expected: str | None) -> None:
+    assert classify_highway(highway) == expected
 
 
 def test_filter_trails_drops_edge_with_unknown_sac_scale_value() -> None:

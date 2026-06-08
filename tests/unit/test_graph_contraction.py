@@ -199,6 +199,28 @@ def test_connector_exactly_at_l_connector_is_not_reusable() -> None:
     assert contracted.graph[0][1][0]["reusable"] is False
 
 
+def test_minor_road_connector_follows_length_based_reuse_rule() -> None:
+    """Story 6.2: a road connector rides the same `length_m < l_connector` rule as a trail.
+
+    Contraction is highway-agnostic — there is no road-specific reuse carve-out —
+    so a short minor road is reuse-exempt (`reusable=True`) and a long one is not,
+    exactly as for trail connectors.
+    """
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    short_road = _make_edge(0, 1, length_m=40.0, d_plus_m=0.5, d_minus_m=0.5, sac_scale=None)
+    long_road = _make_edge(2, 3, length_m=300.0, d_plus_m=1.0, d_minus_m=1.0, sac_scale=None)
+    _add_edge_from(g, short_road)
+    _add_edge_from(g, long_road)
+    # Carry the road highway tag the way the real pipeline does; contraction ignores it.
+    g[0][1][0]["highway"] = "service"
+    g[2][3][0]["highway"] = "residential"
+
+    contracted = contract_climbs(g, [], l_connector=_L_CONNECTOR)
+
+    assert contracted.graph[0][1][0]["reusable"] is True
+    assert contracted.graph[2][3][0]["reusable"] is False
+
+
 def test_bidirectional_base_graph_one_direction_climb() -> None:
     """`u→v` climb + reverse-direction edges → super-edge `u→v` + connectors `v→u`.
 

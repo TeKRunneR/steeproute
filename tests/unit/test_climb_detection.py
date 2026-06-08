@@ -49,6 +49,36 @@ def _chain_graph(specs: list[tuple[float, float]]) -> nx.MultiDiGraph:
     return g
 
 
+def test_flat_road_never_seeds_a_climb() -> None:
+    """Story 6.2: ~flat minor roads never form a climb on their own.
+
+    Climb detection is gradient-driven — a seed must clear `min_climb_slope`
+    per-edge (`_qualifies_as_seed`) — so an admitted road (~flat, sac_scale=None)
+    can never start a climb and a road-only sub-network yields no climbs. Roads
+    therefore participate purely as connectors. (Absorption of a flat tail into a
+    *steep* climb via the running-average extension is pre-existing,
+    highway-agnostic behaviour and is out of scope for this story.)
+    """
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    for i in range(4):
+        g.add_edge(
+            i,
+            i + 1,
+            key=0,
+            length_m=120.0,
+            d_plus_m=0.6,
+            d_minus_m=0.6,  # ~0.5% grade, well below 20%
+            avg_gradient=0.005,
+            sac_scale=None,
+        )
+
+    climbs = detect_climbs(
+        g, min_climb_slope=_MIN_CLIMB_SLOPE, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH
+    )
+
+    assert climbs == []
+
+
 def test_qualifying_uphill_chain_returns_single_climb() -> None:
     # Five 100 m edges at 25 m gain each — per-edge slope 0.25 ≥ min_climb_slope=0.20,
     # total 500 m ≥ min=300 m. Whole chain should collapse into one Climb.

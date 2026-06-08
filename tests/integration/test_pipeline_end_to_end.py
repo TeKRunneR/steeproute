@@ -60,14 +60,15 @@ _CENTER_LAT, _CENTER_LON, _DIST_M = _load_fixture_constants()
 
 
 # AC #4 baselines — recorded by running `run_setup_stages` against the committed
-# fixtures during dev (Story 2.5). The committed Grenoble Le Sappey 2 km bbox
-# is dense hiking-trail terrain; on the current fixture (468 nodes, 1208 edges)
-# none of the orchestrator guards activate (all trails pass T6, no self-loops,
-# no NaN elevations) so the orchestrator output matches the input shape exactly.
-# The ±10% band absorbs routine fixture regeneration drift.
-_BASELINE_NODES = 468
-_BASELINE_EDGES = 1208
-_BASELINE_TOTAL_LENGTH_M = 167_132.0  # ~167 km of trail across the 16 km² bbox
+# fixtures. The committed Grenoble Le Sappey 2 km bbox is dense hiking-trail
+# terrain; on the current fixture (844 nodes, 2086 edges — trails + minor-road
+# connectors since Story 6.2) none of the orchestrator guards activate (all
+# trails pass T6, no self-loops, no NaN elevations) so the orchestrator output
+# matches the input shape exactly. The ±10% band absorbs routine fixture
+# regeneration drift.
+_BASELINE_NODES = 844
+_BASELINE_EDGES = 2086
+_BASELINE_TOTAL_LENGTH_M = 242_443.0  # ~242 km of trail + road across the 16 km² bbox
 _DRIFT_TOLERANCE = 0.10
 
 

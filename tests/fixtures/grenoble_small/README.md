@@ -11,14 +11,14 @@ used by the unit and integration tests for `pipeline/osm.py` (Story 2.1),
 | Center | `45.260, 5.788` (Le Sappey-en-Chartreuse) |
 | `dist` (bbox half-side) | `2000` m |
 | `dist_type` | `bbox` (returns ways inside a `2*dist`-side square, **not** a disk) |
-| `custom_filter` | `["highway"~"path\|footway\|track\|steps\|bridleway"]` |
+| `custom_filter` | trails + minor-road connectors, single-sourced from `osm._OSM_CUSTOM_FILTER` (Story 6.2) |
 | `useful_tags_way` | osmnx default + `sac_scale` |
 | `retain_all` | `False` (largest connected component only) |
 | `simplify` | `True` (osmnx default) |
 | osmnx version | `2.1.0` |
-| Captured | 2026-05-06 |
-| File size | 723 KB |
-| Counts | 468 nodes, 1208 edges |
+| Captured | 2026-06-08 |
+| File size | 1182 KB |
+| Counts | 844 nodes, 2086 edges (1498 trail + 588 minor-road connector edges) |
 
 ### Why this center
 
@@ -27,8 +27,10 @@ Grenoble. The 2 km bbox captures genuine `sac_scale` variety — T1 (`hiking`)
 through T5 (`demanding_alpine_hiking`) are all represented, plus a handful of
 osmnx-merged list-valued `sac_scale` edges that exercise `filter_trails`'s
 max-rank handling. That gives the difficulty-cap test five SAC boundaries to
-sweep against, and the include-vs-exclude test a balanced ~50/50 split between
-tagged and untagged edges to discriminate.
+sweep against, and the include-vs-exclude test enough untagged trails to
+discriminate. Since Story 6.2 the fetch also captures minor-road connectors
+(`residential`, `service`, `unclassified`, `living_street`, `tertiary`), so the
+roads-as-connectors path gets real end-to-end coverage through the pipeline.
 
 ### A footgun worth recording
 

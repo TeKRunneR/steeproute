@@ -20,6 +20,8 @@ import pathlib
 import osmnx
 import truststore
 
+from steeproute.pipeline.osm import _OSM_CUSTOM_FILTER
+
 # Center: Le Sappey-en-Chartreuse, a hiking village in the Chartreuse Massif
 # north of Grenoble. Picked for sac_scale variety inside a small radius: T1
 # (hiking) through T5 (demanding_alpine_hiking) all represented, including
@@ -28,10 +30,10 @@ CENTER_LAT = 45.260
 CENTER_LON = 5.788
 DIST_M = 2000
 
-# Trail-style highway tags. filter_trails() narrows further; here we just keep
-# the OSM fetch focused on ways a hiker can use. cycleway is bike-only and
-# excluded by filter_trails anyway, so no point fetching it.
-CUSTOM_FILTER = '["highway"~"path|footway|track|steps|bridleway"]'
+# Single-source the fetch filter from production so the fixture can never drift
+# from what `osm_load` actually fetches (Story 6.2: now trails + minor-road
+# connectors). filter_trails() narrows further at query time.
+CUSTOM_FILTER = _OSM_CUSTOM_FILTER
 
 OUTPUT_PATH = pathlib.Path(__file__).parent / "osm_graph.graphml"
 

@@ -26,14 +26,27 @@ SAC_SCALE_RANK: dict[str, int] = {
     "difficult_alpine_hiking": 6,
 }
 
-# OSM highway tags treated as trails. cycleway is bike-only; service/residential
-# /etc are roads. After this set, untagged-trails-policy + sac_scale cap further
-# narrow the surviving edges.
+# OSM highway tags treated as trails. cycleway is bike-only. After this set,
+# untagged-trails-policy + sac_scale cap further narrow the surviving edges.
 TRAIL_HIGHWAY_TAGS: frozenset[str] = frozenset({"path", "footway", "track", "steps", "bridleway"})
 
-# Overpass `way[highway~"..."]` filter that osmnx applies during the fetch.
-# Keep aligned with TRAIL_HIGHWAY_TAGS so we don't pay for ways we'll drop anyway.
-_OSM_CUSTOM_FILTER = '["highway"~"path|footway|track|steps|bridleway"]'
+# OSM highway tags admitted as *connectors* — short paved links between trails
+# (Story 6.2). Roads carry no sac_scale, so they bypass the SAC cap and the
+# untagged-trails policy and are never climbs (stage 8 is gradient-driven; roads
+# are ~flat). They ride the existing length-based reuse-exemption (`reusable` iff
+# `length_m < l_connector`) and the D+/D- objective, which self-limits road use
+# to genuine links — no road-specific cost or reuse term. Major roads (motorway,
+# primary, ...) and bike-only cycleway are deliberately excluded.
+MINOR_ROAD_HIGHWAY_TAGS: frozenset[str] = frozenset(
+    {"residential", "unclassified", "service", "living_street", "tertiary"}
+)
+
+# Overpass `way[highway~"..."]` filter that osmnx applies during the fetch. Built
+# from the trail + minor-road sets so the fetch stays aligned with filter_trails
+# — we don't pay for ways we'll drop, nor drop ways we never fetched.
+_OSM_CUSTOM_FILTER = '["highway"~"{}"]'.format(
+    "|".join(sorted(TRAIL_HIGHWAY_TAGS | MINOR_ROAD_HIGHWAY_TAGS))
+)
 
 
 def osm_load(area: Area) -> nx.MultiDiGraph:
@@ -143,17 +156,27 @@ def filter_trails(
     out = graph.copy()
     edges_to_drop: list[tuple[int, int, int]] = []
     for u, v, k, data in out.edges(data=True, keys=True):
-        if not _is_trail_highway(data.get("highway")):
-            edges_to_drop.append((u, v, k))
-            continue
-        sac = data.get("sac_scale")
-        if sac is None:
-            if untagged_policy == "exclude":
+        kind = classify_highway(data.get("highway"))
+        if kind == "trail":
+            sac = data.get("sac_scale")
+            if sac is None:
+                if untagged_policy == "exclude":
+                    edges_to_drop.append((u, v, k))
+                continue
+            rank = max_sac_rank(sac)
+            if rank is None or rank > cap_rank:
                 edges_to_drop.append((u, v, k))
             continue
-        rank = max_sac_rank(sac)
-        if rank is None or rank > cap_rank:
-            edges_to_drop.append((u, v, k))
+        if kind == "connector":
+            # Roads aren't subject to the untagged policy (they carry no SAC
+            # grade by nature). A road that *does* carry an over-cap sac_scale
+            # respects the difficulty cap, like a trail; an untagged or
+            # unrecognized-sac road is admitted as a connector (Story 6.2).
+            rank = max_sac_rank(data.get("sac_scale"))
+            if rank is not None and rank > cap_rank:
+                edges_to_drop.append((u, v, k))
+            continue
+        edges_to_drop.append((u, v, k))
     for u, v, k in edges_to_drop:
         out.remove_edge(u, v, k)
     return out
@@ -199,26 +222,56 @@ def parse_difficulty_cap(cap: str) -> int:
     return rank
 
 
-def _is_trail_highway(value: object) -> bool:
-    """True if `value` (str or list[str] from osmnx) names a trail-style highway.
+def _highway_tags(value: object) -> tuple[list[str], bool]:
+    """Normalize an osmnx `highway` value to `(stripped_str_tags, had_non_str_member)`.
 
-    osmnx-merged edges carry list-valued highway when chained ways had different
-    tags. We're permissive here: an edge counts as a trail if any constituent
-    way is a trail (the question is "should this edge be in the trail graph?",
-    and any trail tag is sufficient evidence).
+    osmnx yields a `str` for a simple way or a `list` for chained/merged ways.
+    Tags are whitespace-stripped to match `max_sac_rank`'s tolerance for dirty
+    OSM values (e.g. `"service "`). The bool flags whether a list carried any
+    non-string member — `classify_highway` uses it to veto road admission
+    conservatively while leaving the permissive trail check unaffected.
     """
     if isinstance(value, str):
-        return value in TRAIL_HIGHWAY_TAGS
+        return [value.strip()], False
     if isinstance(value, list):
-        return any(isinstance(v, str) and v in TRAIL_HIGHWAY_TAGS for v in value)
-    return False
+        tags = [v.strip() for v in value if isinstance(v, str)]
+        had_non_str = any(not isinstance(v, str) for v in value)
+        return tags, had_non_str
+    return [], False
+
+
+def classify_highway(value: object) -> str | None:
+    """Classify an OSM `highway` value as a routable `"trail"`, road `"connector"`, or None.
+
+    One classifier, two deliberately-asymmetric multi-tag rules (Story 6.2):
+
+    - **Trail (permissive):** any constituent tag in `TRAIL_HIGHWAY_TAGS` makes
+      the edge a trail — osmnx-merged edges should join the trail graph if any
+      chained way is a trail. Trails win over roads, so a mixed
+      `["service", "footway"]` is a trail.
+    - **Connector (restrictive):** a road is admitted only if it carries a
+      minor-road tag AND *every* tag is a minor road, with no non-string member.
+      Any excluded tag — a major road like `motorway`, bike-only `cycleway` —
+      vetoes it, so `["motorway", "service"]` is dropped.
+
+    Returns None for anything else (the edge is dropped by `filter_trails`).
+    """
+    tags, had_non_str = _highway_tags(value)
+    if not tags:
+        return None
+    if any(t in TRAIL_HIGHWAY_TAGS for t in tags):
+        return "trail"
+    if not had_non_str and all(t in MINOR_ROAD_HIGHWAY_TAGS for t in tags):
+        return "connector"
+    return None
 
 
 def max_sac_rank(value: object) -> int | None:
     """Return the most-demanding SAC rank for a sac_scale value, or None if unknown.
 
-    Opposite policy from `_is_trail_highway`: for difficulty bounds we take the
-    maximum (most demanding) over a list-valued sac_scale, because if any
+    Opposite policy from `classify_highway`'s permissive trail rule: for
+    difficulty bounds we take the maximum (most demanding) over a list-valued
+    sac_scale, because if any
     constituent way requires harder hiking, the user shouldn't be routed onto
     the merged edge under a lower difficulty cap. Any unrecognized component
     poisons the whole edge to None (conservative drop).
