@@ -38,3 +38,10 @@ Make searching large areas tractable within a reasonable time budget. Fuzzy/wide
 **Notes:**
 - Explore other strategies too — this is one idea, not a decided design.
 - Interacts with the area-size cap (FR2) and the time-budget / progress reporting machinery.
+
+---
+
+## Performance tuning
+
+- Performance profiling to identify bottlenecks.
+- Try a Rust rewrite to see if that offers significant gain
