@@ -11,6 +11,7 @@ import networkx as nx
 import osmnx
 import requests
 import shapely
+import truststore
 
 from steeproute.errors import BadCLIArgError, DataSourceUnavailableError
 from steeproute.models import Area
@@ -70,6 +71,13 @@ def osm_load(area: Area) -> nx.MultiDiGraph:
     """
     _validate_area(area)
     _ensure_sac_scale_in_useful_tags()
+    # Verify Overpass's TLS against the OS trust store rather than certifi's
+    # vendored bundle, so a corporate TLS-intercepting proxy whose root CA is
+    # installed in the OS store (but not in certifi) Just Works — and harmless
+    # where the OS store mirrors certifi. Mirrors `dem_download._fetch_mosaic`
+    # and the integration-test conftest; without it the OSM fetch fails with
+    # CERTIFICATE_VERIFY_FAILED while the DEM download (which injects) succeeds.
+    truststore.inject_into_ssl()
     try:
         raw = osmnx.graph_from_point(
             center_point=area.center,

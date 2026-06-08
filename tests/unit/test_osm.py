@@ -437,6 +437,32 @@ def test_osm_load_rejects_non_finite_center(bad_center: tuple[float, float]) -> 
         _ = osm_load(area)
 
 
+def test_osm_load_injects_truststore_before_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OSM fetch verifies TLS against the OS trust store (corporate-CA support).
+
+    Regression guard for the OSM/DEM asymmetry: `dem_download` injected truststore
+    but `osm_load` did not, so behind a TLS-intercepting corporate proxy the OSM
+    fetch failed with CERTIFICATE_VERIFY_FAILED while the DEM download succeeded.
+    Asserts `osm_load` calls `truststore.inject_into_ssl()` before reaching the
+    network (osmnx is stubbed so no real fetch happens).
+    """
+    injected: list[bool] = []
+    monkeypatch.setattr(
+        "steeproute.pipeline.osm.truststore.inject_into_ssl",
+        lambda: injected.append(True),
+    )
+
+    def _fake_graph_from_point(**_kwargs: object) -> nx.MultiDiGraph:
+        assert injected, "truststore.inject_into_ssl() must run before the OSM fetch"
+        return nx.MultiDiGraph()
+
+    monkeypatch.setattr("steeproute.pipeline.osm.osmnx.graph_from_point", _fake_graph_from_point)
+    _ = osm_load(Area(center=(45.260, 5.788), radius_km=2.0))
+    assert injected == [True]
+
+
 def test_max_sac_rank_normalizes_whitespace() -> None:
     """OSM tags occasionally carry trailing whitespace; lookup should still succeed."""
     assert max_sac_rank("hiking ") == 1
