@@ -24,6 +24,8 @@ QUERY_FLAGS = [
     "--difficulty-cap",
     "--l-connector",
     "--min-climb-ground-length",
+    "--elevation-smoothing",
+    "--elevation-deadband",
     "--j-max",
     "--n",
     "--area-cap",

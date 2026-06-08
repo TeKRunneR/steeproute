@@ -1,24 +1,31 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
 # Reason: networkx MultiDiGraph operations surface as Unknown; same external-boundary
 # pattern as pipeline/osm.py, pipeline/smoothing.py, pipeline/dem.py, pipeline/climbs.py.
-"""Pipeline stages 1-9 and setup-side orchestrator.
+"""Pipeline stages 1-9, the setup-side orchestrator, and the query-side reshaping.
 
 `run_setup_stages(area, config)` wires the parameter-independent setup pipeline
-(stages 1-7) into a single entry point:
+(stages 1-5) into a single entry point:
 
     osm_load                 (stage 1)
       → filter_trails        (stage 2)         + non-empty + orphan-prune guards
       → smooth_polylines     (stage 3)
       → resample_edges       (stage 4)         + short-edge prune guard
-      → sample_elevation     (stage 5)
-      → median_smooth_elevation (stage 6)      + finite-elevation guard
-      → compute_edge_metrics (stage 7)
+      → sample_elevation     (stage 5)         + finite-elevation guard
 
-Output is a `networkx.MultiDiGraph` carrying the full edge-attribute contract
-(`geometry`, `vertices_resampled`, `length_m`, `d_plus_m`, `d_minus_m`,
-`avg_gradient`, `sac_scale`, `highway`, `osm_way_id`).
+Output is the cached `networkx.MultiDiGraph` carrying the **raw** post-stage-5
+edge-attribute contract (`geometry`, `vertices_resampled` with raw elevation,
+`sac_scale`, `highway`, `osm_way_id`). The per-edge metrics (`length_m`,
+`d_plus_m`, `d_minus_m`, `avg_gradient`) are **not** computed here.
 
-**Difficulty-cap policy (Architecture §Cat 3b + §Cat 4b).** Stages 1-7 are
+**Stages 6-7 are query-side (Story 6.3).** Elevation smoothing + deadband
+reshaping (stage 6) and naive-sum metrics (stage 7) move out of setup into
+`operationalize_graph`, called by `cli/query.py`. This keeps the cache
+smoothing-independent: `--elevation-smoothing` / `--elevation-deadband` become
+free query knobs and the cache key need not include them. Moving the code out of
+setup changes `compute_pipeline_content_hash`, so prepared areas re-prepare once
+when this ships (the same one-time cost the roads change incurred).
+
+**Difficulty-cap policy (Architecture §Cat 3b + §Cat 4b).** Stages 1-5 are
 cached parameter-independent over `difficulty_cap` — the cache key omits it.
 The orchestrator therefore pins it to `"T6"` (most permissive recognized SAC
 rank) so the cached graph contains every trail edge within SAC bounds; query
@@ -34,11 +41,11 @@ stage stays a pure transform under a stated input contract):
 - `_drop_short_edges`: drop edges whose post-stage-4 2D length is below
   `_PIPELINE_LENGTH_FLOOR_M` — catches out-and-back / coincident-2D / self-loop
   cases stage 4's bit-identical-coord check misses.
-- `_assert_finite_elevations`: post-stage-6 elevation must be finite on every
+- `_assert_finite_elevations`: post-stage-5 elevation must be finite on every
   vertex; non-finite → `PipelineContractError` naming the offending edge.
 
 Stage 8 (climb detection) and stage 9 (climb-graph contraction) wire on the
-query side in Epic 3; their orchestrator entry point is not in this story.
+query side in Epic 3, downstream of `operationalize_graph`.
 """
 
 from __future__ import annotations
@@ -54,7 +61,10 @@ from steeproute.pipeline.climbs import compute_edge_metrics
 from steeproute.pipeline.dem import sample_elevation
 from steeproute.pipeline.osm import filter_trails, osm_load
 from steeproute.pipeline.smoothing import (
-    median_smooth_elevation,
+    ELEVATION_DEADBAND_DEFAULT_M,
+    ELEVATION_SMOOTHING_DEFAULT_M,
+    graph_deadband_elevation,
+    graph_smooth_elevation,
     resample_edges,
     smooth_polylines,
 )
@@ -87,10 +97,12 @@ _PIPELINE_LENGTH_FLOOR_M: float = 1e-3
 
 
 def run_setup_stages(area: Area, config: PipelineConfig) -> nx.MultiDiGraph:
-    """Run the setup-side pipeline (stages 1-7) end-to-end for `area`.
+    """Run the setup-side pipeline (stages 1-5) end-to-end for `area`.
 
-    Wires the seven stage functions with four orchestrator-level inter-stage
+    Wires the five stage functions with four orchestrator-level inter-stage
     contract guards (see module docstring for the full sequence and rationale).
+    Elevation smoothing/deadband (stage 6) and per-edge metrics (stage 7) are
+    query-side now (Story 6.3) — see `operationalize_graph`.
 
     Args:
         area: search area to ingest (drives OSM fetch + DEM coverage check).
@@ -98,14 +110,15 @@ def run_setup_stages(area: Area, config: PipelineConfig) -> nx.MultiDiGraph:
             and `dem_path` (passed to `sample_elevation`).
 
     Returns:
-        A `networkx.MultiDiGraph` with the full setup-side edge-attribute
-        contract on every edge (`geometry`, `vertices_resampled`, `length_m`,
-        `d_plus_m`, `d_minus_m`, `avg_gradient`, `sac_scale`, `highway`,
-        `osm_way_id`) and every node connected to at least one edge.
+        A `networkx.MultiDiGraph` with the raw post-stage-5 edge-attribute
+        contract on every edge (`geometry`, `vertices_resampled` with raw
+        elevation, `sac_scale`, `highway`, `osm_way_id`) and every node
+        connected to at least one edge. The per-edge metrics are added query-side
+        by `operationalize_graph`.
 
     Raises:
         PipelineContractError: stage 2 returned an empty graph for `area`, the
-            post-stage-4 prunes left zero edges, or stage 6 produced a
+            post-stage-4 prunes left zero edges, or stage 5 produced a
             non-finite elevation on some edge.
         DEMCoverageError: a vertex fell outside the DEM bounds or sampled
             nodata (raised by stage 5).
@@ -140,9 +153,40 @@ def run_setup_stages(area: Area, config: PipelineConfig) -> nx.MultiDiGraph:
     # graph that then hits `sample_elevation` with no actionable error.
     _assert_non_empty(graph, area, config.untagged_policy)
     graph = sample_elevation(graph, config.dem_path)
-    graph = median_smooth_elevation(graph)
     _assert_finite_elevations(graph)
-    return compute_edge_metrics(graph)
+    return graph
+
+
+def operationalize_graph(
+    graph: nx.MultiDiGraph,
+    *,
+    elevation_smoothing_m: float = ELEVATION_SMOOTHING_DEFAULT_M,
+    elevation_deadband_m: float = ELEVATION_DEADBAND_DEFAULT_M,
+) -> nx.MultiDiGraph:
+    """Query-side stages 6-7: reshape the cached raw-elevation graph into the operational graph.
+
+    The cache stores the raw post-stage-5 elevation (see `run_setup_stages`).
+    This applies the canonical-profile reshaping once over the whole graph —
+    `graph_smooth_elevation` → `graph_deadband_elevation` — then `compute_edge_metrics`
+    as a **naive sum** over that single reshaped profile. The output graph carries
+    the full operational edge-attribute contract (`geometry`, `vertices_resampled`
+    reshaped, `length_m`, `d_plus_m`, `d_minus_m`, `avg_gradient`, `sac_scale`,
+    `highway`, `osm_way_id`).
+
+    This is the single home of the box==curve guarantee: the same reshaped
+    `vertices_resampled` that the metrics sum over is also what `output.render`
+    plots, so the metric box, the solver objective, and the displayed curve all
+    read one profile. `cli/query.py` calls this before climb detection and feeds
+    the returned graph to `output.render`. Pure — the input graph is never mutated.
+
+    Args:
+        graph: the cached post-stage-5 graph (raw `vertices_resampled`).
+        elevation_smoothing_m: graph-Laplacian smoothing strength in meters.
+        elevation_deadband_m: deadband hysteresis floor in meters (0 = off).
+    """
+    reshaped = graph_smooth_elevation(graph, elevation_smoothing_m)
+    reshaped = graph_deadband_elevation(reshaped, elevation_deadband_m)
+    return compute_edge_metrics(reshaped)
 
 
 def _assert_non_empty(
@@ -216,13 +260,13 @@ def _drop_short_edges(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
 
 
 def _assert_finite_elevations(graph: nx.MultiDiGraph) -> None:
-    """Raise `PipelineContractError` if any post-stage-6 elevation is non-finite.
+    """Raise `PipelineContractError` if any post-stage-5 elevation is non-finite.
 
     Stage 5 already fail-fasts on non-finite DEM samples, so this guard only
     catches contract-breaking inputs from a future caller wiring a different
-    elevation source. It also defends against NaN-arithmetic absorption in
-    stage 7's strict `>`/`<` branches that would otherwise yield silently
-    zero `d_plus_m`/`d_minus_m`.
+    elevation source. It also defends against NaN-arithmetic absorption in the
+    query-side stage-7 strict `>`/`<` branches that would otherwise yield
+    silently zero `d_plus_m`/`d_minus_m`.
     """
     for u, v, k, data in graph.edges(data=True, keys=True):
         verts: list[tuple[float, float, float]] = data["vertices_resampled"]
@@ -231,9 +275,9 @@ def _assert_finite_elevations(graph: nx.MultiDiGraph) -> None:
                 raise PipelineContractError(
                     f"Edge ({u}, {v}, {k}) has a vertex at (lat={lat:.6f}, "
                     f"lon={lon:.6f}) with non-finite elevation ({elev!r}) after "
-                    f"stage 6.",
+                    f"stage 5.",
                     detail=(
-                        "Post-stage-6 elevations must be finite floats. "
+                        "Post-stage-5 elevations must be finite floats. "
                         "Check DEM source for nodata / NaN samples."
                     ),
                 )

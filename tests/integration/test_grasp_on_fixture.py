@@ -45,7 +45,7 @@ from steeproute.models import (
     SolverParams,
     route_avg_gradient,
 )
-from steeproute.pipeline import run_setup_stages
+from steeproute.pipeline import operationalize_graph, run_setup_stages
 from steeproute.pipeline.climbs import detect_climbs
 from steeproute.pipeline.graph import contract_climbs
 from steeproute.pipeline.osm import max_sac_rank, normalize_edges, parse_difficulty_cap
@@ -124,7 +124,7 @@ def solver_chain() -> tuple[ContractedGraph, list[Solution]]:
     area = Area(center=(_CENTER_LAT, _CENTER_LON), radius_km=_DIST_M / 1000.0)
     config = PipelineConfig(untagged_policy="include", dem_path=_DEM_FIXTURE_PATH)
     with patch("steeproute.pipeline.osm_load", _osm_load_from_fixture):
-        base_graph = run_setup_stages(area, config)
+        base_graph = operationalize_graph(run_setup_stages(area, config))
 
     climbs = detect_climbs(
         base_graph,

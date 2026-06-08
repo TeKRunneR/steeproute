@@ -125,11 +125,43 @@
   // --- Elevation profile with gradient-colored segments ---
   const distances = {{ profile_distances | tojson }};
   const elevations = {{ profile_elevations | tojson }};
+  // Cumulative ascent/descent up to each vertex, so the hover can show how much
+  // of the route's total D+/D- has accrued by that point. Because the displayed
+  // curve and the metric are one canonical profile (Story 6.3), these reach the
+  // box totals at the final vertex — a one-glance box==curve consistency check.
+  const cumUp = [];
+  const cumDown = [];
+  (() => {
+    let up = 0, down = 0;
+    for (let i = 0; i < elevations.length; i++) {
+      if (i > 0) {
+        const d = elevations[i] - elevations[i - 1];
+        if (d > 0) up += d; else down -= d;
+      }
+      cumUp.push(up);
+      cumDown.push(down);
+    }
+  })();
+  // Displayed slope is measured over a multi-vertex baseline rather than a single
+  // ~10 m resample segment: a single segment spikes to implausible values (a 58%
+  // reading on an 8.6% trail, extreme spikes where a route nearly doubles back
+  // over a sub-5 m end-segment). +-2 vertices (~40 m baseline at the 10 m spacing)
+  // reads the terrain a hiker feels while still resolving genuine pitches.
+  const SLOPE_BASELINE_VERTS = 2;
+  function baselineSlope(i) {
+    const last = elevations.length - 1;
+    const a = Math.max(0, i - SLOPE_BASELINE_VERTS);
+    const b = Math.min(last, i + SLOPE_BASELINE_VERTS);
+    const run = distances[b] - distances[a];
+    return run > 0 ? (elevations[b] - elevations[a]) / run : 0;
+  }
   function gradientColor(s) {
     // s = signed rise/run fraction. Diverging scheme legible on white:
     //   descending (s<0) -> blue, flat (s~0) -> neutral gray, ascending (s>0) -> red,
-    // each scaled by steepness with |s| clamped to 0.30.
-    const CLAMP = 0.30;
+    // each scaled by steepness with |s| clamped to tan(30 deg) ~= 0.58 (58% grade)
+    // so steep alpine terrain spans the full color range instead of pinning
+    // red/blue from a 30% grade upward.
+    const CLAMP = 0.58;
     const neutral = [170, 170, 170];
     const up = [200, 30, 30];     // steep ascent
     const down = [30, 90, 200];   // steep descent
@@ -153,10 +185,11 @@
         borderWidth: 3,
         segment: {
           borderColor: (ctx) => {
+            // Color the segment by the baseline slope straddling it (mean of the
+            // baseline slope at its two endpoints) rather than its own ~10 m
+            // rise/run, so a single noisy segment can't paint a false-steep band.
             const i = ctx.p0DataIndex;
-            const run = distances[i + 1] - distances[i];
-            const rise = elevations[i + 1] - elevations[i];
-            return gradientColor(run > 0 ? rise / run : 0);
+            return gradientColor((baselineSlope(i) + baselineSlope(i + 1)) / 2);
           },
         },
       }],
@@ -172,25 +205,18 @@
         legend: { display: false },
         tooltip: {
           callbacks: {
-            // Add a signed slope line beneath the default elevation line. The
-            // slope at vertex i is the mean of its two adjacent segment slopes
-            // (single segment at the endpoints); run==0 is treated as flat.
+            // Signed slope over the multi-vertex baseline (see baselineSlope),
+            // plus how much D+/D- has accrued so far — the latter reaches the box
+            // totals at the final vertex (box==curve). run==0 is treated as flat.
             afterLabel: (ctx) => {
               const i = ctx.dataIndex;
-              const last = elevations.length - 1;
-              const seg = (a, b) => {
-                const run = distances[b] - distances[a];
-                return run !== 0 ? (elevations[b] - elevations[a]) / run : 0;
-              };
-              const parts = [];
-              if (i > 0) parts.push(seg(i - 1, i));
-              if (i < last) parts.push(seg(i, i + 1));
-              const slope = parts.length
-                ? parts.reduce((acc, v) => acc + v, 0) / parts.length
-                : 0;
-              const pct = Math.round(slope * 100);
+              const pct = Math.round(baselineSlope(i) * 100);
               const sign = pct > 0 ? "+" : pct < 0 ? "-" : "";
-              return `slope: ${sign}${Math.abs(pct)}%`;
+              return [
+                `slope: ${sign}${Math.abs(pct)}%`,
+                `D+ so far: ${Math.round(cumUp[i])} m`,
+                `D- so far: ${Math.round(cumDown[i])} m`,
+              ];
             },
           },
         },

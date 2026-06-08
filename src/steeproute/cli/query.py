@@ -36,6 +36,8 @@ from steeproute.cli._shared import (
     center_option,
     configure_cli_logging,
     difficulty_cap_option,
+    elevation_deadband_option,
+    elevation_smoothing_option,
     emit_osm_age_warning,
     ensure_output_dir,
     iter_budget_option,
@@ -60,6 +62,7 @@ from steeproute.cli._shared import (
     verbose_option,
 )
 from steeproute.models import Area, ProvenanceInfo, SolverParams, ValidatedRouteSet
+from steeproute.pipeline import operationalize_graph
 from steeproute.pipeline.climbs import detect_climbs
 from steeproute.pipeline.graph import contract_climbs
 from steeproute.pipeline.osm import filter_trails
@@ -92,6 +95,8 @@ _CONVERGENCE_STATUS: output.ConvergenceStatus = "budget-exhausted"
 @difficulty_cap_option
 @l_connector_option
 @min_climb_ground_length_option
+@elevation_smoothing_option
+@elevation_deadband_option
 @j_max_option
 @n_option
 @area_cap_option
@@ -115,6 +120,8 @@ def cli(
     difficulty_cap: str,
     l_connector: float,
     min_climb_ground_length: float,
+    elevation_smoothing: float,
+    elevation_deadband: float,
     j_max: float,
     n: int,
     area_cap: float,
@@ -146,6 +153,8 @@ def cli(
         min_climb_slope=min_climb_slope,
         l_connector=l_connector,
         min_climb_ground_length=min_climb_ground_length,
+        elevation_smoothing=elevation_smoothing,
+        elevation_deadband=elevation_deadband,
         j_max=j_max,
         n=n,
         iter_budget=iter_budget,
@@ -199,6 +208,17 @@ def cli(
     )
     provenance = _build_provenance(prepared.manifest)
 
+    # Query-side stages 6-7 (Story 6.3): reshape the cached raw-elevation graph
+    # into the operational graph (graph-Laplacian smoothing → deadband → naive-sum
+    # metrics) ONCE over the whole graph. The same reshaped graph feeds both the
+    # metric/solver path and `output.render`, so the metric box, the solver
+    # objective, and the plotted curve all read one canonical profile (box==curve).
+    operational_graph = operationalize_graph(
+        prepared.graph,
+        elevation_smoothing_m=elevation_smoothing,
+        elevation_deadband_m=elevation_deadband,
+    )
+
     # SAC cap-aware contraction (Story 6.1, FR4/FR10): drop above-cap edges
     # *before* climb detection so a single over-cap pitch can no longer weld
     # itself into an otherwise-usable climb (the max-rank SAC aggregation in
@@ -207,12 +227,11 @@ def cli(
     # T6; the cache key omits `difficulty_cap`), so `--difficulty-cap` stays a
     # fast query knob. `filter_trails` re-applies the trail-highway + untagged
     # filters too — idempotent on the already-setup-filtered graph — and never
-    # mutates its input. The solver's per-edge RCL SAC filter is kept as cheap
-    # defense (it now never triggers on real GRASP output). The filtered graph
-    # feeds detection and contraction; `output.render` keeps the full
-    # `prepared.graph` for geometry lookups (read-only, strictly a superset — so
-    # FR28 failed-route rendering can never lose a route edge's geometry).
-    routable_graph = filter_trails(prepared.graph, untagged_trails, difficulty_cap)
+    # mutates its input. The filtered graph feeds detection and contraction;
+    # `output.render` keeps the full `operational_graph` for geometry lookups
+    # (read-only, strictly a superset — so FR28 failed-route rendering can never
+    # lose a route edge's geometry, and the rendered curve matches the box).
+    routable_graph = filter_trails(operational_graph, untagged_trails, difficulty_cap)
 
     climbs = detect_climbs(
         routable_graph,
@@ -233,7 +252,7 @@ def cli(
     # the exit code, so disk state is identical regardless of pass/fail (§Cat 6c).
     output.render(
         validated,
-        prepared.graph,
+        operational_graph,
         area,
         contracted,
         params,

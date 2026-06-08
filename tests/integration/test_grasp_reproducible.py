@@ -27,7 +27,7 @@ import osmnx
 import pytest
 
 from steeproute.models import Area, ContractedGraph, PipelineConfig, SolverParams
-from steeproute.pipeline import run_setup_stages
+from steeproute.pipeline import operationalize_graph, run_setup_stages
 from steeproute.pipeline.climbs import detect_climbs
 from steeproute.pipeline.graph import contract_climbs
 from steeproute.pipeline.osm import normalize_edges
@@ -93,7 +93,7 @@ def contracted() -> ContractedGraph:
     area = Area(center=(_CENTER_LAT, _CENTER_LON), radius_km=_DIST_M / 1000.0)
     config = PipelineConfig(untagged_policy="include", dem_path=_DEM_FIXTURE_PATH)
     with patch("steeproute.pipeline.osm_load", _osm_load_from_fixture):
-        base = run_setup_stages(area, config)
+        base = operationalize_graph(run_setup_stages(area, config))
     climbs = detect_climbs(
         base, min_climb_slope=_THETA, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH_M
     )

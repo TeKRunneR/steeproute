@@ -33,6 +33,7 @@ from steeproute.pipeline import (
     _assert_finite_elevations,
     _assert_non_empty,
     _drop_short_edges,
+    operationalize_graph,
     run_setup_stages,
 )
 from steeproute.pipeline.osm import normalize_edges
@@ -99,6 +100,18 @@ def prepared_graph() -> nx.MultiDiGraph:
         return run_setup_stages(area, config)
 
 
+@pytest.fixture(scope="module")
+def operational_graph(prepared_graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
+    """Query-side reshaping of the cached graph (Story 6.3): stages 6-7 applied.
+
+    `run_setup_stages` now caches the raw post-stage-5 elevation; the per-edge
+    metrics (`length_m`, `d_plus_m`, ...) are computed query-side by
+    `operationalize_graph` (smooth → deadband → naive-sum metrics) at the
+    production defaults. Tests asserting the metric contract run against this.
+    """
+    return operationalize_graph(prepared_graph)
+
+
 def test_run_setup_stages_topology_baseline(prepared_graph: nx.MultiDiGraph) -> None:
     """AC #4: node + edge counts are within ±10% of recorded baselines."""
     nodes = prepared_graph.number_of_nodes()
@@ -115,27 +128,43 @@ def test_run_setup_stages_topology_baseline(prepared_graph: nx.MultiDiGraph) -> 
     )
 
 
-def test_run_setup_stages_full_attribute_contract(prepared_graph: nx.MultiDiGraph) -> None:
-    """AC #4: every edge carries the nine setup-side contract attributes."""
+def test_run_setup_stages_raw_attribute_contract(prepared_graph: nx.MultiDiGraph) -> None:
+    """AC #4: every edge carries the raw post-stage-5 contract (no metrics yet).
+
+    Story 6.3 moved stages 6-7 query-side: the cached setup graph carries
+    `geometry`, raw `vertices_resampled`, and the source attributes, but NOT the
+    per-edge metrics (those are added by `operationalize_graph` — see
+    `test_operational_graph_metric_contract`).
+    """
     assert prepared_graph.number_of_edges() > 0
     for u, v, k, data in prepared_graph.edges(data=True, keys=True):
         ctx = f"edge ({u}, {v}, {k})"
         assert isinstance(data["geometry"], shapely.LineString), ctx
         assert isinstance(data["vertices_resampled"], list), ctx
+        assert "sac_scale" in data, ctx
+        assert "highway" in data, ctx
+        assert "osm_way_id" in data, ctx
+        # Metrics are query-side now — they must NOT be present in the cached graph.
+        assert "length_m" not in data, ctx
+        assert "avg_gradient" not in data, ctx
+
+
+def test_operational_graph_metric_contract(operational_graph: nx.MultiDiGraph) -> None:
+    """AC #4: after query-side reshaping every edge carries the four metric attributes."""
+    assert operational_graph.number_of_edges() > 0
+    for u, v, k, data in operational_graph.edges(data=True, keys=True):
+        ctx = f"edge ({u}, {v}, {k})"
         assert isinstance(data["length_m"], float), ctx
         assert isinstance(data["d_plus_m"], float), ctx
         assert isinstance(data["d_minus_m"], float), ctx
         assert isinstance(data["avg_gradient"], float), ctx
-        assert "sac_scale" in data, ctx
-        assert "highway" in data, ctx
-        assert "osm_way_id" in data, ctx
 
 
-def test_run_setup_stages_sign_and_finiteness_invariants(
-    prepared_graph: nx.MultiDiGraph,
+def test_operational_graph_sign_and_finiteness_invariants(
+    operational_graph: nx.MultiDiGraph,
 ) -> None:
-    """AC #4: every metric is finite; sign invariants hold per edge."""
-    for u, v, k, data in prepared_graph.edges(data=True, keys=True):
+    """AC #4: every query-side metric is finite; sign invariants hold per edge."""
+    for u, v, k, data in operational_graph.edges(data=True, keys=True):
         ctx = f"edge ({u}, {v}, {k})"
         assert math.isfinite(data["length_m"]), ctx
         assert math.isfinite(data["d_plus_m"]), ctx
@@ -147,16 +176,19 @@ def test_run_setup_stages_sign_and_finiteness_invariants(
         assert data["avg_gradient"] >= 0.0, ctx
 
 
-def test_run_setup_stages_aggregate_length_plausibility(
-    prepared_graph: nx.MultiDiGraph,
+def test_operational_graph_aggregate_length_plausibility(
+    operational_graph: nx.MultiDiGraph,
 ) -> None:
     """AC #4: `sum(length_m)` is within ±10% of the recorded baseline.
 
     Catches gross axis-swap / unit / sign-flip bugs at the orchestrator scale.
-    Sub-edge bugs are caught by the unit-layer tests in `test_climbs.py` and
-    `test_smoothing.py`.
+    `length_m` is a 2D (lat/lon) distance, unaffected by elevation smoothing, so
+    the Story 2.5 baseline still holds. Sub-edge bugs are caught by the unit-layer
+    tests in `test_climbs.py` and `test_smoothing.py`.
     """
-    total = sum(data["length_m"] for _u, _v, _k, data in prepared_graph.edges(data=True, keys=True))
+    total = sum(
+        data["length_m"] for _u, _v, _k, data in operational_graph.edges(data=True, keys=True)
+    )
     drift = abs(total - _BASELINE_TOTAL_LENGTH_M) / _BASELINE_TOTAL_LENGTH_M
     assert drift <= _DRIFT_TOLERANCE, (
         f"Total length drift {drift:.1%} exceeds {_DRIFT_TOLERANCE:.0%} "

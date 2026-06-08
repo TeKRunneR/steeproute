@@ -1,6 +1,6 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
 # Reason: networkx + shapely operations surface as Unknown; same osmnx-boundary pattern as pipeline/osm.py.
-"""Pipeline stages 3-4 + 6: 2D polyline smoothing, resampling, and elevation moving-median.
+"""Pipeline stages 3-4 (setup) + 6 (query): 2D polyline smoothing, resampling, and elevation reshaping.
 
 Stages 3-4 operate on each edge's `geometry` (a `shapely.LineString` in WGS84
 lon/lat from stages 1-2). The polyline is smoothed via a symmetric moving
@@ -9,12 +9,16 @@ per-edge local equirectangular projection (cosine-of-mean-latitude correction)
 so spacing_m is honoured in real meters; we keep the graph in WGS84 throughout
 (Story 2.3 handles CRS at the DEM boundary, not here).
 
-Stage 6 (`median_smooth_elevation`) is the cliff-bias mitigation: a moving
-median over the elevation component of `vertices_resampled` (set by stage 5)
-dampens spikes from single-pixel DEM artifacts without smearing legitimate
-relief. Only the elevation component is touched; `(lat, lon)` are passed
-through bit-for-bit unchanged. Endpoint elevations are pinned to input values
-(no drift at node coords).
+Stage 6 — the canonical-elevation-profile reshaping (Story 6.3) — moved
+**query-side**: setup caches the raw post-stage-5 elevation, and the query CLI
+applies `graph_smooth_elevation` then `graph_deadband_elevation` once over the
+whole graph before naive-sum metrics (stage 7). The two together produce the
+*single* elevation profile that the metric box, the solver objective, and the
+plotted curve all read — see each function's docstring. The pre-6.3 per-edge
+`median_smooth_elevation` is gone: per-edge smoothing pinned the shared node
+elevation per-edge, so incident edges disagreed at the join (box ≠ curve) and
+short edges with no interior went unsmoothed. The global graph-Laplacian fixes
+both — each graph node is one shared variable, so joins stay consistent.
 
 Endpoints are preserved exactly across stages 3-4: topology — node coordinates
 — must not drift. Edges with degenerate geometry (fewer than 2 distinct finite
@@ -30,7 +34,6 @@ Resample-spacing contract: vertex spacing is uniform within float roundoff —
 from __future__ import annotations
 
 import math
-import statistics
 
 import networkx as nx
 import shapely
@@ -42,12 +45,24 @@ SMOOTHING_WINDOW: int = 3
 # Default vertex spacing for stage 4, in ground meters along the polyline.
 RESAMPLE_SPACING_M: float = 10.0
 
-# Symmetric moving-median window for stage 6 (elevation smoothing), in vertices.
-# Window = 5 with a 10 m vertex spacing → smooths over a ~50 m run, enough to
-# absorb single-pixel DEM artifacts (the 5 m IGN RGE ALTI grid produces 1-2
-# cell-scale spikes near steep terrain) without smearing legitimate ridge crests.
-# Must be odd ≥ 1; endpoints pinned, boundary windows clamped asymmetric.
-ELEVATION_MEDIAN_WINDOW: int = 5
+# Default strength of the query-side elevation smoothing, in ground meters. This
+# replaces the removed per-edge median (which smoothed over ~50 m at the 10 m
+# resample spacing) so the cliff-bias mitigation it provided is preserved by
+# default; `--elevation-smoothing` overrides it. Expressed in meters and
+# converted to a vertex window internally so it is decoupled from the resample
+# spacing (a future spacing change re-derives the iteration count automatically).
+ELEVATION_SMOOTHING_DEFAULT_M: float = 50.0
+
+# Default elevation deadband, in meters. 0 disables the profile transform —
+# matching pre-6.3 behaviour, where gain/loss summed every raw delta. The
+# deadband is opt-in via `--elevation-deadband`.
+ELEVATION_DEADBAND_DEFAULT_M: float = 0.0
+
+# Jacobi relaxation factor for the graph-Laplacian diffusion. 0.5 is the standard
+# under-relaxed low-pass step: stable (never overshoots) and its per-iteration
+# Gaussian-equivalent sigma is ~sqrt(iters/2) vertices, the mapping the
+# meters→iterations conversion in `graph_smooth_elevation` relies on.
+_DIFFUSION_LAMBDA: float = 0.5
 
 # WGS84 equatorial radius for the local equirectangular projection.
 _EARTH_RADIUS_M: float = 6_378_137.0
@@ -126,64 +141,165 @@ def resample_edges(
     return out
 
 
-def median_smooth_elevation(
+def graph_smooth_elevation(
     graph: nx.MultiDiGraph,
-    window: int = ELEVATION_MEDIAN_WINDOW,
+    strength_m: float = ELEVATION_SMOOTHING_DEFAULT_M,
 ) -> nx.MultiDiGraph:
-    """Stage 6: moving-median smooth each edge's `vertices_resampled` elevations.
+    """Stage 6a: global graph-Laplacian diffusion of the whole elevation field.
 
-    Each interior vertex's elevation is replaced with the median of itself and
-    its `window // 2` neighbours on either side; near the polyline boundaries
-    the window is clamped (smaller, asymmetric). The first and last vertex
-    elevations are pinned to their input values exactly — node-elevation never
-    drifts.
+    Treats the entire resampled profile as ONE connected field and runs Jacobi
+    (Laplacian) diffusion over it: every vertex relaxes toward the mean of its
+    chain neighbours, and **each graph node is a single shared variable** whose
+    neighbours are the vertex adjacent to it on every incident edge. Two
+    consequences matter:
 
-    Only the third component (`elevation_m`) of each `(lat, lon, elev)` triple
-    is touched; the `(lat, lon)` pair is passed through bit-for-bit unchanged
-    so the 2D position established by stages 3-4 stays intact.
+    * Diffusion is a low-pass filter — it strictly shrinks adjacent elevation
+      differences, so it can never *create* a slope spike (the failure mode of
+      the per-edge moving-average it replaces, which manufactured ~1000 %
+      segments by dumping a node offset into one ~10 m segment).
+    * Because a node is one shared value, edges incident to it stay consistent
+      at the join, so the per-edge metric sum (stage 7) equals the plotted-curve
+      sum (`output._profile_series`): **box == curve** by construction. It also
+      smooths *across* short / 2-vertex edges, which per-edge methods cannot.
 
-    Args:
-        graph: input MultiDiGraph; every edge must carry a non-empty
-            `vertices_resampled: list[tuple[float, float, float]]` from stage 5.
-        window: odd integer ≥ 1; the moving-median window size in vertices.
-            Default is `ELEVATION_MEDIAN_WINDOW`.
+    `strength_m` is the smoothing length in ground meters. It is converted to a
+    vertex window (`strength_m / RESAMPLE_SPACING_M`) and then to a Jacobi
+    iteration count via the Gaussian-equivalence `sigma ≈ sqrt(iters/2)` of a
+    `λ=0.5` step — a moving-average window `W` matches `iters ≈ W² / 6`. A
+    `strength_m` at or below the resample spacing (window ≤ 1) is a no-op and the
+    input graph is returned unchanged.
 
-    Returns:
-        A new MultiDiGraph; the input is never mutated. Upstream attributes
-        (`geometry`, `sac_scale`, `highway`, `osm_way_id`) are carried through
-        unchanged on every output edge.
+    Only the elevation component of each `(lat, lon, elev)` triple is touched;
+    `(lat, lon)` pass through unchanged. Returns a new MultiDiGraph; the input is
+    never mutated.
     """
-    assert window >= 1 and window % 2 == 1, "window must be odd and >= 1"
+    window = strength_m / RESAMPLE_SPACING_M
+    if window <= 1.0:
+        return graph
+    iters = max(1, round(window * window / 6.0))
+    lam = _DIFFUSION_LAMBDA
     out: nx.MultiDiGraph = graph.copy()
-    for _u, _v, _k, data in out.edges(data=True, keys=True):
+
+    # One shared elevation variable per node; per-edge interior vertices are
+    # private. Raw node elevations are already consistent across incident edges
+    # (same DEM sample at the shared coordinate), so seeding from any incident
+    # endpoint is well-defined.
+    node_val: dict[int, float] = {}
+    interior: dict[tuple[int, int, int], list[float]] = {}
+    edge_keys: list[tuple[int, int, int]] = []
+    for u, v, k, data in out.edges(data=True, keys=True):
+        elevs = [vert[2] for vert in data["vertices_resampled"]]
+        node_val.setdefault(u, elevs[0])
+        node_val.setdefault(v, elevs[-1])
+        interior[(u, v, k)] = elevs[1:-1]
+        edge_keys.append((u, v, k))
+
+    # node -> the incident edges and which end touches the node, so the field
+    # value adjacent to the node can be fetched each iteration.
+    node_adj: dict[int, list[tuple[tuple[int, int, int], bool]]] = {}
+    for ek in edge_keys:
+        node_adj.setdefault(ek[0], []).append((ek, True))  # node is u
+        node_adj.setdefault(ek[1], []).append((ek, False))  # node is v
+
+    def adjacent_to_node(ek: tuple[int, int, int], is_u: bool) -> float:
+        ints = interior[ek]
+        if is_u:
+            return ints[0] if ints else node_val[ek[1]]
+        return ints[-1] if ints else node_val[ek[0]]
+
+    for _ in range(iters):
+        new_node: dict[int, float] = {}
+        for n, adj in node_adj.items():
+            neigh = [adjacent_to_node(ek, is_u) for ek, is_u in adj]
+            new_node[n] = (1 - lam) * node_val[n] + lam * (sum(neigh) / len(neigh))
+        new_interior: dict[tuple[int, int, int], list[float]] = {}
+        for ek in edge_keys:
+            u, v, _k = ek
+            ints = interior[ek]
+            m = len(ints)
+            relaxed: list[float] = []
+            for j in range(m):
+                left = node_val[u] if j == 0 else ints[j - 1]
+                right = node_val[v] if j == m - 1 else ints[j + 1]
+                relaxed.append((1 - lam) * ints[j] + lam * ((left + right) / 2))
+            new_interior[ek] = relaxed
+        node_val = new_node
+        interior = new_interior
+
+    for u, v, k, data in out.edges(data=True, keys=True):
         verts: list[tuple[float, float, float]] = data["vertices_resampled"]
-        elevs = [v[2] for v in verts]
-        smoothed_elevs = _moving_median(elevs, window)
+        elevs = [node_val[u], *interior[(u, v, k)], node_val[v]]
         data["vertices_resampled"] = [
-            (lat, lon, smoothed_elev)
-            for (lat, lon, _orig_elev), smoothed_elev in zip(verts, smoothed_elevs, strict=True)
+            (lat, lon, e) for (lat, lon, _orig), e in zip(verts, elevs, strict=True)
         ]
     return out
 
 
-def _moving_median(values: list[float], window: int) -> list[float]:
-    """Moving-median smoothing with endpoints pinned to input values.
+def graph_deadband_elevation(
+    graph: nx.MultiDiGraph,
+    deadband_m: float = ELEVATION_DEADBAND_DEFAULT_M,
+) -> nx.MultiDiGraph:
+    """Stage 6b: express the elevation deadband as a PROFILE transform.
 
-    Boundary clamp mirrors `_moving_average`: near each end the window shrinks
-    asymmetrically rather than stepping out of bounds. First and last values
-    are returned exactly equal to the input's. `window` must be odd ≥ 1.
+    The deadband is a hysteresis floor that discards sub-`deadband_m` up/down
+    reversals (DEM jitter) while preserving sustained climbs and descents.
+    Crucially it reshapes the **vertices themselves**, so the same single
+    profile feeds metric, solver, and display — unlike a sum-time-only deadband,
+    which would change the box total without ever touching the plotted curve.
+    Because it reshapes the geometry, stage 7 (`compute_edge_metrics`) stays a
+    naive sum and takes no deadband parameter.
+
+    Per edge: keep the vertices at the genuine turning points (a vertex commits
+    once it sits `>= deadband_m` from the last committed reference), pin both
+    endpoints (so the shared node elevation set by `graph_smooth_elevation` is
+    preserved and joins stay consistent), and linearly interpolate between kept
+    points. `deadband_m <= 0` is a no-op and the input graph is returned
+    unchanged.
+
+    Only the elevation component is touched; `(lat, lon)` pass through unchanged.
+    Returns a new MultiDiGraph; the input is never mutated.
     """
-    half = window // 2
-    n = len(values)
-    smoothed: list[float] = []
-    for i in range(n):
-        if i == 0 or i == n - 1:
-            smoothed.append(values[i])
-            continue
-        lo = max(0, i - half)
-        hi = min(n, i + half + 1)
-        smoothed.append(statistics.median(values[lo:hi]))
-    return smoothed
+    if deadband_m <= 0.0:
+        return graph
+    out: nx.MultiDiGraph = graph.copy()
+    for _u, _v, _k, data in out.edges(data=True, keys=True):
+        verts: list[tuple[float, float, float]] = data["vertices_resampled"]
+        elevs = [vert[2] for vert in verts]
+        flat = _deadband_profile(elevs, deadband_m)
+        data["vertices_resampled"] = [
+            (lat, lon, e) for (lat, lon, _orig), e in zip(verts, flat, strict=True)
+        ]
+    return out
+
+
+def _deadband_profile(elevs: list[float], deadband_m: float) -> list[float]:
+    """Flatten sub-`deadband_m` reversals out of an elevation series; endpoints pinned.
+
+    Keeps the series at the "committed reference" turning points — a vertex is a
+    turning point once it sits `>= deadband_m` from the last committed reference —
+    and linearly interpolates between consecutive kept points. The first and last
+    vertices are always kept (endpoint pinning), so a route's per-edge profiles
+    glue continuously at shared nodes.
+    """
+    n = len(elevs)
+    if n < 3:
+        return list(elevs)
+    kept = [0]
+    ref = elevs[0]
+    for i in range(1, n):
+        if abs(elevs[i] - ref) >= deadband_m:
+            kept.append(i)
+            ref = elevs[i]
+    if kept[-1] != n - 1:
+        kept.append(n - 1)
+    out = list(elevs)
+    for a, b in zip(kept, kept[1:], strict=False):  # pairwise: kept[1:] is intentionally shorter
+        span = b - a
+        ea, eb = elevs[a], elevs[b]
+        for j in range(a, b + 1):
+            t = (j - a) / span if span else 0.0
+            out[j] = ea + t * (eb - ea)
+    return out
 
 
 def _extract_coords(geometry: object) -> list[tuple[float, float]]:

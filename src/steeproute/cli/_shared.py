@@ -12,6 +12,10 @@ import click
 
 from steeproute.cache import Manifest
 from steeproute.errors import BadCLIArgError, PreExecutionError
+from steeproute.pipeline.smoothing import (
+    ELEVATION_DEADBAND_DEFAULT_M,
+    ELEVATION_SMOOTHING_DEFAULT_M,
+)
 
 _verbose: bool = False
 
@@ -167,6 +171,8 @@ def validate_solver_options(
     min_climb_slope: float,
     l_connector: float,
     min_climb_ground_length: float,
+    elevation_smoothing: float,
+    elevation_deadband: float,
     j_max: float,
     n: int,
     iter_budget: int | None,
@@ -190,6 +196,8 @@ def validate_solver_options(
         ("--min-climb-slope", min_climb_slope),
         ("--l-connector", l_connector),
         ("--min-climb-ground-length", min_climb_ground_length),
+        ("--elevation-smoothing", elevation_smoothing),
+        ("--elevation-deadband", elevation_deadband),
         ("--j-max", j_max),
     ):
         if not math.isfinite(value):
@@ -200,6 +208,16 @@ def validate_solver_options(
         raise BadCLIArgError(f"--min-climb-slope {min_climb_slope:g} must be >= 0.")
     if l_connector < 0.0:
         raise BadCLIArgError(f"--l-connector {l_connector:g} must be >= 0.")
+    # `--elevation-smoothing <= spacing` and `--elevation-deadband <= 0` are
+    # documented no-ops (off); a negative value is nonsensical, not "more off", so
+    # reject it for consistency with the sibling `>= 0` flags above. Finiteness is
+    # already enforced in the loop — a NaN/inf strength would otherwise crash in
+    # `graph_smooth_elevation`'s `round(window**2/6)` (ValueError/OverflowError),
+    # and a NaN/inf deadband would silently flatten the whole profile.
+    if elevation_smoothing < 0.0:
+        raise BadCLIArgError(f"--elevation-smoothing {elevation_smoothing:g} must be >= 0.")
+    if elevation_deadband < 0.0:
+        raise BadCLIArgError(f"--elevation-deadband {elevation_deadband:g} must be >= 0.")
     if min_climb_ground_length <= 0.0:
         raise BadCLIArgError(
             f"--min-climb-ground-length {min_climb_ground_length:g} must be positive."
@@ -291,6 +309,30 @@ min_climb_ground_length_option = click.option(
     default=300.0,
     show_default=True,
     help="Minimum 2D arc length in meters for a segment to count as a climb.",
+)
+
+elevation_smoothing_option = click.option(
+    "--elevation-smoothing",
+    type=click.FLOAT,
+    default=ELEVATION_SMOOTHING_DEFAULT_M,
+    show_default=True,
+    help=(
+        "Strength of the global elevation smoothing (graph-Laplacian diffusion), "
+        "in meters. Applied query-side over the whole graph before D+/D- are summed; "
+        "0 (or below the resample spacing) disables it."
+    ),
+)
+
+elevation_deadband_option = click.option(
+    "--elevation-deadband",
+    type=click.FLOAT,
+    default=ELEVATION_DEADBAND_DEFAULT_M,
+    show_default=True,
+    help=(
+        "Elevation deadband hysteresis floor in meters: flattens sub-floor up/down "
+        "reversals out of the profile (reshaping which segments clear the slope "
+        "thresholds). 0 disables it."
+    ),
 )
 
 j_max_option = click.option(

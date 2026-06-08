@@ -33,7 +33,7 @@ import osmnx
 import pytest
 
 from steeproute.models import Area, PipelineConfig
-from steeproute.pipeline import run_setup_stages
+from steeproute.pipeline import operationalize_graph, run_setup_stages
 from steeproute.pipeline.climbs import detect_climbs
 from steeproute.pipeline.osm import normalize_edges
 
@@ -73,11 +73,13 @@ _CENTER_LAT, _CENTER_LON, _DIST_M = _load_fixture_constants()
 
 @pytest.fixture(scope="module")
 def prepared_graph() -> nx.MultiDiGraph:
-    """Post-stage-7 Grenoble fixture, fed into stage-8 climb detection.
+    """Operational Grenoble fixture (query-side reshaped), fed into stage-8 climb detection.
 
-    Mirrors `tests/integration/test_pipeline_end_to_end.py::prepared_graph`:
-    patches `osm_load` to read the committed `.graphml` instead of fetching
-    live; stages 2-7 run unchanged.
+    Mirrors `tests/integration/test_pipeline_end_to_end.py`: patches `osm_load` to
+    read the committed `.graphml`. `run_setup_stages` caches the raw post-stage-5
+    elevation; `operationalize_graph` (Story 6.3) applies the query-side stages 6-7
+    (smooth → deadband → naive-sum metrics) at the production defaults, mirroring
+    what `cli/query.py` feeds to `detect_climbs`.
     """
     if not _DEM_FIXTURE_PATH.exists() or not _OSM_FIXTURE_PATH.exists():
         pytest.skip("OSM or DEM fixture not committed; climb-detection integration skipped.")
@@ -88,7 +90,7 @@ def prepared_graph() -> nx.MultiDiGraph:
     area = Area(center=(_CENTER_LAT, _CENTER_LON), radius_km=_DIST_M / 1000.0)
     config = PipelineConfig(untagged_policy="include", dem_path=_DEM_FIXTURE_PATH)
     with patch("steeproute.pipeline.osm_load", _osm_load_from_fixture):
-        return run_setup_stages(area, config)
+        return operationalize_graph(run_setup_stages(area, config))
 
 
 def test_climb_count_within_regression_baseline(prepared_graph: nx.MultiDiGraph) -> None:

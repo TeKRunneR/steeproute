@@ -249,3 +249,11 @@ Items deferred during code review that are owned by a future story.
 ## Deferred from: code review of 6-1-route-discovery-bug-fixes (2026-06-07)
 
 - **No "no routable terrain at this cap" message when `filter_trails` empties the graph** — `src/steeproute/cli/query.py`. With a strict `--difficulty-cap` over an all-above-cap area, the new query-side `filter_trails` can remove every edge; the chain then runs cleanly to zero routes and exits 0 with no reports and no diagnostic — indistinguishable from "searched and found nothing." Not unique to this change (an area with no qualifying routes already produced an empty result), but the SAC pre-filter adds a new path to it. **Fix direction:** Epic 7 owns this — FR12 graceful-degradation messaging / FR22 run summary should report routes-returned-vs-requested and surface "no routable terrain at this cap." Deferred there rather than bolting a one-off message into 6.1.
+
+---
+
+## Deferred from: code review of 6-3-unified-elevation-profile-slope-display-readability-and-closeout.md (2026-06-08)
+
+| # | Finding | File | Detail |
+|---|---------|------|--------|
+| 1 | No upper bound on diffusion iterations | `src/steeproute/pipeline/smoothing.py` | `graph_smooth_elevation` derives `iters = round((strength_m/spacing)²/6)` with no cap. A huge finite `--elevation-smoothing` (e.g. `100000` m) yields `iters ≈ 1.7e7` and an effectively unbounded hang with no progress feedback. Once the finiteness/range validation (review patch) lands, only absurd-but-finite values trigger it. Low priority for an N=1 tool; revisit if a sane upper ceiling or a clamp is wanted (mirrors `_SETUP_MAX_RADIUS_KM` typo-guard precedent). |

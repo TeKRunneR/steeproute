@@ -86,6 +86,8 @@ def _check_solver_options(
     min_climb_slope: float = 0.20,
     l_connector: float = 200.0,
     min_climb_ground_length: float = 300.0,
+    elevation_smoothing: float = 50.0,
+    elevation_deadband: float = 0.0,
     j_max: float = 0.30,
     n: int = 5,
     iter_budget: int | None = None,
@@ -96,6 +98,8 @@ def _check_solver_options(
         min_climb_slope=min_climb_slope,
         l_connector=l_connector,
         min_climb_ground_length=min_climb_ground_length,
+        elevation_smoothing=elevation_smoothing,
+        elevation_deadband=elevation_deadband,
         j_max=j_max,
         n=n,
         iter_budget=iter_budget,
@@ -137,6 +141,14 @@ def test_validate_solver_options_accepts_boundary_values() -> None:
         ),
         (lambda: _check_solver_options(l_connector=-1.0), "--l-connector"),
         (lambda: _check_solver_options(l_connector=float("inf")), "--l-connector"),
+        # Story 6.3 flags: NaN/inf would otherwise crash `graph_smooth_elevation`'s
+        # `round()` (exit 1) or silently flatten the profile; negative is nonsensical.
+        (lambda: _check_solver_options(elevation_smoothing=float("nan")), "--elevation-smoothing"),
+        (lambda: _check_solver_options(elevation_smoothing=float("inf")), "--elevation-smoothing"),
+        (lambda: _check_solver_options(elevation_smoothing=-1.0), "--elevation-smoothing"),
+        (lambda: _check_solver_options(elevation_deadband=float("nan")), "--elevation-deadband"),
+        (lambda: _check_solver_options(elevation_deadband=float("inf")), "--elevation-deadband"),
+        (lambda: _check_solver_options(elevation_deadband=-1.0), "--elevation-deadband"),
     ],
 )
 def test_validate_solver_options_rejects_out_of_range(

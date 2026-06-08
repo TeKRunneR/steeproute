@@ -314,8 +314,11 @@ def _profile_series(
 ) -> tuple[list[float], list[float]]:
     """Cumulative ground distance (m) and elevation (m) along the route.
 
-    Distance accumulates great-circle hops between consecutive vertices; the
-    template colors each profile segment by its rise/run gradient.
+    Distance accumulates great-circle hops between consecutive vertices. The
+    elevation is the single canonical profile (smoothed + deadbanded query-side,
+    Story 6.3); the template colors each segment by a multi-vertex baseline slope
+    over it. Because this is the same profile the metrics summed, the curve's
+    cumulative D+/D- reaches the box totals at the final vertex (box == curve).
     """
     distances: list[float] = []
     elevations: list[float] = []

@@ -81,14 +81,15 @@ def prepared_graph() -> nx.MultiDiGraph:
 
 
 def _expected_edge_attributes(data: dict[str, object]) -> dict[str, object]:
-    """Pull the 9-attribute setup-pipeline contract off an edge dict."""
+    """Pull the raw post-stage-5 setup-pipeline contract off an edge dict.
+
+    Story 6.3 moved the per-edge metrics (`length_m`, `d_plus_m`, ...) query-side,
+    so the cached graph carries geometry + raw `vertices_resampled` + source attrs
+    only. The roundtrip's job is pickle-integrity of whatever the cache stores.
+    """
     return {
         "geometry": data["geometry"],
         "vertices_resampled": data["vertices_resampled"],
-        "length_m": data["length_m"],
-        "d_plus_m": data["d_plus_m"],
-        "d_minus_m": data["d_minus_m"],
-        "avg_gradient": data["avg_gradient"],
         "sac_scale": data["sac_scale"],
         "highway": data["highway"],
         "osm_way_id": data["osm_way_id"],

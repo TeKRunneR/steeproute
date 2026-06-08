@@ -189,16 +189,19 @@ _GRADIENT_PLAUSIBILITY_MIN_FRACTION = 0.95  # ≥ 95% of edges below the cap.
 
 @pytest.fixture(scope="module")
 def fixture_pipeline_through_stage7() -> nx.MultiDiGraph:
-    """Run stages 1→2→3→4→5→6→7 against the committed Grenoble fixtures."""
+    """Run stages 1→5 (setup) then the query-side 6→7 reshaping on the Grenoble fixtures.
+
+    Story 6.3 moved stages 6-7 query-side: setup stops at stage 5 (raw elevation),
+    and `operationalize_graph` (smooth → deadband → naive-sum `compute_edge_metrics`)
+    produces the operational metrics at query time. Calls `operationalize_graph` at
+    its production defaults so the fixture mirrors `cli/query.py` exactly.
+    """
     import osmnx
 
+    from steeproute.pipeline import operationalize_graph
     from steeproute.pipeline.dem import sample_elevation
     from steeproute.pipeline.osm import normalize_edges
-    from steeproute.pipeline.smoothing import (
-        median_smooth_elevation,
-        resample_edges,
-        smooth_polylines,
-    )
+    from steeproute.pipeline.smoothing import resample_edges, smooth_polylines
 
     if not _DEM_FIXTURE_PATH.exists():
         pytest.skip("dem.tif fixture not committed; fixture-driven assertions skipped.")
@@ -206,8 +209,7 @@ def fixture_pipeline_through_stage7() -> nx.MultiDiGraph:
     graph = smooth_polylines(graph)
     graph = resample_edges(graph)
     graph = sample_elevation(graph, _DEM_FIXTURE_PATH)
-    graph = median_smooth_elevation(graph)
-    return compute_edge_metrics(graph)
+    return operationalize_graph(graph)
 
 
 def test_fixture_pipeline_full_contract_populated(
