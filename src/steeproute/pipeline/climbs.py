@@ -41,6 +41,13 @@ from steeproute.models import Climb, Edge
 # imported so each pipeline module is self-contained against a physical constant.
 _EARTH_RADIUS_M: float = 6_378_137.0
 
+# Minimum 2D ground length (m) for a polyline to count as a valid metrics input.
+# A real stage-4 edge is metres long; this 1 µm floor is purely a numeric guard
+# that excludes sub-physical polylines whose coordinate spacing is so small the
+# 2D length underflows toward zero and `avg_gradient` would overflow to inf. Far
+# below any real edge, so it never rejects production data.
+_MIN_METRIC_LENGTH_M: float = 1e-6
+
 
 def compute_edge_metrics(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
     """Stage 7: attach `length_m`, `d_plus_m`, `d_minus_m`, `avg_gradient` per edge.
@@ -77,14 +84,14 @@ def is_valid_for_metrics(verts: list[tuple[float, float, float]]) -> bool:
     use the same validity check as production via `hypothesis.assume`, avoiding
     drift between the strategy filter and the actual stage's input contract.
 
-    Validity here means "the polyline has non-zero 2D length", which is what
-    stage 4 enforces upstream by dropping degenerate edges. We check it
-    structurally by requiring that at least one consecutive `(lat, lon)` pair
-    differs — that is the precondition `compute_edge_metrics` needs to avoid
-    a `ZeroDivisionError` in `avg_gradient`. Checking only against `verts[0]`
-    is weaker: `[(0,0), (1,1), (0,0)]` passes by the first-vertex check yet
-    `[(0,0), (0,0), (0,0)]` would also pass it if `verts[1]` happened to
-    differ; the consecutive-pair check matches the documented contract.
+    Validity here means "the polyline has a real positive 2D length"
+    (`>= _MIN_METRIC_LENGTH_M`), which is what stage 4 enforces upstream by
+    dropping degenerate edges. We check the *actual* projected length rather than
+    a structural "some consecutive `(lat, lon)` pair differs" proxy: a denormal
+    coordinate difference (e.g. lon `2.2e-313`) compares unequal yet projects to a
+    sub-zero-underflow distance, so the proxy would call it valid while
+    `compute_edge_metrics` divided by ~0 and produced an infinite `avg_gradient`.
+    Measuring the length directly is the precondition that stage actually needs.
     """
     if len(verts) < 2:
         return False
@@ -93,10 +100,7 @@ def is_valid_for_metrics(verts: list[tuple[float, float, float]]) -> bool:
         for lat, lon, elev in verts
     ):
         return False
-    return any(
-        (verts[i][0], verts[i][1]) != (verts[i - 1][0], verts[i - 1][1])
-        for i in range(1, len(verts))
-    )
+    return _cumulative_2d_distance_m(verts) >= _MIN_METRIC_LENGTH_M
 
 
 def _cumulative_2d_distance_m(verts: list[tuple[float, float, float]]) -> float:
