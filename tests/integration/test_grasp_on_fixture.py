@@ -1,10 +1,12 @@
-# pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
-# Reason: same osmnx / networkx boundary as tests/integration/test_graph_contraction_fixture.py.
+# pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false, reportImplicitRelativeImport=false
+# Reason: same osmnx / networkx boundary as tests/integration/test_graph_contraction_fixture.py;
+# `reportImplicitRelativeImport` — `from conftest import ...` is the shape that resolves
+# under pytest's prepend import mode (see test_oracle_correctness.py for the rationale).
 """GRASP solver integration test on the real Grenoble fixture (Story 3.6 AC #5).
 
-Runs the full setup → climbs (3.2) → contract (3.3) → `GraspSolver.run()` chain
-against the committed Grenoble Le Sappey fixture and asserts the structural
-contract every returned route must satisfy:
+Runs `GraspSolver.run()` against the shared session-scoped `grenoble_fixture`
+(tests/integration/conftest.py — the setup → climbs → contract chain) and
+asserts the structural contract every returned route must satisfy:
 
 - `len(result) <= params.n` (FR11 cap).
 - Each route is an edge-simple walk in the contracted graph (no repeated
@@ -20,122 +22,78 @@ FR10 strict-containment is checked transitively: every edge is drawn from the
 area-clipped contracted graph, which `contract_climbs` cuts to the query area
 upstream.
 
-Re-uses the `osm_load` monkeypatch + `run_setup_stages` pattern from
-`test_graph_contraction_fixture.py`. `iter_budget` tuned for a CI-friendly
-wall-clock — Story 3.6 AC #5 caps the test at ~30 s.
+`iter_budget` is tuned for a CI-friendly wall-clock — Story 3.6 AC #5 caps the
+test at ~30 s.
 """
 
 from __future__ import annotations
 
-import importlib.util
-import pathlib
-from unittest.mock import patch
-
-import networkx as nx
 import numpy as np
-import osmnx
 import pytest
+from conftest import (
+    GRENOBLE_DIFFICULTY_CAP,
+    GRENOBLE_J_MAX,
+    GRENOBLE_L_CONNECTOR,
+    GRENOBLE_MIN_CLIMB_GROUND_LENGTH_M,
+    GRENOBLE_SEED,
+    GRENOBLE_THETA,
+    GrenobleFixture,
+)
 
 from steeproute.models import (
-    Area,
     ContractedGraph,
     Edge,
-    PipelineConfig,
     Solution,
     SolverParams,
     route_avg_gradient,
 )
-from steeproute.pipeline import operationalize_graph, run_setup_stages
-from steeproute.pipeline.climbs import detect_climbs
-from steeproute.pipeline.graph import contract_climbs
-from steeproute.pipeline.osm import max_sac_rank, normalize_edges, parse_difficulty_cap
+from steeproute.pipeline.osm import max_sac_rank, parse_difficulty_cap
 from steeproute.solver.distinctness import jaccard_distance
 from steeproute.solver.grasp import GraspSolver
 from steeproute.solver.reuse import blocking_ids, non_exempt_base_segment_ids
 
-_FIXTURE_DIR = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "grenoble_small"
-_OSM_FIXTURE_PATH = _FIXTURE_DIR / "osm_graph.graphml"
-_DEM_FIXTURE_PATH = _FIXTURE_DIR / "dem.tif"
-
-# PRD §"Initial parameter defaults" — same values as `test_graph_contraction_fixture.py`.
-_THETA = 0.20
-_DIFFICULTY_CAP = "T3"
-_L_CONNECTOR = 200.0
-_MIN_CLIMB_GROUND_LENGTH_M = 300.0
-_J_MAX = 0.30
 _N = 3
 # Conservative: enough iterations to populate the tracker on this small
 # fixture without blowing the CI wall-clock cap (AC #5: ~30 s).
 _ITER_BUDGET = 100
-_SEED = 42
-
-
-def _load_fixture_constants() -> tuple[float, float, int]:
-    """Import CENTER_LAT/CENTER_LON/DIST_M from the fixture's regenerate.py."""
-    regen_path = _FIXTURE_DIR / "regenerate.py"
-    spec = importlib.util.spec_from_file_location("_grenoble_small_regen", regen_path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.CENTER_LAT, module.CENTER_LON, module.DIST_M
-
-
-_CENTER_LAT, _CENTER_LON, _DIST_M = _load_fixture_constants()
 
 
 def _params() -> SolverParams:
     return SolverParams(
-        theta=_THETA,
-        min_climb_slope=_THETA,
-        difficulty_cap=_DIFFICULTY_CAP,
-        l_connector=_L_CONNECTOR,
-        min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH_M,
-        j_max=_J_MAX,
+        theta=GRENOBLE_THETA,
+        min_climb_slope=GRENOBLE_THETA,
+        difficulty_cap=GRENOBLE_DIFFICULTY_CAP,
+        l_connector=GRENOBLE_L_CONNECTOR,
+        min_climb_ground_length=GRENOBLE_MIN_CLIMB_GROUND_LENGTH_M,
+        j_max=GRENOBLE_J_MAX,
         n=_N,
         area_cap=500.0,
         untagged_policy="include",
-        seed=_SEED,
+        seed=GRENOBLE_SEED,
         iter_budget=_ITER_BUDGET,
+        # Story 7.2 made time/stagnation termination live; disable stagnation so
+        # the quality-gate run is an iter-budget-only function of the seed (early
+        # stagnation could cut the search before a late improvement). time_budget
+        # can't bind on this small fixture's ~100 fast iterations.
         time_budget=60.0,
-        stagnation_iters=50,
+        stagnation_iters=0,
     )
 
 
 @pytest.fixture(scope="module")
-def solver_chain() -> tuple[ContractedGraph, list[Solution]]:
-    """Run the full setup → climbs → contract → GRASP chain once; return graph + routes.
+def solver_chain(grenoble_fixture: GrenobleFixture) -> tuple[ContractedGraph, list[Solution]]:
+    """Run GRASP once on the shared contracted graph; return graph + routes.
 
     Module-scoped because every assertion operates on the same output —
     re-running construction for each test would multiply the wall-clock by the
     test count for no semantic gain. The contracted graph is exposed alongside
     the routes so the Story 5.2 reuse check can read the `base_segment_id` tags.
-
-    The committed `osm_graph.graphml` / `dem.tif` fixtures are required (no
-    `pytest.skip` fallback — AC #8 forbids it): a missing fixture should
-    hard-fail loudly rather than silently drop coverage. The `assert result`
-    here is the single non-vacuity guard for the whole module — every
-    dependent test iterates the result, so pinning non-emptiness once at the
-    fixture trips them all if a regression empties the output.
+    The `assert result` here is the single non-vacuity guard for the whole
+    module — every dependent test iterates the result, so pinning non-emptiness
+    once at the fixture trips them all if a regression empties the output.
     """
-
-    def _osm_load_from_fixture(_area: Area) -> nx.MultiDiGraph:
-        return normalize_edges(osmnx.load_graphml(_OSM_FIXTURE_PATH))
-
-    area = Area(center=(_CENTER_LAT, _CENTER_LON), radius_km=_DIST_M / 1000.0)
-    config = PipelineConfig(untagged_policy="include", dem_path=_DEM_FIXTURE_PATH)
-    with patch("steeproute.pipeline.osm_load", _osm_load_from_fixture):
-        base_graph = operationalize_graph(run_setup_stages(area, config))
-
-    climbs = detect_climbs(
-        base_graph,
-        min_climb_slope=_THETA,
-        min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH_M,
-    )
-    assert climbs, "expected >= 1 climb on the Grenoble Le Sappey fixture"
-    contracted = contract_climbs(base_graph, climbs, l_connector=_L_CONNECTOR)
-
-    params = _params()
-    solver = GraspSolver(contracted, params, np.random.default_rng(_SEED))
+    contracted = grenoble_fixture.contracted
+    solver = GraspSolver(contracted, _params(), np.random.default_rng(GRENOBLE_SEED))
     result = solver.run()
     assert result, "expected >= 1 GRASP route on the Grenoble Le Sappey fixture"
     return contracted, result
@@ -190,8 +148,8 @@ def test_every_grasp_route_clears_route_level_theta(grasp_result: list[Solution]
     """
     for sol in grasp_result:
         avg = route_avg_gradient(sol.edges)
-        assert avg >= _THETA - 1e-9, (
-            f"route avg_gradient={avg} fell below the route-level floor θ={_THETA}"
+        assert avg >= GRENOBLE_THETA - 1e-9, (
+            f"route avg_gradient={avg} fell below the route-level floor θ={GRENOBLE_THETA}"
         )
 
 
@@ -204,7 +162,7 @@ def test_every_edge_in_every_route_satisfies_sac_cap(
     admitted (same policy as the oracle in Story 3.5). Only known SAC scales
     above `cap_rank` should be rejected — and none can appear in any route.
     """
-    cap_rank = parse_difficulty_cap(_DIFFICULTY_CAP)
+    cap_rank = parse_difficulty_cap(GRENOBLE_DIFFICULTY_CAP)
     for sol in grasp_result:
         for edge in sol.edges:
             rank = max_sac_rank(edge.sac_scale)
@@ -251,7 +209,7 @@ def test_pairwise_jaccard_distance_meets_distinctness_threshold(
     between any held pair; this test pins the invariant in the integration
     layer (catches a regression where GRASP bypasses `tracker.consider(...)`).
     """
-    threshold = 1.0 - _J_MAX
+    threshold = 1.0 - GRENOBLE_J_MAX
     for i in range(len(grasp_result)):
         for j in range(i + 1, len(grasp_result)):
             dist = jaccard_distance(grasp_result[i], grasp_result[j])

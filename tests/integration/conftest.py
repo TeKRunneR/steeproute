@@ -38,14 +38,23 @@ Two responsibilities:
 
 from __future__ import annotations
 
+import importlib.util
+import pathlib
 from collections.abc import Callable
+from dataclasses import dataclass
+from unittest.mock import patch
 
 import networkx as nx
 import numpy as np
+import osmnx
 import pytest
 import truststore
 
-from steeproute.models import ContractedGraph, Edge, SolverParams
+from steeproute.models import Area, ContractedGraph, Edge, PipelineConfig, SolverParams
+from steeproute.pipeline import operationalize_graph, run_setup_stages
+from steeproute.pipeline.climbs import detect_climbs
+from steeproute.pipeline.graph import contract_climbs
+from steeproute.pipeline.osm import normalize_edges
 
 truststore.inject_into_ssl()
 
@@ -243,9 +252,11 @@ def make_toy_solver_params(
     across the committed seeds): the guaranteed feasible cycles make the optimum
     long enough that a smaller budget left seed-53/71 ratios near 0.81, too close
     to the floor. Each iteration is cheap on a 24-node graph (full gate ~4s
-    across 5 seeds; the oracle is ~0.04s of that). The Epic 4 termination fields
-    (`time_budget`, `stagnation_iters`) are inert here (the solver only honours
-    `iter_budget` until Epic 4).
+    across 5 seeds; the oracle is ~0.04s of that). The other two §Cat 5e
+    terminators are pinned non-binding so iter-budget stays the sole terminator
+    (metamorphic invariants must be wall-clock-independent): `stagnation_iters=0`
+    disables stagnation, and the wall-clock budget is set far above any toy-graph
+    run-time (Story 7.2 made both live).
 
     `min_climb_slope` defaults to `theta` (both ship at 0.20). The GRASP solver
     never reads it — it drives `detect_climbs` (pipeline stage 8), which the
@@ -265,7 +276,7 @@ def make_toy_solver_params(
         untagged_policy="include",
         seed=seed,
         iter_budget=iter_budget,
-        time_budget=60.0,
+        time_budget=3600.0,
         stagnation_iters=0,
     )
 
@@ -280,3 +291,83 @@ def toy_graph_factory() -> Callable[[int], ContractedGraph]:
 def toy_solver_params() -> SolverParams:
     """Default `SolverParams` shared by the toy-graph solver tests."""
     return make_toy_solver_params()
+
+
+# --- Real Grenoble Le Sappey fixture (shared setup → contract chain) ----------
+#
+# The committed `osm_graph.graphml` + `dem.tif` under `fixtures/grenoble_small/`
+# feed every real-data integration test (GRASP, validator, output, time-budget,
+# reproducibility). Each module used to rebuild the setup → climbs → contract
+# chain itself; that boilerplate now lives here once. The build-time PRD defaults
+# below are single-sourced so a consumer's `SolverParams` (theta / SAC cap /
+# J_max) can never drift from the thresholds the graph was actually built with.
+
+_GRENOBLE_DIR = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "grenoble_small"
+_GRENOBLE_OSM_PATH = _GRENOBLE_DIR / "osm_graph.graphml"
+_GRENOBLE_DEM_PATH = _GRENOBLE_DIR / "dem.tif"
+
+# PRD §"Initial parameter defaults" — used by both the build (detect_climbs /
+# contract_climbs) and consumers' SolverParams. `n` and `iter_budget` stay
+# per-test (they're what each test is actually exercising).
+GRENOBLE_THETA: float = 0.20
+GRENOBLE_DIFFICULTY_CAP: str = "T3"
+GRENOBLE_L_CONNECTOR: float = 200.0
+GRENOBLE_MIN_CLIMB_GROUND_LENGTH_M: float = 300.0
+GRENOBLE_J_MAX: float = 0.30
+GRENOBLE_SEED: int = 42
+
+
+@dataclass(frozen=True)
+class GrenobleFixture:
+    """The Grenoble Le Sappey fixture after the setup → climbs → contract chain.
+
+    `base_graph` is the operational (smoothed + per-edge-metric) graph the
+    renderer reads for geometry; `contracted` is the climb-contracted graph the
+    solver and validator consume; `area` is the query area the fixture covers.
+    """
+
+    area: Area
+    base_graph: nx.MultiDiGraph
+    contracted: ContractedGraph
+
+
+def _load_grenoble_constants() -> tuple[float, float, int]:
+    """Read CENTER_LAT / CENTER_LON / DIST_M from the fixture's `regenerate.py`."""
+    regen_path = _GRENOBLE_DIR / "regenerate.py"
+    spec = importlib.util.spec_from_file_location("_grenoble_small_regen", regen_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.CENTER_LAT, module.CENTER_LON, module.DIST_M
+
+
+@pytest.fixture(scope="session")
+def grenoble_fixture() -> GrenobleFixture:
+    """Build the real Grenoble setup → climbs → contract chain once per session.
+
+    Session-scoped so the multi-second build runs a single time for the whole
+    integration suite instead of once per consuming module; the returned graphs
+    are read-only to consumers (the solver, validator, and renderer never mutate
+    them), so sharing is safe. The committed fixtures are required — Architecture
+    §Cat 11c forbids `pytest.skip`, so a missing file hard-fails. The `assert
+    climbs` is the shared non-vacuity guard: without a climb the contracted graph
+    is empty and every consumer would vacuously pass.
+    """
+    center_lat, center_lon, dist_m = _load_grenoble_constants()
+
+    def _osm_load_from_fixture(_area: Area) -> nx.MultiDiGraph:
+        return normalize_edges(osmnx.load_graphml(_GRENOBLE_OSM_PATH))
+
+    area = Area(center=(center_lat, center_lon), radius_km=dist_m / 1000.0)
+    config = PipelineConfig(untagged_policy="include", dem_path=_GRENOBLE_DEM_PATH)
+    with patch("steeproute.pipeline.osm_load", _osm_load_from_fixture):
+        base_graph = operationalize_graph(run_setup_stages(area, config))
+
+    climbs = detect_climbs(
+        base_graph,
+        min_climb_slope=GRENOBLE_THETA,
+        min_climb_ground_length=GRENOBLE_MIN_CLIMB_GROUND_LENGTH_M,
+    )
+    assert climbs, "expected >= 1 climb on the Grenoble Le Sappey fixture"
+    contracted = contract_climbs(base_graph, climbs, l_connector=GRENOBLE_L_CONNECTOR)
+    return GrenobleFixture(area=area, base_graph=base_graph, contracted=contracted)

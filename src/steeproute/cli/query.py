@@ -69,21 +69,14 @@ from steeproute.pipeline.climbs import detect_climbs
 from steeproute.pipeline.graph import contract_climbs
 from steeproute.pipeline.osm import filter_trails
 from steeproute.progress import ProgressCallback, ProgressEvent, throttle
-from steeproute.solver.grasp import GraspSolver
+from steeproute.solver.grasp import STAGNATION_ITERS_DEFAULT_PLACEHOLDER, GraspSolver
 from steeproute.validator import validate
 
-# Concrete fallback when `--iter-budget` is unset. Epic 3's GRASP terminates on
-# iter-budget only (time-budget + stagnation land in Epic 4), so the CLI must
-# resolve a positive integer here. Sized to find routes on a real Grenoble query
-# while staying well inside NFR1's 10-minute design target; tunable post-baseline
-# once Epic 4 wires the time/stagnation termination that would normally cap it.
+# Concrete fallback when `--iter-budget` is unset: the iteration ceiling that
+# bounds a solve once neither `--time-budget` nor `--stagnation-iters` has fired
+# first (§Cat 5e). Sized to find routes on a real Grenoble query while staying
+# well inside NFR1's 10-minute design target; tunable post-baseline.
 DEFAULT_ITER_BUDGET: int = 2000
-
-# Fixed convergence status for Epic 3: the solver runs to its iteration budget,
-# which maps to "budget-exhausted" in the §Cat 5e termination table. Story 4.2
-# replaces this with the full three-value contract (converged / budget-exhausted
-# / interrupted) once stagnation + interrupt handling exist.
-_CONVERGENCE_STATUS: output.ConvergenceStatus = "budget-exhausted"
 
 
 @click.command(
@@ -161,6 +154,8 @@ def cli(
         j_max=j_max,
         n=n,
         iter_budget=iter_budget,
+        time_budget=time_budget,
+        stagnation_iters=stagnation_iters,
         progress_interval=progress_interval,
     )
     # Create the output directory now so an unusable `--output-dir` fails as a
@@ -202,13 +197,18 @@ def cli(
         area_cap=area_cap,
         untagged_policy=untagged_trails,
         seed=seed,
-        # Epic 3 terminates on iter-budget only; resolve the `None` default to a
-        # concrete positive count (Epic 4 adds time/stagnation termination).
+        # Resolve the `None` flag default to a concrete iteration ceiling; with
+        # `--time-budget` and `--stagnation-iters` now live (§Cat 5e), whichever
+        # of the three trips first ends the solve.
         iter_budget=iter_budget if iter_budget is not None else DEFAULT_ITER_BUDGET,
         time_budget=time_budget,
-        # `None` (flag unset) → 0 disables stagnation termination (§Cat 5e); the
-        # real default is tuned in Epic 4 Story 4.2.
-        stagnation_iters=stagnation_iters if stagnation_iters is not None else 0,
+        # `None` (flag unset) → the solver's provisional default window; pass `0`
+        # explicitly to disable stagnation termination (§Cat 5e).
+        stagnation_iters=(
+            stagnation_iters
+            if stagnation_iters is not None
+            else STAGNATION_ITERS_DEFAULT_PLACEHOLDER
+        ),
     )
     provenance = _build_provenance(prepared.manifest)
 
@@ -256,6 +256,10 @@ def cli(
         contracted, params, np.random.default_rng(seed), progress_callback=progress_callback
     )
     solutions = solver.run()
+    # §Cat 5e: the solver records which termination fired (`converged` on
+    # stagnation, `budget-exhausted` on iter/time budget). Story 7.3 will override
+    # this to `interrupted` in a KeyboardInterrupt handler.
+    convergence_status = solver.convergence_status
 
     validated = validate(solutions, contracted, params)
 
@@ -268,7 +272,7 @@ def cli(
         contracted,
         params,
         provenance,
-        _CONVERGENCE_STATUS,
+        convergence_status,
         output_dir,
     )
 

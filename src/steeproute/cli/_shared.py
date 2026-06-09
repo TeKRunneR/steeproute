@@ -176,6 +176,8 @@ def validate_solver_options(
     j_max: float,
     n: int,
     iter_budget: int | None,
+    time_budget: float,
+    stagnation_iters: int | None,
     progress_interval: float,
 ) -> None:
     """Query-side solver-parameter sanity checks at the CLI boundary (§Cat 10 → exit 2).
@@ -195,6 +197,13 @@ def validate_solver_options(
     fires), and a non-positive interval forwards every iteration (stdout flood).
     Both are §Cat 10 garbage-in, so they map to `BadCLIArgError → exit 2`.
 
+    `time_budget` and `stagnation_iters` drive the §Cat 5e termination checks
+    (Story 7.2): a non-finite/non-positive `--time-budget` would stop the solve
+    on iteration 1 (empty top-N), and a negative `--stagnation-iters` is
+    nonsensical (`0` legitimately disables the check). `--stagnation-iters` may
+    be `None` here (unset); the query CLI then resolves it to the solver's
+    default window.
+
     Checks are fail-fast (first violation wins) and ordered finiteness-then-range
     so a `nan` is reported as non-finite rather than as a confusing range message.
     """
@@ -206,6 +215,7 @@ def validate_solver_options(
         ("--elevation-smoothing", elevation_smoothing),
         ("--elevation-deadband", elevation_deadband),
         ("--j-max", j_max),
+        ("--time-budget", time_budget),
         ("--progress-interval", progress_interval),
     ):
         if not math.isfinite(value):
@@ -234,12 +244,21 @@ def validate_solver_options(
     # a stdout flood. "Seconds between prints" is only meaningful when > 0.
     if progress_interval <= 0.0:
         raise BadCLIArgError(f"--progress-interval {progress_interval:g} must be positive.")
+    # Strictly positive: a `0`/negative wall-clock budget trips the §Cat 5e
+    # time-budget check on the very first iteration, so the solver returns an
+    # empty top-N — indistinguishable from "searched and found nothing". Fail
+    # loud instead. (NaN/inf already caught in the finiteness loop above.)
+    if time_budget <= 0.0:
+        raise BadCLIArgError(f"--time-budget {time_budget:g} must be positive.")
     if not 0.0 <= j_max <= 1.0:
         raise BadCLIArgError(f"--j-max {j_max:g} must be in [0, 1].")
     if n < 1:
         raise BadCLIArgError(f"--n {n} must be >= 1.")
     if iter_budget is not None and iter_budget < 1:
         raise BadCLIArgError(f"--iter-budget {iter_budget} must be >= 1.")
+    # `0` disables the stagnation check (§Cat 5e); negative is nonsensical.
+    if stagnation_iters is not None and stagnation_iters < 0:
+        raise BadCLIArgError(f"--stagnation-iters {stagnation_iters} must be >= 0.")
 
 
 def ensure_output_dir(output_dir: pathlib.Path) -> None:
@@ -407,7 +426,10 @@ stagnation_iters_option = click.option(
     "--stagnation-iters",
     type=click.INT,
     default=None,
-    help="Early-termination window: iterations without top-N improvement (default: TBD).",
+    help=(
+        "Stop after this many consecutive iterations with no top-N improvement; "
+        "0 disables (default: 100, tunable post-baseline)."
+    ),
 )
 
 # Wall-clock seconds between progress prints. A concrete default so a long run is

@@ -15,7 +15,13 @@ feed both setup-side ingestion and query-side cache coverage.
 import pathlib
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
+
+# Solver termination outcome surfaced in every report's metadata (Architecture
+# §Cat 5e). Homed here — the lowest layer — so both the solver (which sets it)
+# and the output renderer (which emits it) import one definition, rather than the
+# renderer owning a type the solver would have to depend on.
+ConvergenceStatus = Literal["converged", "budget-exhausted", "interrupted"]
 
 
 @dataclass(frozen=True, slots=True)

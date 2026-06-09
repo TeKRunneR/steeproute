@@ -28,7 +28,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-06-08
+last_updated: 2026-06-09
 
 project: bmad-test
 project_key: NOKEY
@@ -101,7 +101,7 @@ development_status:
 
   epic-7: in-progress        # (was epic-6) Operational Robustness
   7-1-progressevent-throttled-callback-cli-renderer-with-quiet-verbose: done
-  7-2-time-budget-and-stagnation-termination: backlog
+  7-2-time-budget-and-stagnation-termination: done
   7-3-interrupt-handling-with-best-so-far-preservation: backlog
   7-4-graceful-degradation-messaging-for-sparse-areas: backlog
   7-5-run-summary-on-stdout: backlog

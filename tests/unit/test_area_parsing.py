@@ -91,6 +91,8 @@ def _check_solver_options(
     j_max: float = 0.30,
     n: int = 5,
     iter_budget: int | None = None,
+    time_budget: float = 600.0,
+    stagnation_iters: int | None = None,
     progress_interval: float = 5.0,
 ) -> None:
     """Call `validate_solver_options` with in-range defaults; tests override one field."""
@@ -104,6 +106,8 @@ def _check_solver_options(
         j_max=j_max,
         n=n,
         iter_budget=iter_budget,
+        time_budget=time_budget,
+        stagnation_iters=stagnation_iters,
         progress_interval=progress_interval,
     )
 
@@ -117,6 +121,9 @@ def test_validate_solver_options_accepts_boundary_values() -> None:
     """j_max ∈ {0, 1} inclusive; n=1, iter_budget=1, theta=0, l_connector=0 are the minimums."""
     _check_solver_options(j_max=0.0, n=1, iter_budget=1, theta=0.0, l_connector=0.0)
     _check_solver_options(j_max=1.0)
+    # Story 7.2: stagnation_iters=0 legitimately disables the check; a tiny
+    # positive time_budget is in-range (the §Cat 5e check just trips sooner).
+    _check_solver_options(stagnation_iters=0, time_budget=0.001)
 
 
 @pytest.mark.parametrize(
@@ -157,6 +164,13 @@ def test_validate_solver_options_accepts_boundary_values() -> None:
         (lambda: _check_solver_options(progress_interval=float("inf")), "--progress-interval"),
         (lambda: _check_solver_options(progress_interval=0.0), "--progress-interval"),
         (lambda: _check_solver_options(progress_interval=-1.0), "--progress-interval"),
+        # Story 7.2 flags: NaN/inf/non-positive time-budget would stop the solve
+        # on iteration 1 (empty top-N); a negative stagnation window is nonsense.
+        (lambda: _check_solver_options(time_budget=float("nan")), "--time-budget"),
+        (lambda: _check_solver_options(time_budget=float("inf")), "--time-budget"),
+        (lambda: _check_solver_options(time_budget=0.0), "--time-budget"),
+        (lambda: _check_solver_options(time_budget=-1.0), "--time-budget"),
+        (lambda: _check_solver_options(stagnation_iters=-1), "--stagnation-iters"),
     ],
 )
 def test_validate_solver_options_rejects_out_of_range(

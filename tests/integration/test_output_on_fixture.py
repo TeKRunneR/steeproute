@@ -1,55 +1,40 @@
-# pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
-# Reason: same osmnx / networkx boundary as tests/integration/test_validator_on_fixture.py.
+# pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false, reportImplicitRelativeImport=false
+# Reason: same osmnx / networkx boundary as tests/integration/test_validator_on_fixture.py;
+# `reportImplicitRelativeImport` — `from conftest import ...` is the shape that resolves
+# under pytest's prepend import mode (see test_oracle_correctness.py for the rationale).
 """End-to-end render of real GRASP output on the Grenoble fixture (Story 3.10 AC #7).
 
-Reuses the setup → climbs → contract → GRASP → validate chain from
-`test_validator_on_fixture.py`, then renders the validated set and asserts the
-files exist, parse as HTML, carry the map + elevation-profile sections, embed
-real geometry, and stay self-contained.
+Runs GRASP on the shared `grenoble_fixture` (tests/integration/conftest.py),
+renders the validated set, and asserts the files exist, parse as HTML, carry the
+map + elevation-profile sections, embed real geometry, and stay self-contained.
 """
 
 from __future__ import annotations
 
 import html.parser
-import importlib.util
 import json
 import pathlib
 import re
-from unittest.mock import patch
 
-import networkx as nx
 import numpy as np
-import osmnx
 import pytest
+from conftest import (
+    GRENOBLE_DIFFICULTY_CAP,
+    GRENOBLE_J_MAX,
+    GRENOBLE_L_CONNECTOR,
+    GRENOBLE_MIN_CLIMB_GROUND_LENGTH_M,
+    GRENOBLE_SEED,
+    GRENOBLE_THETA,
+    GrenobleFixture,
+)
 
 from steeproute import output
-from steeproute.models import (
-    Area,
-    ContractedGraph,
-    PipelineConfig,
-    ProvenanceInfo,
-    Solution,
-    SolverParams,
-)
-from steeproute.pipeline import operationalize_graph, run_setup_stages
-from steeproute.pipeline.climbs import detect_climbs
-from steeproute.pipeline.graph import contract_climbs
-from steeproute.pipeline.osm import normalize_edges
+from steeproute.models import ProvenanceInfo, Solution, SolverParams
 from steeproute.solver.grasp import GraspSolver
 from steeproute.validator import validate
 
-_FIXTURE_DIR = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "grenoble_small"
-_OSM_FIXTURE_PATH = _FIXTURE_DIR / "osm_graph.graphml"
-_DEM_FIXTURE_PATH = _FIXTURE_DIR / "dem.tif"
-
-_THETA = 0.20
-_DIFFICULTY_CAP = "T3"
-_L_CONNECTOR = 200.0
-_MIN_CLIMB_GROUND_LENGTH_M = 300.0
-_J_MAX = 0.30
 _N = 3
 _ITER_BUDGET = 100
-_SEED = 42
 
 _PROVENANCE = ProvenanceInfo(
     steeproute_version="0.0.0-test",
@@ -61,70 +46,55 @@ _PROVENANCE = ProvenanceInfo(
 )
 
 
-def _load_fixture_constants() -> tuple[float, float, int]:
-    regen_path = _FIXTURE_DIR / "regenerate.py"
-    spec = importlib.util.spec_from_file_location("_grenoble_small_regen_output", regen_path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.CENTER_LAT, module.CENTER_LON, module.DIST_M
-
-
-_CENTER_LAT, _CENTER_LON, _DIST_M = _load_fixture_constants()
-
-
 def _params() -> SolverParams:
     return SolverParams(
-        theta=_THETA,
-        min_climb_slope=_THETA,
-        difficulty_cap=_DIFFICULTY_CAP,
-        l_connector=_L_CONNECTOR,
-        min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH_M,
-        j_max=_J_MAX,
+        theta=GRENOBLE_THETA,
+        min_climb_slope=GRENOBLE_THETA,
+        difficulty_cap=GRENOBLE_DIFFICULTY_CAP,
+        l_connector=GRENOBLE_L_CONNECTOR,
+        min_climb_ground_length=GRENOBLE_MIN_CLIMB_GROUND_LENGTH_M,
+        j_max=GRENOBLE_J_MAX,
         n=_N,
         area_cap=500.0,
         untagged_policy="include",
-        seed=_SEED,
+        seed=GRENOBLE_SEED,
         iter_budget=_ITER_BUDGET,
+        # Story 7.2 made time/stagnation termination live; disable stagnation so
+        # the result stays an iter-budget-only function of the seed (the
+        # assertions below pin that exact route set). time_budget can't bind on
+        # this small fixture's ~100 fast iterations.
         time_budget=60.0,
-        stagnation_iters=50,
+        stagnation_iters=0,
     )
 
 
 @pytest.fixture(scope="module")
-def fixture_run() -> tuple[nx.MultiDiGraph, ContractedGraph, list[Solution]]:
-    """Run setup → climbs → contract → GRASP once; return base graph + contracted + solutions."""
-
-    def _osm_load_from_fixture(_area: Area) -> nx.MultiDiGraph:
-        return normalize_edges(osmnx.load_graphml(_OSM_FIXTURE_PATH))
-
-    area = Area(center=(_CENTER_LAT, _CENTER_LON), radius_km=_DIST_M / 1000.0)
-    config = PipelineConfig(untagged_policy="include", dem_path=_DEM_FIXTURE_PATH)
-    with patch("steeproute.pipeline.osm_load", _osm_load_from_fixture):
-        base_graph = operationalize_graph(run_setup_stages(area, config))
-
-    climbs = detect_climbs(
-        base_graph, min_climb_slope=_THETA, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH_M
+def grasp_solutions(grenoble_fixture: GrenobleFixture) -> list[Solution]:
+    """Run GRASP once on the shared contracted graph; return its routes."""
+    solver = GraspSolver(
+        grenoble_fixture.contracted, _params(), np.random.default_rng(GRENOBLE_SEED)
     )
-    assert climbs, "expected >= 1 climb on the Grenoble Le Sappey fixture"
-    contracted = contract_climbs(base_graph, climbs, l_connector=_L_CONNECTOR)
-
-    solver = GraspSolver(contracted, _params(), np.random.default_rng(_SEED))
     solutions = solver.run()
     assert solutions, "expected >= 1 GRASP route on the Grenoble Le Sappey fixture"
-    return base_graph, contracted, solutions
+    return solutions
 
 
 def test_render_real_fixture_writes_parseable_reports(
-    fixture_run: tuple[nx.MultiDiGraph, ContractedGraph, list[Solution]],
+    grenoble_fixture: GrenobleFixture,
+    grasp_solutions: list[Solution],
     tmp_path: pathlib.Path,
 ) -> None:
-    base_graph, contracted, solutions = fixture_run
-    validated = validate(solutions, contracted, _params())
+    validated = validate(grasp_solutions, grenoble_fixture.contracted, _params())
 
-    area = Area(center=(_CENTER_LAT, _CENTER_LON), radius_km=_DIST_M / 1000.0)
     output.render(
-        validated, base_graph, area, contracted, _params(), _PROVENANCE, "converged", tmp_path
+        validated,
+        grenoble_fixture.base_graph,
+        grenoble_fixture.area,
+        grenoble_fixture.contracted,
+        _params(),
+        _PROVENANCE,
+        "converged",
+        tmp_path,
     )
 
     n = len(validated.routes)
@@ -148,4 +118,4 @@ def test_render_real_fixture_writes_parseable_reports(
         payload = json.loads(json_path.read_text(encoding="utf-8"))
         assert payload["route_index"] == i
         assert len(payload["vertices"]) >= 2  # real geometry resolved from the graph
-        assert payload["metadata"]["params"]["seed"] == _SEED
+        assert payload["metadata"]["params"]["seed"] == GRENOBLE_SEED

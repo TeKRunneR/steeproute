@@ -34,11 +34,11 @@ def _params(
     iter_budget: int = 20,
     difficulty_cap: str = "T3",
 ) -> SolverParams:
-    """Build a `SolverParams` carrying only the fields GRASP reads.
+    """Build a `SolverParams` carrying only the fields these tests exercise.
 
-    Fields outside Story 3.6's scope (`time_budget`, `stagnation_iters`, etc.)
-    are pinned to inert values — those terminators land in Epic 4 and the
-    solver currently ignores them.
+    The §Cat 5e budgets are pinned non-binding so iter-budget is the sole
+    terminator: `stagnation_iters=0` disables stagnation (Story 7.2 made it
+    live), and `time_budget=10.0` dwarfs these tiny hand-built-graph runs.
     """
     return SolverParams(
         theta=theta,
@@ -53,7 +53,7 @@ def _params(
         seed=42,
         iter_budget=iter_budget,
         time_budget=10.0,
-        stagnation_iters=100,
+        stagnation_iters=0,
     )
 
 

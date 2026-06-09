@@ -1,5 +1,7 @@
-# pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
-# Reason: same osmnx / networkx boundary as tests/integration/test_grasp_on_fixture.py.
+# pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false, reportImplicitRelativeImport=false
+# Reason: same osmnx / networkx boundary as tests/integration/test_grasp_on_fixture.py;
+# `reportImplicitRelativeImport` — `from conftest import ...` is the shape that resolves
+# under pytest's prepend import mode (see test_oracle_correctness.py for the rationale).
 """Validator integration tests on the real Grenoble fixture (Story 3.9 AC #6).
 
 Two assertions the unit suite can't make:
@@ -14,102 +16,59 @@ Two assertions the unit suite can't make:
    below-θ super-edge into an otherwise-valid solution must surface exactly one
    `slope_floor` violation with the right observed/required numerics.
 
-Reuses the `osm_load` monkeypatch + setup → climbs → contract → GRASP chain
-from `test_grasp_on_fixture.py`.
+The setup → climbs → contract chain comes from the shared `grenoble_fixture`
+(tests/integration/conftest.py).
 """
 
 from __future__ import annotations
 
-import importlib.util
-import pathlib
-from unittest.mock import patch
-
-import networkx as nx
 import numpy as np
-import osmnx
 import pytest
-
-from steeproute.models import (
-    Area,
-    ContractedGraph,
-    Edge,
-    PipelineConfig,
-    Solution,
-    SolverParams,
+from conftest import (
+    GRENOBLE_DIFFICULTY_CAP,
+    GRENOBLE_J_MAX,
+    GRENOBLE_L_CONNECTOR,
+    GRENOBLE_MIN_CLIMB_GROUND_LENGTH_M,
+    GRENOBLE_SEED,
+    GRENOBLE_THETA,
+    GrenobleFixture,
 )
-from steeproute.pipeline import operationalize_graph, run_setup_stages
-from steeproute.pipeline.climbs import detect_climbs
-from steeproute.pipeline.graph import contract_climbs
-from steeproute.pipeline.osm import normalize_edges
+
+from steeproute.models import ContractedGraph, Edge, Solution, SolverParams
 from steeproute.solver.grasp import GraspSolver
 from steeproute.validator import validate, validate_route
 
-_FIXTURE_DIR = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "grenoble_small"
-_OSM_FIXTURE_PATH = _FIXTURE_DIR / "osm_graph.graphml"
-_DEM_FIXTURE_PATH = _FIXTURE_DIR / "dem.tif"
-
-# PRD §"Initial parameter defaults" — same values as test_grasp_on_fixture.py.
-_THETA = 0.20
-_DIFFICULTY_CAP = "T3"
-_L_CONNECTOR = 200.0
-_MIN_CLIMB_GROUND_LENGTH_M = 300.0
-_J_MAX = 0.30
 _N = 3
 _ITER_BUDGET = 100
-_SEED = 42
-
-
-def _load_fixture_constants() -> tuple[float, float, int]:
-    regen_path = _FIXTURE_DIR / "regenerate.py"
-    spec = importlib.util.spec_from_file_location("_grenoble_small_regen_validator", regen_path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.CENTER_LAT, module.CENTER_LON, module.DIST_M
-
-
-_CENTER_LAT, _CENTER_LON, _DIST_M = _load_fixture_constants()
 
 
 def _params() -> SolverParams:
     return SolverParams(
-        theta=_THETA,
-        min_climb_slope=_THETA,
-        difficulty_cap=_DIFFICULTY_CAP,
-        l_connector=_L_CONNECTOR,
-        min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH_M,
-        j_max=_J_MAX,
+        theta=GRENOBLE_THETA,
+        min_climb_slope=GRENOBLE_THETA,
+        difficulty_cap=GRENOBLE_DIFFICULTY_CAP,
+        l_connector=GRENOBLE_L_CONNECTOR,
+        min_climb_ground_length=GRENOBLE_MIN_CLIMB_GROUND_LENGTH_M,
+        j_max=GRENOBLE_J_MAX,
         n=_N,
         area_cap=500.0,
         untagged_policy="include",
-        seed=_SEED,
+        seed=GRENOBLE_SEED,
         iter_budget=_ITER_BUDGET,
+        # Story 7.2 made time/stagnation termination live; disable stagnation so
+        # the result stays an iter-budget-only function of the seed (the
+        # assertions below pin that exact route set). time_budget can't bind on
+        # this small fixture's ~100 fast iterations.
         time_budget=60.0,
-        stagnation_iters=50,
+        stagnation_iters=0,
     )
 
 
 @pytest.fixture(scope="module")
-def fixture_run() -> tuple[ContractedGraph, list[Solution]]:
-    """Run setup → climbs → contract → GRASP once; return the graph + solutions."""
-
-    def _osm_load_from_fixture(_area: Area) -> nx.MultiDiGraph:
-        return normalize_edges(osmnx.load_graphml(_OSM_FIXTURE_PATH))
-
-    area = Area(center=(_CENTER_LAT, _CENTER_LON), radius_km=_DIST_M / 1000.0)
-    config = PipelineConfig(untagged_policy="include", dem_path=_DEM_FIXTURE_PATH)
-    with patch("steeproute.pipeline.osm_load", _osm_load_from_fixture):
-        base_graph = operationalize_graph(run_setup_stages(area, config))
-
-    climbs = detect_climbs(
-        base_graph,
-        min_climb_slope=_THETA,
-        min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH_M,
-    )
-    assert climbs, "expected >= 1 climb on the Grenoble Le Sappey fixture"
-    contracted = contract_climbs(base_graph, climbs, l_connector=_L_CONNECTOR)
-
-    solver = GraspSolver(contracted, _params(), np.random.default_rng(_SEED))
+def fixture_run(grenoble_fixture: GrenobleFixture) -> tuple[ContractedGraph, list[Solution]]:
+    """Run GRASP once on the shared contracted graph; return the graph + solutions."""
+    contracted = grenoble_fixture.contracted
+    solver = GraspSolver(contracted, _params(), np.random.default_rng(GRENOBLE_SEED))
     solutions = solver.run()
     assert solutions, "expected >= 1 GRASP route on the Grenoble Le Sappey fixture"
     return contracted, solutions
@@ -161,7 +120,7 @@ def test_crafted_below_theta_super_edge_is_caught(
     violations = validated.routes[0].validation.violations
     slope = [v for v in violations if v.constraint_id == "slope_floor"]
     assert len(slope) == 1
-    assert slope[0].numeric == {"observed": 0.05, "required": _THETA}
+    assert slope[0].numeric == {"observed": 0.05, "required": GRENOBLE_THETA}
     assert validated.routes[0].validation.passed is False
 
 

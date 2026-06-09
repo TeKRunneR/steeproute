@@ -5,11 +5,12 @@
 
 Implements Architecture §Cat 5's solver shape: a class with an injected RNG,
 parameter snapshot, prepared `ContractedGraph`, and a continuously-readable
-`best_so_far`. Termination handled here covers only the iter-budget; the
-time-budget, stagnation, and KeyboardInterrupt branches in §Cat 5e land in
-Epic 7 (Stories 7.2 / 7.3) at the CLI layer. The `progress_callback` is invoked
-once per iteration with a `ProgressEvent` (Story 7.1); the CLI wraps it with
-`progress.throttle(...)` so emission honours `--progress-interval`.
+`best_so_far`. `run()` terminates on three of §Cat 5e's four conditions —
+iter-budget, `--time-budget` wall-clock, and `--stagnation-iters` (Story 7.2) —
+recording the outcome in `convergence_status`. The fourth, `KeyboardInterrupt`,
+is handled at the CLI layer (Story 7.3) per §Cat 5b. The `progress_callback` is
+invoked once per iteration with a `ProgressEvent` (Story 7.1); the CLI wraps it
+with `progress.throttle(...)` so emission honours `--progress-interval`.
 
 Construction shape
 ==================
@@ -86,7 +87,14 @@ import time
 
 import numpy as np
 
-from steeproute.models import ContractedGraph, Edge, Solution, SolverParams, route_avg_gradient
+from steeproute.models import (
+    ContractedGraph,
+    ConvergenceStatus,
+    Edge,
+    Solution,
+    SolverParams,
+    route_avg_gradient,
+)
 from steeproute.pipeline.osm import max_sac_rank, parse_difficulty_cap
 from steeproute.progress import ProgressCallback, ProgressEvent, estimate_remaining
 from steeproute.solver.distinctness import TopNTracker
@@ -96,7 +104,20 @@ from steeproute.solver.reuse import (
     non_exempt_base_segment_ids,
 )
 
-__all__ = ["GraspSolver", "RCL_SIZE"]
+__all__ = ["STAGNATION_ITERS_DEFAULT_PLACEHOLDER", "GraspSolver", "RCL_SIZE"]
+
+
+STAGNATION_ITERS_DEFAULT_PLACEHOLDER: int = 100
+"""Default `--stagnation-iters` window when the flag is unset (Story 7.2).
+
+PROVISIONAL — tune empirically before release by observing convergence behaviour
+on the metamorphic suite, the `test_time_budget.py` / `test_stagnation.py`
+integration tests, and real Grenoble-fixture runs. 100 consecutive iterations
+without a top-N total-objective improvement is a first guess: large enough that
+a still-productive search isn't cut short, small enough that a plateaued search
+on a sparse area stops well inside NFR1's budget. `--stagnation-iters 0` disables
+the check entirely (Architecture §Cat 5e).
+"""
 
 
 RCL_SIZE: int = 5
@@ -117,10 +138,14 @@ class GraspSolver:
     randomness source. The internal `TopNTracker` is built eagerly so
     `best_so_far` is readable before `run()` is called (and returns `[]`).
 
-    `run()` performs `params.iter_budget` GRASP iterations and returns the
-    final `tracker.current_top()`. It does not catch `KeyboardInterrupt` —
-    Architecture §Cat 5b puts that at the CLI layer (Story 7.3 wires the
-    try/except).
+    `run()` drives GRASP iterations until any of three termination conditions
+    fires (Architecture §Cat 5e) — iter-budget, `--time-budget` wall-clock, or
+    `--stagnation-iters` consecutive iterations without a top-N improvement — and
+    returns the final `tracker.current_top()`. It records which one fired in the
+    public `convergence_status` attribute (`converged` on stagnation,
+    `budget-exhausted` on iter/time budget). It does not catch
+    `KeyboardInterrupt` — Architecture §Cat 5b puts that at the CLI layer, where
+    Story 7.3 sets the third status value (`interrupted`).
     """
 
     def __init__(
@@ -160,6 +185,11 @@ class GraspSolver:
         # graph (Story 5.2). Single-sourced with the oracle + validator via
         # `solver/reuse.py` so all three share one feasible set.
         self._non_exempt_ids: frozenset[tuple[int, int, int]] = non_exempt_base_segment_ids(graph)
+        # Termination outcome (§Cat 5e). Initialised to the iter-budget outcome so
+        # the attribute is always readable/typed — including after the empty-graph
+        # early return in `run()` — and set definitively at each termination
+        # branch. `interrupted` is never set here; Story 7.3's CLI handler owns it.
+        self.convergence_status: ConvergenceStatus = "budget-exhausted"
 
     @property
     def best_so_far(self) -> list[Solution]:
@@ -167,36 +197,55 @@ class GraspSolver:
         return self._tracker.current_top()
 
     def run(self) -> list[Solution]:
-        """Drive `params.iter_budget` GRASP iterations; return final top-N.
+        """Drive GRASP iterations to the first §Cat 5e termination; return final top-N.
 
-        Emits a `ProgressEvent` to `self._progress_callback` (if set) after each
-        iteration's `tracker.consider(...)`. `stagnation_counter` counts
-        consecutive iterations whose top-N total objective was unchanged — the
-        tracker's value changes iff a candidate was admitted, so this is exactly
-        "iterations since the last admission" (Story 7.2 acts on it). All
-        progress bookkeeping is gated behind the callback check so the
-        no-progress path (e.g. `--quiet`, quality-gate tests) carries zero
-        timing/objective overhead and stays trivially deterministic.
+        Three conditions stop the loop, checked *between* iterations (the
+        in-flight iteration always finishes — the budgets are soft):
+
+        - **iter-budget** — the `for` exhausts `params.iter_budget` → `convergence_status = "budget-exhausted"`.
+        - **time-budget** — monotonic elapsed reaches `params.time_budget` → `"budget-exhausted"`.
+        - **stagnation** — the top-N total objective is unchanged for
+          `params.stagnation_iters` consecutive iterations → `"converged"`.
+          `stagnation_iters == 0` disables it. The window only ever fires after
+          the tracker has filled: while admissions are still improving the
+          objective the counter keeps resetting, so the check self-activates
+          after the first N+1 iterations (Architecture §Cat 5e) with no special
+          casing. Stagnation is checked before time so a search that has truly
+          converged is labelled `converged` even if it also just crossed the
+          clock.
+
+        `stagnation_counter` counts consecutive iterations whose top-N total
+        objective was unchanged — the tracker's value changes iff a candidate was
+        admitted, so this is exactly "iterations since the last admission". This
+        bookkeeping (and the monotonic-clock reads) now runs every iteration
+        because it gates termination, not just the `ProgressEvent`; only the
+        event *construction* stays behind the callback check. FR29 still holds:
+        the clock reads feed `elapsed_s` / the ETA / the time-budget comparison
+        only — never the RNG, `_construct_one`, or the admission sequence. So a
+        fixed seed yields a byte-identical iteration *sequence*; only the *count*
+        is wall-clock-dependent, and solely when the soft time-budget binds.
         """
         if not self._nodes:
             return self._tracker.current_top()
         callback = self._progress_callback
-        start = time.monotonic() if callback is not None else 0.0
+        stagnation_iters = self._params.stagnation_iters
+        time_budget = self._params.time_budget
+        start = time.monotonic()
         last_objective = self._tracker.total_objective()
         stagnation_counter = 0
         for i in range(self._params.iter_budget):
             solution = self._construct_one()
             if solution.edges and self._route_slope_ok(solution):
                 self._tracker.consider(solution)
+            current_objective = self._tracker.total_objective()
+            if current_objective != last_objective:
+                stagnation_counter = 0
+                last_objective = current_objective
+            else:
+                stagnation_counter += 1
+            elapsed_s = time.monotonic() - start
             if callback is not None:
-                current_objective = self._tracker.total_objective()
-                if current_objective != last_objective:
-                    stagnation_counter = 0
-                    last_objective = current_objective
-                else:
-                    stagnation_counter += 1
                 iteration = i + 1
-                elapsed_s = time.monotonic() - start
                 callback(
                     ProgressEvent(
                         iteration=iteration,
@@ -208,6 +257,13 @@ class GraspSolver:
                         stagnation_counter=stagnation_counter,
                     )
                 )
+            if stagnation_iters > 0 and stagnation_counter >= stagnation_iters:
+                self.convergence_status = "converged"
+                return self._tracker.current_top()
+            if elapsed_s >= time_budget:
+                self.convergence_status = "budget-exhausted"
+                return self._tracker.current_top()
+        self.convergence_status = "budget-exhausted"
         return self._tracker.current_top()
 
     def _route_slope_ok(self, solution: Solution) -> bool:

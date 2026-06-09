@@ -25,7 +25,7 @@ import importlib.resources
 import math
 import pathlib
 from dataclasses import asdict
-from typing import Any, Literal
+from typing import Any
 
 import jinja2
 
@@ -33,6 +33,7 @@ from steeproute.cache import write_json_atomic, write_text_atomic
 from steeproute.models import (
     Area,
     ContractedGraph,
+    ConvergenceStatus,
     ProvenanceInfo,
     Route,
     SolverParams,
@@ -50,8 +51,6 @@ _LEAFLET_CSS_ASSET: str = f"leaflet-{LEAFLET_VERSION}.min.css"
 _CHARTJS_JS_ASSET: str = f"chart-{CHARTJS_VERSION}.min.js"
 
 _TEMPLATE_NAME: str = "route.html.j2"
-
-ConvergenceStatus = Literal["converged", "budget-exhausted", "interrupted"]
 
 
 def render(
