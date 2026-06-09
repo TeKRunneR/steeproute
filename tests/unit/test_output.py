@@ -57,6 +57,8 @@ _PROVENANCE = ProvenanceInfo(
     pipeline_content_hash="abc123def456",
 )
 _CONVERGENCE = "budget-exhausted"
+# Distinctive so the metadata-presence assertion can't match it by accident.
+_CONVERGENCE_ITERATION = 987
 # Centered on the `_base_graph` vertices (~45.1, 6.1) so the bbox brackets the route.
 _AREA = Area(center=(45.115, 6.115), radius_km=2.0)
 
@@ -81,6 +83,7 @@ _EXPECTED_METADATA_STRINGS = [
     "RGEALTI-5M-v2",  # dem_version
     "abc123def456",  # pipeline_content_hash
     "budget-exhausted",  # convergence_status
+    "987",  # convergence_iteration (Story 7.3)
     "1.9.4",  # leaflet asset version
     "4.4.0",  # chart.js asset version
 ]
@@ -154,6 +157,7 @@ def _render(
         _PARAMS,
         _PROVENANCE,
         _CONVERGENCE,
+        _CONVERGENCE_ITERATION,
         tmp_path,
     )
 

@@ -151,3 +151,14 @@ def run_query() -> Callable[..., Result]:
         return CliRunner().invoke(query_cli, args, catch_exceptions=False)
 
     return _invoke
+
+
+@pytest.fixture
+def fixture_query_target() -> tuple[tuple[float, float], float]:
+    """`(center, query_radius_km)` covering the seeded fixture cache.
+
+    Exposes the raw values (rather than a `CliRunner` helper) so the
+    real-subprocess interrupt test can build its own command line — see
+    `test_interrupt.py`, which needs an OS process it can signal.
+    """
+    return FIXTURE_CENTER, FIXTURE_QUERY_RADIUS_KM

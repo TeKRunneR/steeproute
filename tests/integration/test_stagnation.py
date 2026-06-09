@@ -98,6 +98,11 @@ def test_stagnation_terminates_well_before_iter_budget() -> None:
     # then 5 unchanged iterations → terminate at iteration 6.
     assert len(events) == 6
     assert events[-1].stagnation_counter == 5
+    # Convergence iteration (Story 7.3): the one and only admission lands on
+    # iteration 1, so that is where the search last improved — and it matches the
+    # `(i + 1) − stagnation_counter` identity evaluated at the final event.
+    assert solver.convergence_iteration == 1
+    assert solver.convergence_iteration == events[-1].iteration - events[-1].stagnation_counter
 
 
 def test_stagnation_iters_zero_disables_the_check() -> None:

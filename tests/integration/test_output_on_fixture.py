@@ -94,6 +94,7 @@ def test_render_real_fixture_writes_parseable_reports(
         _params(),
         _PROVENANCE,
         "converged",
+        1,  # convergence_iteration — not asserted here (covered in test_output.py)
         tmp_path,
     )
 

@@ -61,6 +61,7 @@ def render(
     params: SolverParams,
     provenance: ProvenanceInfo,
     convergence: ConvergenceStatus,
+    convergence_iteration: int,
     output_dir: pathlib.Path,
 ) -> None:
     """Write `route-<i>.{html,json}` for every route in `validated_set`.
@@ -83,12 +84,15 @@ def render(
         params: solver parameters, recorded verbatim in the metadata block.
         provenance: run provenance (version, commit, OSM/DEM/pipeline fingerprint).
         convergence: solver convergence status, recorded in the metadata block.
+        convergence_iteration: 1-based iteration at which the solver's top-N
+            objective last improved (`solver.convergence_iteration`), recorded in
+            the metadata block alongside `convergence`. `0` ⇒ no improvement landed.
         output_dir: destination directory (created if missing).
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     env = _jinja_env()
     template = env.get_template(_TEMPLATE_NAME)
-    metadata = _build_metadata(params, provenance, convergence)
+    metadata = _build_metadata(params, provenance, convergence, convergence_iteration)
     leaflet_css = _load_asset(_LEAFLET_CSS_ASSET)
     leaflet_js = _load_asset(_LEAFLET_JS_ASSET)
     chart_js = _load_asset(_CHARTJS_JS_ASSET)
@@ -170,6 +174,7 @@ def _build_metadata(
     params: SolverParams,
     provenance: ProvenanceInfo,
     convergence: ConvergenceStatus,
+    convergence_iteration: int,
 ) -> dict[str, Any]:
     """Assemble the metadata block shared verbatim by the HTML and JSON surfaces.
 
@@ -194,6 +199,7 @@ def _build_metadata(
             "pipeline_content_hash": provenance.pipeline_content_hash,
         },
         "convergence_status": convergence,
+        "convergence_iteration": convergence_iteration,
         "assets": {"leaflet": LEAFLET_VERSION, "chart_js": CHARTJS_VERSION},
     }
 

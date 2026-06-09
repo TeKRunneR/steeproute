@@ -190,6 +190,15 @@ class GraspSolver:
         # early return in `run()` — and set definitively at each termination
         # branch. `interrupted` is never set here; Story 7.3's CLI handler owns it.
         self.convergence_status: ConvergenceStatus = "budget-exhausted"
+        # 1-based iteration at which the top-N total objective last improved — the
+        # last admission that changed it (Story 7.3). Anytime-readable like
+        # `best_so_far`/`convergence_status`, so it holds the right value on every
+        # termination path, *including* a `KeyboardInterrupt` that unwinds `run()`
+        # and discards its locals. `0` means no improvement ever landed (empty
+        # graph, no admissible route, or interrupt before the first admission). It
+        # equals `(i + 1) − stagnation_counter` at any point, since the stagnation
+        # counter resets to 0 exactly when an improvement lands.
+        self.convergence_iteration: int = 0
 
     @property
     def best_so_far(self) -> list[Solution]:
@@ -241,6 +250,9 @@ class GraspSolver:
             if current_objective != last_objective:
                 stagnation_counter = 0
                 last_objective = current_objective
+                # Record where the last real improvement landed (Story 7.3). Held
+                # on `self` (not a local) so an interrupt mid-loop preserves it.
+                self.convergence_iteration = i + 1
             else:
                 stagnation_counter += 1
             elapsed_s = time.monotonic() - start

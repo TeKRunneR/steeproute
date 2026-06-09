@@ -63,7 +63,15 @@ from steeproute.cli._shared import (
     validate_solver_options,
     verbose_option,
 )
-from steeproute.models import Area, ProvenanceInfo, SolverParams, ValidatedRouteSet
+from steeproute.models import (
+    Area,
+    ContractedGraph,
+    ConvergenceStatus,
+    ProvenanceInfo,
+    Solution,
+    SolverParams,
+    ValidatedRouteSet,
+)
 from steeproute.pipeline import operationalize_graph
 from steeproute.pipeline.climbs import detect_climbs
 from steeproute.pipeline.graph import contract_climbs
@@ -237,13 +245,6 @@ def cli(
     # lose a route edge's geometry, and the rendered curve matches the box).
     routable_graph = filter_trails(operational_graph, untagged_trails, difficulty_cap)
 
-    climbs = detect_climbs(
-        routable_graph,
-        min_climb_slope=min_climb_slope,
-        min_climb_ground_length=min_climb_ground_length,
-    )
-    contracted = contract_climbs(routable_graph, climbs, l_connector=l_connector)
-
     # Progress UI (Story 7.1, FR13): install a throttled stdout renderer unless
     # `--quiet`. The throttle is a pure reporting side-effect — `seed` threads
     # straight into the RNG, so `--seed` produces byte-identical edge-sets (FR29)
@@ -252,28 +253,82 @@ def cli(
     progress_callback: ProgressCallback | None = (
         None if quiet else throttle(_render_progress, progress_interval)
     )
-    solver = GraspSolver(
-        contracted, params, np.random.default_rng(seed), progress_callback=progress_callback
-    )
-    solutions = solver.run()
+
+    def _validate_and_render(
+        route_set: list[Solution],
+        status: ConvergenceStatus,
+        contracted_graph: ContractedGraph,
+        convergence_iteration: int,
+    ) -> ValidatedRouteSet:
+        """Validate `route_set` and render every route (failed ones too — FR28).
+
+        Single-sources the validate → render pair shared by the normal and the
+        Ctrl-C paths so the interrupted output cannot drift from a normal run (one
+        9-argument `output.render` call shape, one place to change). The varying
+        bits (`route_set`, `status`, `contracted_graph`, `convergence_iteration`)
+        are passed in; the run-wide context is captured.
+        """
+        validated_set = validate(route_set, contracted_graph, params)
+        output.render(
+            validated_set,
+            operational_graph,
+            area,
+            contracted_graph,
+            params,
+            provenance,
+            status,
+            convergence_iteration,
+            output_dir,
+        )
+        return validated_set
+
+    # Interrupt handling (Story 7.3, FR14 / NFR3 / §Cat 5b): Ctrl-C anywhere in the
+    # detect → contract → solve region flushes the solver's best-so-far top-N to
+    # disk and exits 130. The solver is built lazily inside the try, and both it
+    # and `contracted` start `None`, so an interrupt during stages 8-9 (before the
+    # solver exists) still lands in the handler and is told apart from a partial
+    # solve. The interrupt is caught HERE rather than left to propagate: click's
+    # standalone mode would otherwise print "Aborted!" and exit 1, masking the
+    # dedicated interrupt code — so we render the partial set and signal 130 via
+    # `ctx.exit`, which `_invoke_command`'s `SystemExit` capture forwards verbatim.
+    contracted: ContractedGraph | None = None
+    solver: GraspSolver | None = None
+    try:
+        climbs = detect_climbs(
+            routable_graph,
+            min_climb_slope=min_climb_slope,
+            min_climb_ground_length=min_climb_ground_length,
+        )
+        contracted = contract_climbs(routable_graph, climbs, l_connector=l_connector)
+        solver = GraspSolver(
+            contracted, params, np.random.default_rng(seed), progress_callback=progress_callback
+        )
+        solutions = solver.run()
+    except KeyboardInterrupt:
+        ctx = click.get_current_context()
+        if solver is None or contracted is None or not solver.best_so_far:
+            # Interrupted before any route was admitted — nothing to render. Warn
+            # on stderr (§Cat 8) and exit with the dedicated interrupt code.
+            click.echo("interrupted before any solution found", err=True)
+            ctx.exit(130)
+        # Flush the partial best-so-far through the same validate → render path as a
+        # normal run, tagged `interrupted` (§Cat 5e) with the iteration the last
+        # improvement landed on. Set the status on the solver too, so a later reader
+        # of `solver.convergence_status` (e.g. Story 7.5's run summary) agrees with
+        # the rendered report. A single Ctrl-C writes the partial set before exiting
+        # (FR28); a rare second Ctrl-C during render can truncate the set, but the
+        # per-file atomic writes keep every emitted file and the cache valid (NFR3).
+        solver.convergence_status = "interrupted"
+        _validate_and_render(
+            solver.best_so_far, "interrupted", contracted, solver.convergence_iteration
+        )
+        ctx.exit(130)
+
     # §Cat 5e: the solver records which termination fired (`converged` on
-    # stagnation, `budget-exhausted` on iter/time budget). Story 7.3 will override
-    # this to `interrupted` in a KeyboardInterrupt handler.
-    convergence_status = solver.convergence_status
-
-    validated = validate(solutions, contracted, params)
-
-    # Render every route (failed ones too, with a banner — FR28) BEFORE computing
-    # the exit code, so disk state is identical regardless of pass/fail (§Cat 6c).
-    output.render(
-        validated,
-        operational_graph,
-        area,
-        contracted,
-        params,
-        provenance,
-        convergence_status,
-        output_dir,
+    # stagnation, `budget-exhausted` on iter/time budget; `interrupted` is set on
+    # the Ctrl-C path above).
+    validated = _validate_and_render(
+        solutions, solver.convergence_status, contracted, solver.convergence_iteration
     )
 
     # Exit-code coupling (§Cat 6c / FR28 / FR30): 1 if any route failed validation
