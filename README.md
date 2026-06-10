@@ -1,10 +1,72 @@
 # steeproute
 
-👉\[\[\[**This is the initial readme for your
-[simple-modern-uv](https://github.com/jlevy/simple-modern-uv) template.** Fill it in and
-delete this message!
-Below are general setup instructions that you may remove or keep and adapt for your
-project.\]\]\]
+steeproute finds steep loop routes for hiking and trail running. You give it a center
+point and a radius: `steeproute-setup` builds the local trail network from OpenStreetMap
+and an auto-downloaded elevation model, and `steeproute` searches that network with a
+GRASP optimizer for distinct loops that maximize sustained steepness, writing each as a
+self-contained HTML report with an interactive map and elevation profile.
+
+**Coverage:** trail data comes from OpenStreetMap (available for most of the world);
+elevation is downloaded from the IGN RGE ALTI service, which covers **France**. There is
+no option to supply a different elevation source yet, so in practice the tool works
+anywhere in France. It is a personal project.
+
+## Usage
+
+steeproute is a [uv](docs/installation.md) project. Clone it and sync dependencies:
+
+```sh
+git clone https://github.com/yfontana/steeproute && cd steeproute
+uv sync
+```
+
+It has two commands. **Setup** downloads and caches the trail network + elevation for an
+area; **query** searches a prepared area and writes reports. For example, for the
+Chamrousse area in the Belledonne massif:
+
+```sh
+# 1. Prepare the area (OSM trails + IGN elevation, cached on disk).
+uv run steeproute-setup --center 45.12,5.88 --radius 6.5
+
+# 2. Search it for up to N steep, distinct loops -> one HTML + JSON report per route.
+uv run steeproute --center 45.12,5.88 --radius 6.0 \
+    --difficulty-cap T4 --iter-budget 200000 --stagnation-iters 10000 \
+    --elevation-deadband 1 --j-max 0 --n 3 --seed 42 --output-dir results
+```
+
+Then open `results/route-1.html` in a browser. Keep the query radius a little smaller
+than the setup radius so the queried area sits fully inside the prepared one.
+
+### Key parameters
+
+| Flag | What it does | Suggested value |
+|---|---|---|
+| `--center` / `--radius` | area center `lat,lon` and radius in km | your area |
+| `--theta` | route-level average-slope floor every route must clear | `0.20` — this *is* the steepness bar; raise it for steeper routes, lower it to admit gentler ones |
+| `--difficulty-cap` | SAC hiking-scale ceiling for eligible trails | `T4` (the `T3` default filters out a lot of steep alpine terrain) |
+| `--iter-budget` / `--stagnation-iters` | GRASP search budget / stop after this many iterations with no improvement | `200000` / `10000` — GRASP needs a large budget to converge; it usually stops on stagnation well before the cap |
+| `--elevation-deadband` | drop up/down wiggles smaller than N metres when summing D+/D− | `1` (removes elevation-model noise from the climb totals) |
+| `--n` / `--j-max` | how many routes to return / max segment overlap allowed between them (`0` = fully disjoint) | `3` / `0` |
+| `--seed` | fixes GRASP's randomness so a run is reproducible | any integer |
+
+See `uv run steeproute --help` and `uv run steeproute-setup --help` for the full set.
+
+## Gallery
+
+Three Grenoble-area examples, each one `steeproute` generation using the parameters
+above. The thumbnails are the **top route (route 1)** of each generation — every region
+returned three routes; the full set is under
+[`docs/examples/`](docs/examples/), and [docs/examples/README.md](docs/examples/README.md)
+lists the exact commands to reproduce them.
+
+| Region | Map (route 1) | Elevation profile |
+|---|---|---|
+| **Chamrousse** — Belledonne massif<br>6 km radius · top of 3 routes · ~7 s query<br>route 1: 10.7 km, +1018 m, 26% avg slope<br>[Open report ▸](docs/examples/chamrousse/route-1.html) | [![Chamrousse map](docs/examples/chamrousse/route-1-map.png)](docs/examples/chamrousse/route-1.html) | ![Chamrousse elevation profile](docs/examples/chamrousse/route-1-profile.png) |
+| **Saint-Nizier-du-Moucherotte** — Vercors edge above Grenoble<br>6.5 km radius · top of 3 routes · ~32 s query<br>route 1: 7.5 km, +1042 m, 24% avg slope<br>[Open report ▸](docs/examples/saint-nizier/route-1.html) | [![Saint-Nizier map](docs/examples/saint-nizier/route-1-map.png)](docs/examples/saint-nizier/route-1.html) | ![Saint-Nizier elevation profile](docs/examples/saint-nizier/route-1-profile.png) |
+| **Col de Porte / Charmant Som** — Chartreuse<br>6 km radius · top of 3 routes · ~7 s query<br>route 1: 11.0 km, +1390 m, 22% avg slope<br>[Open report ▸](docs/examples/col-de-porte/route-1.html) | [![Col de Porte map](docs/examples/col-de-porte/route-1-map.png)](docs/examples/col-de-porte/route-1.html) | ![Col de Porte elevation profile](docs/examples/col-de-porte/route-1-profile.png) |
+
+> The reports are self-contained HTML — GitHub shows the source, so download and open
+> them locally (or clone the repo) for the interactive map and hover-linked profile.
 
 * * *
 

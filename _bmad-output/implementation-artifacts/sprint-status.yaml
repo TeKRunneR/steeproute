@@ -28,7 +28,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-06-10
+last_updated: 2026-06-11
 
 project: bmad-test
 project_key: NOKEY
@@ -110,6 +110,6 @@ development_status:
   epic-8: in-progress        # (was epic-7) Release Polish
   8-1-regression-golden-test-harness-and-update-regression-workflow: done
   8-2-pin-2-3-grenoble-regression-fixtures-with-zero-tolerance-ci-gate: review
-  8-3-readme-gallery-with-3-5-pre-computed-example-reports: backlog
+  8-3-readme-gallery-with-3-5-pre-computed-example-reports: done
   8-4-readme-known-limitations-quickstart-sections: backlog
   8-5-final-ci-threshold-tightening-and-linux-best-effort-job: backlog
