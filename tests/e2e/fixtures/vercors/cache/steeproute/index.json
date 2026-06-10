@@ -1,0 +1,16 @@
+{
+  "entries": [
+    {
+      "area": {
+        "center": [
+          45.148755,
+          5.639232
+        ],
+        "mode": "center_radius",
+        "radius_km": 2.0
+      },
+      "cache_key_hash": "88bd11bc7d33b4ad"
+    }
+  ],
+  "schema_version": 1
+}

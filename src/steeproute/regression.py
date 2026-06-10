@@ -89,6 +89,28 @@ class Fixture:
     min_routes: int = 1
 
 
+# The pinned param set shared by every fixture. Pinned explicitly (never inherited
+# from CLI defaults) so a default re-tuning or a new param can't silently move a
+# golden. `--time-budget` is pinned high so the wall-clock terminator never binds —
+# termination is iteration-based (stagnation/iter-budget) and therefore deterministic
+# (FR29).
+_PINNED_PARAMS: dict[str, str] = {
+    "--theta": "0.20",
+    "--min-climb-slope": "0.20",
+    "--difficulty-cap": "T3",
+    "--l-connector": "200.0",
+    "--min-climb-ground-length": "300.0",
+    "--elevation-smoothing": "50.0",
+    "--elevation-deadband": "0.0",
+    "--j-max": "0.30",
+    "--n": "5",
+    "--untagged-trails": "include",
+    "--iter-budget": "2000",
+    "--stagnation-iters": "100",
+    "--time-budget": "100000",
+}
+
+
 FIXTURES: tuple[Fixture, ...] = (
     Fixture(
         name="grenoble_small",
@@ -96,23 +118,35 @@ FIXTURES: tuple[Fixture, ...] = (
         center=(45.260, 5.788),
         radius_km=1.5,
         seed=42,
-        pinned_params={
-            "--theta": "0.20",
-            "--min-climb-slope": "0.20",
-            "--difficulty-cap": "T3",
-            "--l-connector": "200.0",
-            "--min-climb-ground-length": "300.0",
-            "--elevation-smoothing": "50.0",
-            "--elevation-deadband": "0.0",
-            "--j-max": "0.30",
-            "--n": "5",
-            "--untagged-trails": "include",
-            "--iter-budget": "2000",
-            "--stagnation-iters": "100",
-            # Pinned high so the wall-clock terminator never binds — termination is
-            # iteration-based (stagnation/iter-budget) and therefore deterministic.
-            "--time-budget": "100000",
-        },
+        pinned_params=dict(_PINNED_PARAMS),
+    ),
+    # The three Story 8.2 cutouts: distinct Grenoble-massif terrain (Belledonne,
+    # Vercors, Chartreuse). Each cache was prepared by real `steeproute-setup` at a
+    # 2.0 km seed radius; the regression query runs at 1.5 km so it is strictly
+    # contained in the prepared bbox (FR24 — `check_coverage` uses strict containment).
+    Fixture(
+        name="belledonne",
+        cache_dir=_FIXTURES_ROOT / "belledonne" / "cache",
+        center=(45.186753, 5.961482),
+        radius_km=1.5,
+        seed=42,
+        pinned_params=dict(_PINNED_PARAMS),
+    ),
+    Fixture(
+        name="vercors",
+        cache_dir=_FIXTURES_ROOT / "vercors" / "cache",
+        center=(45.148755, 5.639232),
+        radius_km=1.5,
+        seed=42,
+        pinned_params=dict(_PINNED_PARAMS),
+    ),
+    Fixture(
+        name="chartreuse",
+        cache_dir=_FIXTURES_ROOT / "chartreuse" / "cache",
+        center=(45.374716, 5.772793),
+        radius_km=1.5,
+        seed=42,
+        pinned_params=dict(_PINNED_PARAMS),
     ),
 )
 
