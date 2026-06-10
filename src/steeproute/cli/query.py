@@ -16,15 +16,16 @@ Story 3.11 wires the full Journey-1 happy path on top of that: climb detection
 set-level pairwise distinctness violation exists. Outputs are always written to
 disk *before* the exit code is computed, so disk state is correct regardless of
 exit code (FR28). Story 7.1 wires the progress UI: a throttled `ProgressEvent`
-renderer is installed on the solver (suppressed by `--quiet`). Interrupt
-handling (Ctrl-C → best-so-far flush → exit 130) and the end-of-run summary land
-later in Epic 7 (Stories 7.3 / 7.5).
+renderer is installed on the solver (suppressed by `--quiet`). Story 7.3 adds
+Ctrl-C interrupt handling (best-so-far flush → exit 130); Story 7.5 prints the
+end-of-run summary to stdout (FR22).
 """
 
 from __future__ import annotations
 
 import datetime
 import pathlib
+import time
 from typing import NoReturn
 
 import click
@@ -143,6 +144,11 @@ def cli(
 ) -> int:
     configure_cli_logging(verbose=verbose)
 
+    # Whole-invocation wall-clock start (Story 7.5, FR22): spans the coverage
+    # check, stages 8-9, the solve, validation, and render — the elapsed reported
+    # in the end-of-run summary. `perf_counter` (monotonic) mirrors `cli/setup.py`.
+    start = time.perf_counter()
+
     # FR2 sanity: reject queries whose disk-area exceeds --area-cap before we
     # walk the cache. A typo like `--radius 5000` should fail-fast at the CLI
     # boundary, not after a successful cache walk.
@@ -188,9 +194,9 @@ def cli(
         now=datetime.datetime.now(datetime.UTC),
     )
 
-    # Cache-hit cue on stdout (kept from Story 2.10 — the full run summary lands
-    # in Epic 4 Story 4.5). Single space between tokens for downstream tooling
-    # that splits on whitespace.
+    # Cache-hit cue on stdout (kept from Story 2.10; the end-of-run summary that
+    # Story 7.5 adds is a separate block). Single space between tokens for
+    # downstream tooling that splits on whitespace.
     print(f"steeproute: cache-hit cache_key_hash: {prepared.manifest.cache_key_hash}")
 
     # --- Journey 1 happy path: stages 8-9 → GRASP → validate → render --------
@@ -341,13 +347,22 @@ def cli(
         solutions, solver.convergence_status, contracted, solver.convergence_iteration
     )
 
-    # Graceful degradation (FR12): surface on stdout the same explanation that went
-    # into each report's metadata (computed once, in `_validate_and_render`). This is
-    # the interim home for the message — Story 7.5's run summary will absorb it into
-    # its `degradation:` field. Degradation is a normal outcome (§Cat 6c), so it
-    # never changes the exit code below.
-    if degradation is not None:
-        print(degradation)
+    # End-of-run summary on stdout (Story 7.5, FR22): printed after render on the
+    # normal path, before the exit-code call, so it always appears regardless of the
+    # validation outcome. Always stdout — `--quiet` only gates intermediate progress
+    # (§Cat 8). It absorbs the graceful-degradation explanation (FR12) into its
+    # `degradation:` field (the same string embedded in each report, computed once in
+    # `_validate_and_render`); degradation is a normal outcome (§Cat 6c) and never
+    # changes the exit code below.
+    print(
+        _run_summary(
+            validated,
+            params,
+            solver.convergence_status,
+            time.perf_counter() - start,
+            degradation,
+        )
+    )
 
     # Exit-code coupling (§Cat 6c / FR28 / FR30): 1 if any route failed validation
     # OR any set-level pairwise violation exists; 0 otherwise. `ctx.exit(code)`
@@ -413,6 +428,44 @@ def _degradation_message(validated: ValidatedRouteSet, params: SolverParams) -> 
         f"Only {returned} distinct routes satisfy J_max <= {params.j_max:.2f}. "
         f"Returning {returned} routes; additional candidates would exceed the overlap threshold."
     )
+
+
+def _run_summary(
+    validated: ValidatedRouteSet,
+    params: SolverParams,
+    status: ConvergenceStatus,
+    wall_clock_s: float,
+    degradation: str | None,
+) -> str:
+    """Build the end-of-run summary block (Story 7.5, FR22) for stdout.
+
+    A pure formatter so the block is testable without capturing stdout; the caller
+    does the single `print`. Labels are stable (tests regex-match them) and the
+    `--- Run summary ---` delimiter lets downstream scripts split stdout. Plain
+    ASCII, the same §Cat 8 stdout discipline as the progress and cache-hit lines.
+    `routes_returned`/`validation_failures` read the same validated set the exit
+    code does (§Cat 6c). The `degradation:` line is included only for a degraded
+    set (`routes_returned < N`); its value is the explanation already embedded in
+    each report, passed in — never recomputed. `seed=none` marks an unseeded run.
+    """
+    returned = len(validated.routes)
+    failures = sum(1 for r in validated.routes if not r.validation.passed)
+    seed = "none" if params.seed is None else params.seed
+    lines = [
+        "--- Run summary ---",
+        (
+            f"parameters: theta={params.theta} j_max={params.j_max} n={params.n} "
+            f"seed={seed} iter_budget={params.iter_budget} "
+            f"time_budget={params.time_budget} stagnation_iters={params.stagnation_iters}"
+        ),
+        f"routes_returned: {returned}/{params.n}",
+        f"validation_failures: {failures}",
+        f"convergence_status: {status}",
+    ]
+    if degradation is not None:
+        lines.append(f"degradation: {degradation}")
+    lines.append(f"wall_clock_total: {wall_clock_s:.2f}s")
+    return "\n".join(lines)
 
 
 def _exit_code_for(validated: ValidatedRouteSet) -> int:
