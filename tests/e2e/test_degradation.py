@@ -1,0 +1,101 @@
+"""Graceful degradation for sparse areas end-to-end (Story 7.4 / FR12).
+
+When fewer than N distinct routes satisfy the current `--j-max`, `steeproute`
+returns the feasible subset with a clear explanation rather than silently
+loosening distinctness (Architecture §"What's not an exception"). Degradation is
+a normal outcome: exit code stays 0.
+
+Both tests run in-process via `CliRunner` (the shared `run_query` fixture) — no
+OS process is needed, unlike the interrupt e2e test. The degradation regime is
+induced with `--theta 0.35`: at that route-level slope floor the Grenoble
+fixture's distinctness constraint becomes binding, so the default `--j-max 0.30`
+returns fewer than the default `--n 5`, and relaxing to `--j-max 0.50` admits
+more — exercising Journey 2's "tighten, review, relax" tuning loop. Counts are
+asserted as inequalities (not exact values) so the tests track the binding
+behavior, not a single GRASP tipping-point number.
+"""
+
+from __future__ import annotations
+
+import html
+import json
+import pathlib
+import re
+from collections.abc import Callable
+
+from click.testing import Result
+
+# `--theta 0.35` makes distinctness (not feasibility) the binding constraint on
+# the committed fixture: j-max 0.30 returns < N=5, j-max 0.50 returns more.
+_DEGRADE_THETA = ["--theta", "0.35"]
+
+# Mirrors the message built in `cli/query.py::_degradation_message` (plain ASCII,
+# so it survives a redirected stdout on any platform without stream reconfiguring).
+_DEGRADATION_PATTERN = re.compile(
+    r"Only (\d+) distinct routes satisfy J_max <= 0\.30\. "
+    r"Returning \1 routes; additional candidates would exceed the overlap threshold\."
+)
+
+
+def test_degradation_returns_fewer_than_n_with_explanation(
+    seeded_cache: pathlib.Path,
+    run_query: Callable[..., Result],
+    tmp_path: pathlib.Path,
+) -> None:
+    output_dir = tmp_path / "reports"
+    result = run_query(seeded_cache, output_dir, seed=42, extra_args=_DEGRADE_THETA)
+
+    # Graceful degradation is a normal outcome, not an error (AC #5).
+    assert result.exit_code == 0, result.output
+
+    html_files = sorted(output_dir.glob("route-*.html"))
+    returned = len(html_files)
+    assert 0 < returned < 5, f"expected a degraded set (<N=5), got {returned}"
+
+    # The explanation appears on stdout (AC #3), naming the observed count and the
+    # J_max in force, with both counts equal (the `\1` backref in the pattern).
+    match = _DEGRADATION_PATTERN.search(result.output)
+    assert match is not None, f"degradation line not found in stdout:\n{result.output}"
+    assert int(match.group(1)) == returned, "message count must match emitted report count"
+
+    # The explanation also rides in every report's metadata so a reader of a
+    # single report sees it was part of a degraded set (AC #4).
+    # HTML autoescapes the `<` in `<=` to `&lt;=`; the JSON sidecar is raw.
+    escaped = html.escape(match.group(0))
+    for i in range(1, returned + 1):
+        html_text = (output_dir / f"route-{i}.html").read_text(encoding="utf-8")
+        assert "<th>degradation</th>" in html_text
+        assert escaped in html_text
+        payload = json.loads((output_dir / f"route-{i}.json").read_text(encoding="utf-8"))
+        assert payload["metadata"]["degradation"] == match.group(0)
+
+
+def test_relaxed_jmax_produces_more_routes(
+    seeded_cache: pathlib.Path,
+    run_query: Callable[..., Result],
+    tmp_path: pathlib.Path,
+) -> None:
+    """Re-querying the same cache with a looser --j-max admits more routes (Journey 2)."""
+    tight_dir = tmp_path / "tight"
+    relaxed_dir = tmp_path / "relaxed"
+
+    tight = run_query(seeded_cache, tight_dir, seed=42, extra_args=_DEGRADE_THETA)
+    relaxed = run_query(
+        seeded_cache, relaxed_dir, seed=42, extra_args=[*_DEGRADE_THETA, "--j-max", "0.50"]
+    )
+
+    assert tight.exit_code == 0, tight.output
+    assert relaxed.exit_code == 0, relaxed.output
+
+    tight_n = len(list(tight_dir.glob("route-*.html")))
+    relaxed_n = len(list(relaxed_dir.glob("route-*.html")))
+    assert relaxed_n > tight_n, (
+        f"relaxing J_max should admit more routes: tight={tight_n} relaxed={relaxed_n}"
+    )
+
+    # The re-run hit the prepared cache (no re-preprocessing) — Journey 2's fast
+    # tuning loop. The cache-hit cue is printed on every successful query.
+    assert "cache-hit cache_key_hash:" in relaxed.output
+
+    # Relaxed enough to satisfy distinctness: no degradation line this time.
+    assert "would exceed the overlap threshold" not in relaxed.output

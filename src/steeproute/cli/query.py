@@ -259,16 +259,25 @@ def cli(
         status: ConvergenceStatus,
         contracted_graph: ContractedGraph,
         convergence_iteration: int,
-    ) -> ValidatedRouteSet:
-        """Validate `route_set` and render every route (failed ones too — FR28).
+    ) -> tuple[ValidatedRouteSet, str | None]:
+        """Validate `route_set`, render every route (failed ones too — FR28), return both.
 
         Single-sources the validate → render pair shared by the normal and the
         Ctrl-C paths so the interrupted output cannot drift from a normal run (one
         9-argument `output.render` call shape, one place to change). The varying
         bits (`route_set`, `status`, `contracted_graph`, `convergence_iteration`)
         are passed in; the run-wide context is captured.
+
+        Returns the validated set plus the graceful-degradation message (FR12) that
+        was embedded in the reports, or `None` — so the caller's stdout print uses
+        the exact same string, computed once. An interrupted partial set is
+        explained by `convergence_status` instead, so the message is suppressed
+        there (a short run isn't a sparse area).
         """
         validated_set = validate(route_set, contracted_graph, params)
+        degradation = (
+            None if status == "interrupted" else _degradation_message(validated_set, params)
+        )
         output.render(
             validated_set,
             operational_graph,
@@ -279,8 +288,9 @@ def cli(
             status,
             convergence_iteration,
             output_dir,
+            degradation=degradation,
         )
-        return validated_set
+        return validated_set, degradation
 
     # Interrupt handling (Story 7.3, FR14 / NFR3 / §Cat 5b): Ctrl-C anywhere in the
     # detect → contract → solve region flushes the solver's best-so-far top-N to
@@ -327,9 +337,17 @@ def cli(
     # §Cat 5e: the solver records which termination fired (`converged` on
     # stagnation, `budget-exhausted` on iter/time budget; `interrupted` is set on
     # the Ctrl-C path above).
-    validated = _validate_and_render(
+    validated, degradation = _validate_and_render(
         solutions, solver.convergence_status, contracted, solver.convergence_iteration
     )
+
+    # Graceful degradation (FR12): surface on stdout the same explanation that went
+    # into each report's metadata (computed once, in `_validate_and_render`). This is
+    # the interim home for the message — Story 7.5's run summary will absorb it into
+    # its `degradation:` field. Degradation is a normal outcome (§Cat 6c), so it
+    # never changes the exit code below.
+    if degradation is not None:
+        print(degradation)
 
     # Exit-code coupling (§Cat 6c / FR28 / FR30): 1 if any route failed validation
     # OR any set-level pairwise violation exists; 0 otherwise. `ctx.exit(code)`
@@ -375,6 +393,25 @@ def _build_provenance(manifest: Manifest) -> ProvenanceInfo:
         osm_extract_date=manifest.osm_extract_date,
         dem_version=manifest.dem_version,
         pipeline_content_hash=manifest.pipeline_content_hash,
+    )
+
+
+def _degradation_message(validated: ValidatedRouteSet, params: SolverParams) -> str | None:
+    """Graceful-degradation explanation (FR12), or `None` for a full N-route result.
+
+    When the solver returned fewer than N distinct routes, the area genuinely
+    can't satisfy the distinctness constraint under the current `--j-max` — so we
+    say so rather than silently loosening it (Architecture §"What's not an
+    exception"). The count is `len(validated.routes)`, the same set the exit code
+    reads (§Cat 6c): passed and failed routes count alike. `len == 0` (empty area)
+    is just the extreme of the same path — no special-casing.
+    """
+    returned = len(validated.routes)
+    if returned >= params.n:
+        return None
+    return (
+        f"Only {returned} distinct routes satisfy J_max <= {params.j_max:.2f}. "
+        f"Returning {returned} routes; additional candidates would exceed the overlap threshold."
     )
 
 

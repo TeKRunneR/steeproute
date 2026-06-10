@@ -63,6 +63,7 @@ def render(
     convergence: ConvergenceStatus,
     convergence_iteration: int,
     output_dir: pathlib.Path,
+    degradation: str | None = None,
 ) -> None:
     """Write `route-<i>.{html,json}` for every route in `validated_set`.
 
@@ -88,11 +89,15 @@ def render(
             objective last improved (`solver.convergence_iteration`), recorded in
             the metadata block alongside `convergence`. `0` ⇒ no improvement landed.
         output_dir: destination directory (created if missing).
+        degradation: graceful-degradation explanation (FR12) when the run returned
+            fewer than N distinct routes, else `None`. Recorded in the metadata
+            block so a reader of a single report sees it was part of a degraded
+            set; the template renders the row only when the value is set.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     env = _jinja_env()
     template = env.get_template(_TEMPLATE_NAME)
-    metadata = _build_metadata(params, provenance, convergence, convergence_iteration)
+    metadata = _build_metadata(params, provenance, convergence, convergence_iteration, degradation)
     leaflet_css = _load_asset(_LEAFLET_CSS_ASSET)
     leaflet_js = _load_asset(_LEAFLET_JS_ASSET)
     chart_js = _load_asset(_CHARTJS_JS_ASSET)
@@ -175,6 +180,7 @@ def _build_metadata(
     provenance: ProvenanceInfo,
     convergence: ConvergenceStatus,
     convergence_iteration: int,
+    degradation: str | None,
 ) -> dict[str, Any]:
     """Assemble the metadata block shared verbatim by the HTML and JSON surfaces.
 
@@ -200,6 +206,7 @@ def _build_metadata(
         },
         "convergence_status": convergence,
         "convergence_iteration": convergence_iteration,
+        "degradation": degradation,
         "assets": {"leaflet": LEAFLET_VERSION, "chart_js": CHARTJS_VERSION},
     }
 

@@ -10,6 +10,7 @@ the real Grenoble fixture (that runs in `tests/integration/test_output_on_fixtur
 
 from __future__ import annotations
 
+import html
 import json
 import pathlib
 import re
@@ -148,6 +149,8 @@ def _render(
     tmp_path: pathlib.Path,
     routes: list[Route],
     set_violations: list[PairwiseViolation] | None = None,
+    *,
+    degradation: str | None = None,
 ) -> None:
     output.render(
         ValidatedRouteSet(routes=routes, set_violations=set_violations or []),
@@ -159,6 +162,7 @@ def _render(
         _CONVERGENCE,
         _CONVERGENCE_ITERATION,
         tmp_path,
+        degradation=degradation,
     )
 
 
@@ -175,6 +179,30 @@ def test_metadata_fields_present_in_both_html_and_json(tmp_path: pathlib.Path) -
     for needle in _EXPECTED_METADATA_STRINGS:
         assert needle in body, f"{needle!r} missing from rendered HTML metadata"
         assert needle in json_text, f"{needle!r} missing from JSON"
+
+
+def test_degradation_message_renders_in_both_html_and_json_when_set(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The FR12 degradation explanation appears in both surfaces when present (AC #4)."""
+    msg = "Only 2 distinct routes satisfy J_max <= 0.27. Returning 2 routes; additional candidates would exceed the overlap threshold."
+    _render(tmp_path, [_route()], degradation=msg)
+    body = _html_body(tmp_path / "route-1.html")  # asset blobs stripped
+    json_text = (tmp_path / "route-1.json").read_text(encoding="utf-8")
+    # HTML autoescapes the `<` in `<=` to `&lt;=` (renders correctly in a browser);
+    # the JSON sidecar carries the raw string.
+    assert html.escape(msg) in body, "degradation explanation missing from rendered HTML"
+    payload = json.loads(json_text)
+    assert payload["metadata"]["degradation"] == msg
+
+
+def test_no_degradation_row_when_full_result(tmp_path: pathlib.Path) -> None:
+    """A non-degraded run carries no degradation row in HTML; JSON value is null (AC #4)."""
+    _render(tmp_path, [_route()])  # degradation defaults to None
+    body = _html_body(tmp_path / "route-1.html")
+    assert "<th>degradation</th>" not in body
+    payload = json.loads((tmp_path / "route-1.json").read_text(encoding="utf-8"))
+    assert payload["metadata"]["degradation"] is None
 
 
 def test_json_sidecar_structure(tmp_path: pathlib.Path) -> None:

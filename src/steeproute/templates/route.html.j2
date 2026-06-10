@@ -72,6 +72,9 @@
 <table class="meta">
   <tr><th>convergence</th><td>{{ metadata.convergence_status }}</td></tr>
   <tr><th>convergence_iteration</th><td>{{ metadata.convergence_iteration }}</td></tr>
+  {% if metadata.degradation %}
+  <tr><th>degradation</th><td>{{ metadata.degradation }}</td></tr>
+  {% endif %}
   <tr><th>validation</th><td>{{ "passed" if validation.passed else "FAILED" }}</td></tr>
   {% for k, v in metadata.params.items() %}
   <tr><th>{{ k }}</th><td>{{ v }}</td></tr>
