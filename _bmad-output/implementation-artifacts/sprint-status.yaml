@@ -107,8 +107,8 @@ development_status:
   7-5-run-summary-on-stdout: done
   epic-7-retrospective: optional
 
-  epic-8: backlog        # (was epic-7) Release Polish
-  8-1-regression-golden-test-harness-and-update-regression-workflow: backlog
+  epic-8: in-progress        # (was epic-7) Release Polish
+  8-1-regression-golden-test-harness-and-update-regression-workflow: done
   8-2-pin-2-3-grenoble-regression-fixtures-with-zero-tolerance-ci-gate: backlog
   8-3-readme-gallery-with-3-5-pre-computed-example-reports: backlog
   8-4-readme-known-limitations-quickstart-sections: backlog

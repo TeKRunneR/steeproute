@@ -90,6 +90,18 @@ _MANIFEST_SCHEMA_VERSION: int = 1
 _INDEX_SCHEMA_VERSION: int = 1
 
 
+def sha256_canonical(obj: object) -> str:
+    """SHA256 hex digest of `obj` serialized as canonical JSON (sorted keys, tight separators).
+
+    Single source of truth for the codebase's content-hashing scheme:
+    `json.dumps(..., sort_keys=True, separators=(",", ":"))` then SHA256. Shared by
+    `compute_cache_key` (which truncates the result) and the regression-golden harness
+    (`regression.py`) so the two can never disagree on what "canonical JSON hash" means.
+    """
+    blob = json.dumps(obj, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
 def compute_cache_key(
     area: Area,
     untagged_policy: str,
@@ -119,9 +131,7 @@ def compute_cache_key(
         "dem_version": dem_version,
         "pipeline_content_hash": pipeline_content_hash,
     }
-    blob = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
-    digest = hashlib.sha256(blob.encode("utf-8")).hexdigest()
-    return digest[:_CACHE_KEY_HEX_LEN]
+    return sha256_canonical(canonical)[:_CACHE_KEY_HEX_LEN]
 
 
 def _canonicalize_area(area: Area) -> dict[str, object]:

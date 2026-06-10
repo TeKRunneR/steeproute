@@ -85,6 +85,9 @@ dev = [
 # Add script entry points here:
 steeproute = "steeproute.cli.query:main"
 steeproute-setup = "steeproute.cli.setup:main"
+# Dev-only: regenerates pinned-regression goldens (Story 8.1, Architecture §Cat 11d).
+# Resolves fixtures/goldens against the source tree — run via `uv run` from the repo.
+update-regression = "steeproute.regression:main"
 
 
 # ---- Build system ----

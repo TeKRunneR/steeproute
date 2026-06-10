@@ -12,6 +12,13 @@ attic/
 # never commit).
 cache/
 
+# Exception: the pinned-regression fixture caches ARE committed (Story 8.1/8.2).
+# Each is a real queryable cache root the regression harness + `uv run
+# update-regression` run against (`tests/e2e/test_pinned_regressions.py`). The
+# directory is re-included before its contents so the negation overrides `cache/`.
+!tests/e2e/fixtures/**/cache/
+!tests/e2e/fixtures/**/cache/**
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
