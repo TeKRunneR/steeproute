@@ -11,7 +11,25 @@ elevation is downloaded from the IGN RGE ALTI service, which covers **France**. 
 no option to supply a different elevation source yet, so in practice the tool works
 anywhere in France. It is a personal project.
 
-## Usage
+## Known Limitations
+
+- **Phantom steepness near cliffs (data error).** Elevation is sampled from a 5 m DEM
+  along OSM trail polylines. Where a trail's mapped line drifts toward a cliff edge, the
+  sampled profile can pick up vertical relief that isn't on the actual tread, inflating
+  the reported slope. Treat cliff-proximate routes as *ideas to verify* against a
+  topographic map, not as ground truth.
+- **GRASP finds "a good route," not "*the* route" (solver error).** The optimizer is a
+  randomized heuristic (GRASP), not an exhaustive solver. CI pins a GRASP-vs-exhaustive
+  ratio on a tiny controlled instance as a *regression* signal — it does **not** generalize
+  to a claim of optimality on real-scale queries. A run returns strong loops it found, not
+  a proof that none better exist.
+- **Memory.** Runs comfortably on a commodity 16 GB laptop — the gallery regions peaked
+  around 0.8 GB of working set per query. Memory pressure scales with prepared-area size,
+  not search effort.
+- **Platform.** Developed and tested on Windows. Linux is expected to work but is not
+  actively tested; macOS is not a v1 commitment.
+
+## Quickstart
 
 steeproute is a [uv](docs/installation.md) project. Clone it and sync dependencies:
 

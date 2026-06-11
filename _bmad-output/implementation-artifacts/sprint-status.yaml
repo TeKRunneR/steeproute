@@ -111,5 +111,5 @@ development_status:
   8-1-regression-golden-test-harness-and-update-regression-workflow: done
   8-2-pin-2-3-grenoble-regression-fixtures-with-zero-tolerance-ci-gate: review
   8-3-readme-gallery-with-3-5-pre-computed-example-reports: done
-  8-4-readme-known-limitations-quickstart-sections: backlog
+  8-4-readme-known-limitations-quickstart-sections: done
   8-5-final-ci-threshold-tightening-and-linux-best-effort-job: backlog
