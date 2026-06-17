@@ -25,6 +25,7 @@ opportunistic `rebuild_index` path that closes Story 2.7 D1.
 
 from __future__ import annotations
 
+import dataclasses
 import pathlib
 
 import networkx as nx
@@ -34,6 +35,8 @@ from steeproute import cache as cache_mod
 from steeproute.cache import (
     Manifest,
     check_coverage,
+    compute_cache_key,
+    entry_dir_for,
     write_entry,
 )
 from steeproute.errors import CacheNotFoundError
@@ -294,6 +297,100 @@ def test_check_coverage_partial_coverage_raises_with_nearest_area_message(
     # latitude-bearing message).
     assert "center 45,6" in msg
     assert "radius 2 km" in msg
+
+
+# --- re-prepare after a pipeline change: stale entry must not survive --------
+
+
+def _write_marked_entry(
+    cache_root: pathlib.Path,
+    *,
+    area: Area,
+    pipeline_content_hash: str,
+    cache_key_hash: str,
+    marker: str,
+) -> None:
+    """Write a real entry whose graph carries a `which`-marker so the served graph is identifiable."""
+    graph = nx.MultiDiGraph()  # pyright: ignore[reportMissingTypeArgument]
+    graph.graph["which"] = marker
+    manifest = Manifest(
+        area=area,
+        untagged_policy="include",
+        dem_version="ign_rge_alti_5m_2024-12",
+        pipeline_content_hash=pipeline_content_hash,
+        osm_extract_date="2026-05-20T12:00:00Z",
+        cache_key_hash=cache_key_hash,
+        steeproute_version="0.1.0",
+        steeproute_commit="abc1234",
+        created_at="2026-05-20T12:00:00Z",
+    )
+    write_entry(cache_root, manifest, graph)  # pyright: ignore[reportArgumentType]
+
+
+def test_reprepare_after_pipeline_change_evicts_stale_entry_and_serves_fresh(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Regression: re-preparing an area after a pipeline-code change must not leave a
+    stale entry the coverage tiebreak can silently serve.
+
+    The cache key folds `pipeline_content_hash`, so a pipeline change re-prepares the
+    SAME area under a new key. Pre-fix the old entry stayed on disk forever and, having
+    an identical area (hence identical radius), tied with the new one in
+    `_select_smallest_containing` — broken only by lexicographic `cache_key_hash`, a
+    coin flip that could return the superseded graph with stale provenance. `write_entry`
+    now garbage-collects entries it supersedes, so the old one is gone and the tiebreak
+    is unreachable. This area's keys order old < new (the worst case: pre-fix the stale
+    entry would have *won* the tiebreak).
+    """
+    area = Area(center=(45.0, 6.0), radius_km=10.0)
+    old_pipe, new_pipe = "0" * 64, "f" * 64
+    key_old = compute_cache_key(area, "include", "ign_rge_alti_5m_2024-12", old_pipe)
+    key_new = compute_cache_key(area, "include", "ign_rge_alti_5m_2024-12", new_pipe)
+
+    _write_marked_entry(
+        tmp_path, area=area, pipeline_content_hash=old_pipe, cache_key_hash=key_old, marker="OLD"
+    )
+    _write_marked_entry(
+        tmp_path, area=area, pipeline_content_hash=new_pipe, cache_key_hash=key_new, marker="NEW"
+    )
+
+    # The superseded OLD entry is evicted; only the freshly-prepared one survives.
+    assert not entry_dir_for(tmp_path, key_old).exists()
+    assert entry_dir_for(tmp_path, key_new).is_dir()
+
+    # A query for the area serves the fresh graph and reports fresh provenance.
+    result = check_coverage(tmp_path, Area(center=(45.0, 6.0), radius_km=2.0))
+    assert result.manifest.cache_key_hash == key_new
+    assert result.manifest.pipeline_content_hash == new_pipe
+    assert result.graph.graph["which"] == "NEW"
+
+
+def test_write_entry_keeps_sibling_with_different_untagged_policy(
+    tmp_path: pathlib.Path,
+) -> None:
+    """GC is scoped to `(area, untagged_policy, dem_version)`: a same-area entry built
+    under a different `--untagged-trails` policy is a legitimately distinct graph and
+    must not be swept when the other policy's entry is (re)written."""
+    area = Area(center=(45.0, 6.0), radius_km=10.0)
+    pipe = "0" * 64
+
+    include_manifest = Manifest(
+        area=area, untagged_policy="include", dem_version="ign_rge_alti_5m_2024-12",
+        pipeline_content_hash=pipe, osm_extract_date="2026-05-20T12:00:00Z",
+        cache_key_hash="include0000a0000", steeproute_version="0.1.0",
+        steeproute_commit="abc1234", created_at="2026-05-20T12:00:00Z",
+    )
+    exclude_manifest = dataclasses.replace(
+        include_manifest, untagged_policy="exclude", cache_key_hash="exclude0000b0000"
+    )
+    g1 = nx.MultiDiGraph()  # pyright: ignore[reportMissingTypeArgument]
+    g2 = nx.MultiDiGraph()  # pyright: ignore[reportMissingTypeArgument]
+    write_entry(tmp_path, include_manifest, g1)  # pyright: ignore[reportArgumentType]
+    write_entry(tmp_path, exclude_manifest, g2)  # pyright: ignore[reportArgumentType]
+
+    # Both policies coexist — neither GC'd the other.
+    assert entry_dir_for(tmp_path, "include0000a0000").is_dir()
+    assert entry_dir_for(tmp_path, "exclude0000b0000").is_dir()
 
 
 # --- _read_indexed_entries defensive branches --------------------------------

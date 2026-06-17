@@ -462,10 +462,64 @@ def write_entry(
     if backup_dir.exists():
         shutil.rmtree(backup_dir)
 
+    # Step 4b: garbage-collect entries this write supersedes. Done after the
+    # commit (the new entry is already valid and safe) and before the index
+    # rebuild so the removed keys never reach `index.json`.
+    _gc_superseded_entries(cache_root, manifest)
+
     # Step 5: rebuild index.json atomically.
     rebuild_index(cache_root)
 
     return entry_dir
+
+
+def _gc_superseded_entries(cache_root: pathlib.Path, current: Manifest) -> None:
+    """Remove sibling entries strictly superseded by the just-written `current`.
+
+    `pipeline_content_hash` is the one cache-key input (§Cat 4b) that is never a
+    user choice — it's derived purely from pipeline source bytes. So a sibling
+    that matches `current` on `(area, untagged_policy, dem_version)` but lives
+    under a different key necessarily differs only in its pipeline hash: it was
+    built by pipeline code that no longer exists. Left in place it would (a)
+    accumulate on disk indefinitely (nothing else collects it) and (b) tie with
+    `current` on `radius_km` in `_select_smallest_containing`, where the
+    lexicographic-`cache_key_hash` tiebreak is effectively a coin flip — so a
+    query right after a re-prepare could silently load the superseded graph and
+    report its stale provenance. Evicting it here keeps at most one entry per
+    `(area, untagged_policy, dem_version)` and makes that tiebreak unreachable.
+
+    Best-effort: a sibling with an unreadable/corrupt manifest is left untouched
+    (a later `read_entry` surfaces it with full context) — one bad neighbor must
+    not undo the write that just succeeded. Only `(area, policy, dem)`-matching
+    siblings are removed, so entries for genuinely different prepared areas (or a
+    different `--untagged-trails` policy) are never swept.
+    """
+    areas_dir = _areas_dir(cache_root)
+    if not areas_dir.is_dir():
+        return
+    current_area = _canonicalize_area(current.area)
+    for sibling_dir in areas_dir.iterdir():
+        if not _is_entry_dir(sibling_dir) or sibling_dir.name == current.cache_key_hash:
+            continue
+        manifest_path = sibling_dir / _MANIFEST_FILENAME
+        if not manifest_path.is_file():
+            continue
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            sibling = Manifest.from_dict(payload)
+        except (json.JSONDecodeError, CacheCorruptedError, UnicodeDecodeError, OSError) as exc:
+            _logger.warning(
+                "cache._gc_superseded_entries: skipping unreadable manifest at %s: %s",
+                manifest_path,
+                exc,
+            )
+            continue
+        if (
+            _canonicalize_area(sibling.area) == current_area
+            and sibling.untagged_policy == current.untagged_policy
+            and sibling.dem_version == current.dem_version
+        ):
+            shutil.rmtree(sibling_dir, ignore_errors=True)
 
 
 def read_entry(cache_root: pathlib.Path, cache_key: str) -> PreparedData:
