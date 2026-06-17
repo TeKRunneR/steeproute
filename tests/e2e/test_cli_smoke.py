@@ -78,19 +78,31 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
 
 # --- Task 2: --help ---
 
+# `--help` output is identical across every flag in a group, so the subprocess runs
+# once per CLI (module-scoped) instead of once per parametrized case. This turns ~35
+# `uv run --help` invocations (~80 s) into 2 (~5 s).
+
+
+@pytest.fixture(scope="module")
+def query_help() -> subprocess.CompletedProcess[str]:
+    return _run_cli("steeproute", "--help")
+
+
+@pytest.fixture(scope="module")
+def setup_help() -> subprocess.CompletedProcess[str]:
+    return _run_cli("steeproute-setup", "--help")
+
 
 @pytest.mark.parametrize("flag", QUERY_FLAGS)
-def test_query_help_lists_flag(flag: str) -> None:
-    result = _run_cli("steeproute", "--help")
-    assert result.returncode == 0, result.stderr
-    assert flag in result.stdout
+def test_query_help_lists_flag(flag: str, query_help: subprocess.CompletedProcess[str]) -> None:
+    assert query_help.returncode == 0, query_help.stderr
+    assert flag in query_help.stdout
 
 
 @pytest.mark.parametrize("flag", SETUP_FLAGS)
-def test_setup_help_lists_flag(flag: str) -> None:
-    result = _run_cli("steeproute-setup", "--help")
-    assert result.returncode == 0, result.stderr
-    assert flag in result.stdout
+def test_setup_help_lists_flag(flag: str, setup_help: subprocess.CompletedProcess[str]) -> None:
+    assert setup_help.returncode == 0, setup_help.stderr
+    assert flag in setup_help.stdout
 
 
 # --- Task 3: --version ---

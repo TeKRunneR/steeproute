@@ -83,21 +83,28 @@ def reset_verbose_flag() -> Iterator[None]:
     set_verbose(False)
 
 
-@pytest.fixture
-def seeded_cache(tmp_path: pathlib.Path) -> pathlib.Path:
-    """Seed a real fixture cache entry in-process; return the cache root.
+@pytest.fixture(scope="session")
+def seeded_cache(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
+    """Seed a real fixture cache entry in-process once per session; return the cache root.
 
     Runs the `steeproute-setup` CLI through `CliRunner` with both `pipeline.osm_load`
     and `cli.setup.resolve_dem` patched to the committed fixtures (offline). A real
     `uv run steeproute-setup` subprocess can't be patched and would hit Overpass +
     the IGN WMS, so seeding stays in-process — exactly the pattern
     `test_coverage_check.py` uses. Skips when the OSM/DEM fixtures aren't committed.
+
+    Session-scoped: the setup pipeline is the dominant per-test cost (~2-3 s) and is
+    identical every time, so it runs once and is reused. This is sound because the
+    query side never writes the cache (NFR3, asserted by `test_interrupt.py`), and
+    every consumer routes its `--output-dir` to its own `tmp_path` — so the shared
+    cache root is read-only across tests.
     """
     from unittest.mock import patch
 
     if not _FIXTURES_LOADED or not _DEM_FIXTURE_PATH.exists() or not _OSM_FIXTURE_PATH.exists():
         pytest.skip("OSM or DEM fixture not committed; Journey-1 e2e tests skipped.")
 
+    cache_root = tmp_path_factory.mktemp("seeded_cache")
     runner = CliRunner()
     args = [
         "--center",
@@ -105,7 +112,7 @@ def seeded_cache(tmp_path: pathlib.Path) -> pathlib.Path:
         "--radius",
         f"{FIXTURE_SEED_RADIUS_KM}",
         "--cache-dir",
-        str(tmp_path),
+        str(cache_root),
     ]
     with (
         patch("steeproute.pipeline.osm_load", _osm_load_from_fixture),
@@ -113,7 +120,7 @@ def seeded_cache(tmp_path: pathlib.Path) -> pathlib.Path:
     ):
         result = runner.invoke(setup_cli, args, catch_exceptions=False)
     assert result.exit_code == 0, result.output
-    return tmp_path
+    return cache_root
 
 
 @pytest.fixture
