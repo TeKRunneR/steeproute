@@ -85,9 +85,9 @@ def render(
         params: solver parameters, recorded verbatim in the metadata block.
         provenance: run provenance (version, commit, OSM/DEM/pipeline fingerprint).
         convergence: solver convergence status, recorded in the metadata block.
-        convergence_iteration: 1-based iteration at which the solver's top-N
-            objective last improved (`solver.convergence_iteration`), recorded in
-            the metadata block alongside `convergence`. `0` ⇒ no improvement landed.
+        convergence_iteration: 1-based iteration of the solver's last top-N
+            admission — when the held set last changed (`solver.convergence_iteration`),
+            recorded in the metadata block alongside `convergence`. `0` ⇒ no admission landed.
         output_dir: destination directory (created if missing).
         degradation: graceful-degradation explanation (FR12) when the run returned
             fewer than N distinct routes, else `None`. Recorded in the metadata

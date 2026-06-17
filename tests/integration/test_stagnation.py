@@ -116,3 +116,90 @@ def test_stagnation_iters_zero_disables_the_check() -> None:
 
     assert solver.convergence_status == "budget-exhausted"
     assert len(events) == 20  # every iteration ran; no early stop
+
+
+# ---------------------------------------------------------------------------
+# Regression: the admission signal must come from `tracker.consider()`'s bool,
+# NOT a top-N total-objective delta. The evict-many-admit-one branch
+# (`TopNTracker`) can change the held set while leaving the total *unchanged*,
+# so a delta-based signal would miss the admission entirely — wrongly counting
+# it as stagnant and never advancing `convergence_iteration` past it.
+#
+#   P:  0 --(base (0,10,0))--> 10        objective 5   (dead-end)
+#   Q:  1 --(base (1,11,0))--> 11        objective 8   (dead-end)
+#   R:  2 --(base (0,10,0))--> 3 --(base (1,11,0))--> 4   objective 13
+#
+# With `j_max=0.0` any shared base segment counts as overlap. R shares P's base
+# segment (its first edge) and Q's (its second), so R overlaps both. R's
+# objective 13 strictly beats each of P (5) and Q (8), so when R is constructed
+# after P and Q are already held it evicts BOTH and is admitted — and the held
+# total moves 13 → 13 (unchanged: 5 + 8 == 13). Seed 3 is chosen so this
+# evict-many is the run's LAST admission (verified deterministic).
+# ---------------------------------------------------------------------------
+
+
+def _build_evict_many_graph() -> ContractedGraph:
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    for u, v, d_plus, bid in (
+        (0, 10, 5.0, (0, 10, 0)),  # P
+        (1, 11, 8.0, (1, 11, 0)),  # Q
+        (2, 3, 6.0, (0, 10, 0)),  # R first edge — shares P's base segment
+        (3, 4, 7.0, (1, 11, 0)),  # R second edge — shares Q's base segment
+    ):
+        g.add_edge(
+            u,
+            v,
+            key=0,
+            length_m=10.0,
+            d_plus_m=d_plus,
+            d_minus_m=0.0,
+            avg_gradient=d_plus / 10.0,
+            sac_scale="hiking",
+            base_segment_id=frozenset({bid}),
+            reusable=False,
+        )
+    return ContractedGraph(graph=g, super_edge_to_base={})
+
+
+def test_admission_with_unchanged_total_still_advances_convergence_iteration() -> None:
+    """An evict-many admission that leaves the total unchanged is NOT stagnant.
+
+    Drives the scenario where the final admission is an evict-many that keeps the
+    top-N total objective bit-stable (13 → 13). `convergence_iteration` must point
+    at that admission, and the iteration must show a *zero* total-objective delta
+    — proving the solver keys off `tracker.consider()`'s verdict, not a
+    total-objective change (the latter would have left `convergence_iteration`
+    stuck at the earlier P+Q fill and counted the real admission as stagnant).
+    """
+    events: list[ProgressEvent] = []
+    params = SolverParams(
+        theta=_THETA,
+        min_climb_slope=_THETA,
+        difficulty_cap="T3",
+        l_connector=200.0,
+        min_climb_ground_length=300.0,
+        j_max=0.0,  # any shared base segment overlaps → drives the evict-many branch
+        n=3,
+        area_cap=500.0,
+        untagged_policy="include",
+        seed=3,
+        iter_budget=200,
+        time_budget=3600.0,
+        stagnation_iters=0,  # isolate the convergence-iteration signal from termination
+    )
+    solver = GraspSolver(
+        _build_evict_many_graph(), params, np.random.default_rng(3), progress_callback=events.append
+    )
+    result = solver.run()
+
+    # The evict-many winner R is the sole survivor → the eviction really happened.
+    held = sorted(tuple((e.node_u, e.node_v, e.key) for e in sol.edges) for sol in result)
+    assert held == [((2, 3, 0), (3, 4, 0))]
+
+    ci = solver.convergence_iteration
+    # The recorded admission iteration shows a zero total-objective delta: its
+    # event's total equals the previous iteration's. A delta-based signal could
+    # never set `convergence_iteration` here — only `consider()`'s bool can.
+    assert events[ci - 1].best_objective == events[ci - 2].best_objective == 13.0
+    # Pinned for this seed/graph: the equal-total evict-many lands on iteration 11.
+    assert ci == 11

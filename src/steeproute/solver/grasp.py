@@ -190,14 +190,14 @@ class GraspSolver:
         # early return in `run()` — and set definitively at each termination
         # branch. `interrupted` is never set here; Story 7.3's CLI handler owns it.
         self.convergence_status: ConvergenceStatus = "budget-exhausted"
-        # 1-based iteration at which the top-N total objective last improved — the
-        # last admission that changed it (Story 7.3). Anytime-readable like
-        # `best_so_far`/`convergence_status`, so it holds the right value on every
-        # termination path, *including* a `KeyboardInterrupt` that unwinds `run()`
-        # and discards its locals. `0` means no improvement ever landed (empty
-        # graph, no admissible route, or interrupt before the first admission). It
-        # equals `(i + 1) − stagnation_counter` at any point, since the stagnation
-        # counter resets to 0 exactly when an improvement lands.
+        # 1-based iteration of the last admission — the last time the top-N held
+        # set changed (`tracker.consider()` returned `True`), Story 7.3.
+        # Anytime-readable like `best_so_far`/`convergence_status`, so it holds the
+        # right value on every termination path, *including* a `KeyboardInterrupt`
+        # that unwinds `run()` and discards its locals. `0` means no admission ever
+        # landed (empty graph, no admissible route, or interrupt before the first
+        # admission). It equals `(i + 1) − stagnation_counter` at any point, since
+        # the stagnation counter resets to 0 exactly when an admission lands.
         self.convergence_iteration: int = 0
 
     @property
@@ -213,19 +213,21 @@ class GraspSolver:
 
         - **iter-budget** — the `for` exhausts `params.iter_budget` → `convergence_status = "budget-exhausted"`.
         - **time-budget** — monotonic elapsed reaches `params.time_budget` → `"budget-exhausted"`.
-        - **stagnation** — the top-N total objective is unchanged for
+        - **stagnation** — no candidate is admitted to the top-N for
           `params.stagnation_iters` consecutive iterations → `"converged"`.
           `stagnation_iters == 0` disables it. The window only ever fires after
-          the tracker has filled: while admissions are still improving the
-          objective the counter keeps resetting, so the check self-activates
-          after the first N+1 iterations (Architecture §Cat 5e) with no special
-          casing. Stagnation is checked before time so a search that has truly
-          converged is labelled `converged` even if it also just crossed the
-          clock.
+          the tracker has filled: while candidates are still being admitted the
+          counter keeps resetting, so the check self-activates after the first
+          N+1 iterations (Architecture §Cat 5e) with no special casing.
+          Stagnation is checked before time so a search that has truly converged
+          is labelled `converged` even if it also just crossed the clock.
 
-        `stagnation_counter` counts consecutive iterations whose top-N total
-        objective was unchanged — the tracker's value changes iff a candidate was
-        admitted, so this is exactly "iterations since the last admission". This
+        `stagnation_counter` counts consecutive iterations with no admission —
+        it resets exactly when `tracker.consider()` returns `True` (the held set
+        changed), so this is exactly "iterations since the last admission". It is
+        driven off that verdict, not a top-N total-objective delta: the
+        evict-many-admit-one branch can change the held set while leaving the
+        total equal (or lowering it), so a delta would miscount. This
         bookkeeping (and the monotonic-clock reads) now runs every iteration
         because it gates termination, not just the `ProgressEvent`; only the
         event *construction* stays behind the callback check. FR29 still holds:
@@ -240,18 +242,23 @@ class GraspSolver:
         stagnation_iters = self._params.stagnation_iters
         time_budget = self._params.time_budget
         start = time.monotonic()
-        last_objective = self._tracker.total_objective()
         stagnation_counter = 0
         for i in range(self._params.iter_budget):
             solution = self._construct_one()
+            # Drive stagnation off the tracker's admission verdict, NOT a
+            # total-objective delta. The two are not equivalent: the evict-many-
+            # admit-one branch can admit a candidate that leaves the total
+            # unchanged (a delta would read it as stagnant) or even lowers it (a
+            # delta would read it as an improvement). `consider()` returns True iff
+            # the held set actually changed, so this counter is exactly
+            # "iterations since the last admission".
+            admitted = False
             if solution.edges and self._route_slope_ok(solution):
-                self._tracker.consider(solution)
-            current_objective = self._tracker.total_objective()
-            if current_objective != last_objective:
+                admitted = self._tracker.consider(solution)
+            if admitted:
                 stagnation_counter = 0
-                last_objective = current_objective
-                # Record where the last real improvement landed (Story 7.3). Held
-                # on `self` (not a local) so an interrupt mid-loop preserves it.
+                # Record where the held set last changed (Story 7.3). Held on
+                # `self` (not a local) so an interrupt mid-loop preserves it.
                 self.convergence_iteration = i + 1
             else:
                 stagnation_counter += 1
@@ -262,7 +269,7 @@ class GraspSolver:
                     ProgressEvent(
                         iteration=iteration,
                         elapsed_s=elapsed_s,
-                        best_objective=current_objective,
+                        best_objective=self._tracker.total_objective(),
                         estimated_remaining_s=estimate_remaining(
                             iteration, self._params.iter_budget, elapsed_s
                         ),
