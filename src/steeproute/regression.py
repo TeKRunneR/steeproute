@@ -34,7 +34,7 @@ import json
 import pathlib
 import tempfile
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from steeproute.cache import sha256_canonical, write_json_atomic
@@ -87,6 +87,11 @@ class Fixture:
     seed: int
     pinned_params: dict[str, str] = field(default_factory=dict)
     min_routes: int = 1
+    # Regression tier. `"fast"` (the default) runs at low budgets as a cheap
+    # determinism smoke; `"realistic"` mirrors the budgets the tool is actually
+    # used at (`REALISTIC_FIXTURES`), gated `slow` in the suite. The tier
+    # disambiguates the golden path so the two regimes' goldens never collide.
+    tier: str = "fast"
 
 
 # The pinned param set shared by every fixture. Pinned explicitly (never inherited
@@ -108,6 +113,17 @@ _PINNED_PARAMS: dict[str, str] = {
     "--iter-budget": "2000",
     "--stagnation-iters": "100",
     "--time-budget": "100000",
+}
+
+# Realistic-tier budgets: the regime the tool is actually used at (~200k iters /
+# ~10k stagnation window), where GRASP converges to quality routes rather than the
+# unconverged low-budget output the fast tier pins. Everything else matches
+# `_PINNED_PARAMS`; only the two termination budgets move. Still deterministic
+# (FR29) — `--time-budget` stays high so wall-clock never binds.
+_REALISTIC_PARAMS: dict[str, str] = {
+    **_PINNED_PARAMS,
+    "--iter-budget": "200000",
+    "--stagnation-iters": "10000",
 }
 
 
@@ -148,6 +164,15 @@ FIXTURES: tuple[Fixture, ...] = (
         seed=42,
         pinned_params=dict(_PINNED_PARAMS),
     ),
+)
+
+
+# The realistic-budget tier: the same caches/centers/seeds as the fast tier, run at
+# `_REALISTIC_PARAMS` so the goldens pin the converged regime the tool is used in.
+# Gated `slow` (`tests/e2e/test_pinned_regressions.py`); regenerate with
+# `uv run update-regression --all --tier realistic`.
+REALISTIC_FIXTURES: tuple[Fixture, ...] = tuple(
+    replace(f, pinned_params=dict(_REALISTIC_PARAMS), tier="realistic") for f in FIXTURES
 )
 
 
@@ -200,8 +225,14 @@ def build_golden(fixture: Fixture, sidecars: Iterable[Sidecar]) -> Golden:
 
 
 def golden_path(fixture: Fixture) -> pathlib.Path:
-    """`tests/e2e/goldens/<fixture_name>.json`."""
-    return GOLDENS_DIR / f"{fixture.name}.json"
+    """`tests/e2e/goldens/<fixture_name>[.<tier>].json` (the fast tier carries no suffix).
+
+    The tier suffix keeps the fast and realistic goldens for one fixture from
+    colliding; fast stays un-suffixed so existing Story 8.1/8.2 goldens keep their
+    committed paths.
+    """
+    suffix = "" if fixture.tier == "fast" else f".{fixture.tier}"
+    return GOLDENS_DIR / f"{fixture.name}{suffix}.json"
 
 
 def read_golden(fixture: Fixture) -> Golden | None:
@@ -295,13 +326,16 @@ def diff_goldens(old: Golden | None, new: Golden) -> str:
     return "\n".join(lines) if lines else "  (no change)"
 
 
-def _select(fixture_name: str | None, all_fixtures: bool) -> list[Fixture]:
+def _select(fixture_name: str | None, all_fixtures: bool, tier: str) -> list[Fixture]:
+    pool = REALISTIC_FIXTURES if tier == "realistic" else FIXTURES
     if all_fixtures:
-        return list(FIXTURES)
-    selected = [f for f in FIXTURES if f.name == fixture_name]
+        return list(pool)
+    selected = [f for f in pool if f.name == fixture_name]
     if not selected:
-        known = ", ".join(f.name for f in FIXTURES) or "(none registered)"
-        raise SystemExit(f"Unknown fixture {fixture_name!r}. Known fixtures: {known}.")
+        known = ", ".join(f.name for f in pool) or "(none registered)"
+        raise SystemExit(
+            f"Unknown fixture {fixture_name!r} in tier {tier!r}. Known fixtures: {known}."
+        )
     return selected
 
 
@@ -315,9 +349,15 @@ def main() -> None:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--fixture", metavar="NAME", help="regenerate one fixture's golden")
     group.add_argument("--all", action="store_true", help="regenerate every fixture's golden")
+    parser.add_argument(
+        "--tier",
+        choices=("fast", "realistic"),
+        default="fast",
+        help="which regression tier to regenerate (default: fast)",
+    )
     ns = parser.parse_args()
 
-    for fixture in _select(ns.fixture, ns.all):
+    for fixture in _select(ns.fixture, ns.all, ns.tier):
         old = read_golden(fixture)
         new = build_golden(fixture, run_fixture(fixture))
         print(f"== {fixture.name} ==")

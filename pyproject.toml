@@ -224,11 +224,12 @@ norecursedirs = [
 filterwarnings = []
 markers = [
     "live: tests that hit external services; skipped in default CI (run with `uv run pytest -m live`)",
+    "slow: realistic-budget regression goldens (~65s); skipped by default (run with `uv run pytest -m slow`)",
 ]
-# Default collection excludes live-marked tests so CI stays offline. Override
-# locally with `uv run pytest -m live` to run only the live tests, or
-# `uv run pytest -m ""` to run everything including live.
-addopts = ["-m", "not live"]
+# Default collection excludes live- and slow-marked tests so the inner loop stays
+# fast and offline. Override locally with `uv run pytest -m live` / `-m slow` to run
+# only that tier, or `uv run pytest -m ""` to run everything.
+addopts = ["-m", "not live and not slow"]
 
 [tool.coverage.run]
 source = ["src/steeproute"]
