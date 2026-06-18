@@ -542,6 +542,8 @@ So that the contracted-graph stage has canonical climbs to build super-edges fro
 **And** an integration test runs `detect_climbs` on the real Grenoble fixture and asserts climb count is within an expected topo-verified range and total climb D+ is within ±10% of a manual count
 **And** the function is pure (no input-graph mutation)
 
+> **Latent gap closed by Epic 9 (Story 9.1):** the "maximal contiguous edge-sequences" guarantee above was not actually met — `detect_climbs` seeded by sorted node-id and extended forward only, so a mid-chain seed could orphan the upstream steep edge (output maximal-forward-from-seed, dependent on OSM node-id labeling). Story 9.1 makes detection genuinely maximal regardless of labeling (review finding #7).
+
 ### Story 3.3: Pipeline stage 9 — contracted climb-graph construction
 
 As a developer,
@@ -1011,3 +1013,49 @@ So that Epic 8's quality commitments are enforceable in CI and the repo can cred
 **And** coverage thresholds are enforced — any PR dropping below either threshold fails CI
 **And** the Linux job is marked `continue-on-error: true` (Linux failures visible in CI summary but not merge-gating per NFR8's "best-effort, not actively tested" stance) — unless it turns out Linux runs clean, in which case the flag is omitted and Linux gates fully
 **And** `README.md` (dev-notes section) documents the CI gates — coverage thresholds, GRASP-ratio gate, regression-golden zero-tolerance, metamorphic pass-required — with a sentence linking each gate to the PRD/Architecture commitment it enforces
+
+> **Sequencing (correct-course 2026-06-18):** Story 8.5 runs **after Epic 9**. Epic 9's θ-prefix-recovery fix (Story 9.2, review finding #10) raises the GRASP-vs-exhaustive baseline, so the `QUALITY_THRESHOLD` revisit above must be done against the post-Epic-9 ratio. The coverage-threshold and Linux-job parts of 8.5 are independent of Epic 9.
+
+## Epic 9: Route-Discovery Quality (Climb Maximality & θ-Prefix Recovery)
+
+Close two route-discovery quality gaps surfaced by the v1 general review (2026-06-11) and confirmed with repros: climb detection that wasn't actually maximal (finding #7) and a GRASP search that discarded θ-feasible prefixes (finding #10). Both are defects bringing code in line with intended behavior — neither is a constraint violation, and neither invalidates a PRD/architecture requirement. Both change route output, so both regression golden tiers (fast + realistic) are rebaked here, and Story 8.5's GRASP-ratio threshold revisit is sequenced after this epic. Inserted via correct-course 2026-06-18 (`sprint-change-proposal-2026-06-18-route-discovery-quality.md`); no epic renumber. Companion to the already-merged review fixes #6 (`90bc38f`) and the realistic-budget golden tier (`926e597`).
+
+### Story 9.1: Climb-detection maximality (review finding #7)
+
+As a user,
+I want every detected climb to be genuinely maximal — rooted at its true steep bottom regardless of OSM node-id labeling —
+So that no steep chain-start is silently demoted to a connector and routes can board climbs from the bottom.
+
+**Acceptance Criteria:**
+
+**Given** `detect_climbs` currently seeds in sorted `(u, v, key)` order and extends forward only, so a mid-chain seed orphans the upstream steep edge (contradicting Story 3.2's "maximal" AC)
+**When** I make detection capture the full maximal contiguous steep chain independent of seed order (e.g. backward extension from the seed, or descending-slope seeding), preserving FR29 determinism and edge-disjointness (each base edge in ≤ 1 climb)
+**Then** a fail-first regression test asserts the same steep chain under two node labelings yields identical maximal climbs and the steep bottom edge is always captured (never orphaned/dropped)
+**And** the existing stage-8 unit/property tests, the contraction tests, and the Story 3.3 back-mapping injectivity all still hold
+
+### Story 9.2: GRASP θ-feasible prefix recovery (review finding #10)
+
+As a user,
+I want GRASP to keep a θ-clearing route even when its greedy walk is forced to append a flat tail that drags the whole-walk average below θ,
+So that the solver stops returning nothing (or fewer routes) where feasible routes demonstrably exist.
+
+**Acceptance Criteria:**
+
+**Given** `_construct_one` emits only the maximal walk and θ is checked only on the finished walk, so a feasible steep prefix is discarded when a flat tail follows
+**When** I track the best θ-clearing prefix of each constructed walk and offer it to the tracker, keeping FR29 determinism and one shared feasible set with the exhaustive oracle
+**Then** a fail-first regression test asserts GRASP returns the θ-clearing prefix the oracle returns on a steep-edge-plus-forced-flat-tail graph (no false empty result)
+**And** the Story 3.7 GRASP-vs-exhaustive ratio is unchanged or higher with both sides on one feasible set, and the oracle docstring's identical-feasible-set claim is made accurate
+
+### Story 9.3: Revalidation, golden rebake, and doc sync (Epic 9 closeout)
+
+As a developer,
+I want the route-output changes from 9.1 + 9.2 revalidated end-to-end and the regression baselines regenerated,
+So that the suite reflects the corrected behavior and Story 8.5 can tighten the quality threshold against a trustworthy baseline.
+
+**Acceptance Criteria:**
+
+**Given** Stories 9.1 and 9.2 are complete
+**When** I re-validate the 8 metamorphic invariants and the Story 3.7 quality gate, rebake both golden tiers (`uv run update-regression --all` and `--all --tier realistic`) with an explicit rationale, and sync docs (Story 3.2 maximality note, oracle docstring, any known-limitations wording)
+**Then** the full suite passes on Windows (default tier) and the realistic tier passes via `uv run pytest -m slow`
+**And** Story 3.7's `QUALITY_THRESHOLD` is left unchanged here (its tightening is Story 8.5's job, now sequenced after this epic)
+**And** an optional `bmad-checkpoint-preview` on a real Grenoble area confirms climbs root at their true bottoms and the returned route set improved

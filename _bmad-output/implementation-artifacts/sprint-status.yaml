@@ -28,7 +28,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-06-11
+last_updated: 2026-06-18
 
 project: bmad-test
 project_key: NOKEY
@@ -112,4 +112,9 @@ development_status:
   8-2-pin-2-3-grenoble-regression-fixtures-with-zero-tolerance-ci-gate: review
   8-3-readme-gallery-with-3-5-pre-computed-example-reports: done
   8-4-readme-known-limitations-quickstart-sections: done
-  8-5-final-ci-threshold-tightening-and-linux-best-effort-job: backlog
+  8-5-final-ci-threshold-tightening-and-linux-best-effort-job: backlog  # runs after epic-9 (GRASP-ratio baseline shifts)
+
+  epic-9: backlog        # Route-Discovery Quality (correct-course 2026-06-18); runs before 8-5
+  9-1-climb-detection-maximality: backlog
+  9-2-grasp-theta-feasible-prefix-recovery: backlog
+  9-3-revalidation-golden-rebake-and-doc-sync: backlog
