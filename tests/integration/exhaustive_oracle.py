@@ -43,11 +43,14 @@ Semantics:
       *undirected* `base_segment_id` (Story 6.1), so opposite-direction reuse of
       one trail counts as overlap — matching GRASP and the validator.
   The slope floor θ (FR3) is **not** a DFS filter — it is a route-level
-  constraint, so (exactly like GRASP's `_route_slope_ok` finalization gate) it
-  is applied to each fully-enumerated candidate before admission:
-  `(Σ d_plus_m + Σ d_minus_m) / Σ length_m ≥ θ`. This keeps the oracle's and
-  GRASP's feasible sets identical, which is what makes Story 3.7's quality
-  ratio meaningful.
+  constraint, so it is applied to each enumerated candidate before admission:
+  `(Σ d_plus_m + Σ d_minus_m) / Σ length_m ≥ θ`. Because `_dfs` emits **every
+  prefix** of every feasible walk (not just maximal walks), the candidate set
+  spans all θ-clearing prefixes — and GRASP now recovers the best θ-clearing
+  prefix of each constructed walk as well (`GraspSolver._best_theta_prefix`,
+  Story 9.2 / review finding #10), rather than only checking its maximal walk.
+  So the oracle's and GRASP's feasible sets are genuinely identical, which is
+  what makes Story 3.7's quality ratio meaningful.
 - **Top-N + distinctness:** the full enumeration is deduplicated by directed
   canonical edge-set (different traversal orderings of the same edge-set
   collapse), then sorted objective-descending and fed through

@@ -32,13 +32,26 @@ start node by greedy-randomized walk extension:
 
 The slope floor θ (FR3) is a **route-level** constraint — the whole-route
 average `(Σ d_plus_m + Σ d_minus_m) / Σ length_m` must clear θ — so it is NOT
-applied per-edge during construction. It is enforced at finalization in `run()`
-(`_route_slope_ok`): a partial walk may dip below θ and recover by appending a
-steep climb, so greedy mid-walk pruning would wrongly discard recoverable
-routes. Per-climb steepness lives in the separate `--min-climb-slope`
-detection threshold (Story 4.1), upstream in stage 8.
+applied per-edge during construction. It is enforced at finalization in `run()`:
+a partial walk may dip below θ and recover by appending a steep climb, so greedy
+mid-walk pruning would wrongly discard recoverable routes. Per-climb steepness
+lives in the separate `--min-climb-slope` detection threshold (Story 4.1),
+upstream in stage 8.
 
-Each completed `Solution` that clears the route-level floor is offered to a
+Because construction always extends to a **maximal** walk, that walk's average
+can be dragged below θ by a forced flat tail even when a steep **prefix** of it
+clears θ. So `run()` offers the best θ-clearing prefix of each constructed walk
+to the tracker — `_best_theta_prefix` — rather than only the whole maximal walk
+(Story 9.2 / review finding #10). This stops GRASP discarding a feasible route
+the exhaustive oracle keeps (the oracle emits every prefix), so GRASP no longer
+returns `[]` where a θ-feasible route exists. The longest θ-clearing prefix is
+chosen because per-edge `d_plus_m + d_minus_m` is non-negative, so objective is
+non-decreasing in prefix length — the longest is the highest-objective one, and
+the choice is deterministic with no tie-break (FR29). A prefix of a feasible
+walk is itself edge-simple and reuse-respecting, so this keeps GRASP on the same
+feasible set the oracle enumerates (Story 3.7 stays apples-to-apples).
+
+The best θ-clearing prefix of each constructed walk is offered to a
 `TopNTracker(params.n, params.j_max)`
 — the same admission policy the oracle uses (`tests/integration/exhaustive_oracle.py`,
 Story 3.5). This is what makes the Story 3.7 GRASP-vs-exhaustive quality
@@ -252,9 +265,15 @@ class GraspSolver:
             # delta would read it as an improvement). `consider()` returns True iff
             # the held set actually changed, so this counter is exactly
             # "iterations since the last admission".
+            # Offer the best θ-clearing prefix of the constructed walk (Story 9.2),
+            # not just the maximal walk: a steep prefix forced to append a flat tail
+            # would otherwise drag the whole-walk average below θ and be discarded,
+            # losing a feasible route the oracle keeps. `_best_theta_prefix` returns
+            # None when no prefix clears θ (including the empty walk).
             admitted = False
-            if solution.edges and self._route_slope_ok(solution):
-                admitted = self._tracker.consider(solution)
+            candidate = self._best_theta_prefix(solution.edges)
+            if candidate is not None:
+                admitted = self._tracker.consider(candidate)
             if admitted:
                 stagnation_counter = 0
                 # Record where the held set last changed (Story 7.3). Held on
@@ -285,20 +304,46 @@ class GraspSolver:
         self.convergence_status = "budget-exhausted"
         return self._tracker.current_top()
 
-    def _route_slope_ok(self, solution: Solution) -> bool:
-        """Route-level slope floor (FR3): admit iff `(Σd+ + Σd−)/Σlength ≥ θ`.
+    def _route_slope_ok(self, edges: tuple[Edge, ...]) -> bool:
+        """Route-level slope floor (FR3): True iff `(Σd+ + Σd−)/Σlength ≥ θ`.
 
         The binding constraint is the *whole-route* average gradient, enforced
-        here at finalization rather than greedily in `_build_rcl` — a partial
-        walk may legitimately dip below θ and recover by appending a steep
-        climb, so mid-construction pruning would wrongly kill recoverable
-        routes. The ratio is single-sourced through `models.route_avg_gradient`
-        — the same function the validator's `slope_floor` check uses — so the
-        validator can never flag a GRASP-admitted route over a float-summation
-        discrepancy. An empty/zero-length route yields gradient `0.0` and is
-        rejected at any positive θ.
+        at finalization rather than greedily in `_build_rcl` — a partial walk
+        may legitimately dip below θ and recover by appending a steep climb, so
+        mid-construction pruning would wrongly kill recoverable routes. The
+        ratio is single-sourced through `models.route_avg_gradient` — the same
+        function the validator's `slope_floor` check uses — so the validator can
+        never flag a GRASP-admitted route over a float-summation discrepancy. An
+        empty/zero-length route yields gradient `0.0` and is rejected at any
+        positive θ.
         """
-        return route_avg_gradient(solution.edges) >= self._params.theta
+        return route_avg_gradient(edges) >= self._params.theta
+
+    def _best_theta_prefix(self, edges: tuple[Edge, ...]) -> Solution | None:
+        """Longest θ-clearing prefix of `edges` as a `Solution`, or `None` if none clears θ.
+
+        A maximal walk can dip below θ when a forced flat tail follows a steep
+        start (review finding #10); offering the whole walk alone would discard a
+        feasible route. Every prefix of a feasible walk is itself a feasible walk
+        (edge-simple, reuse-respecting), and the exhaustive oracle enumerates
+        every prefix, so recovering the best θ-clearing prefix keeps GRASP on one
+        feasible set with the oracle (Story 9.2).
+
+        The **longest** θ-clearing prefix is the best: per-edge `d_plus_m +
+        d_minus_m` is non-negative, so the objective is non-decreasing in prefix
+        length and the longest qualifying prefix carries the highest objective.
+        Scanning from the full length downward returns it on the first hit — a
+        single, deterministic answer with no tie-break, so FR29 holds (this is a
+        pure function of the already-deterministic walk; no RNG). The empty walk
+        has no non-empty prefix and yields `None`, so `run()`'s old
+        `if solution.edges` guard is subsumed.
+        """
+        for end in range(len(edges), 0, -1):
+            prefix = edges[:end]
+            if self._route_slope_ok(prefix):
+                objective = sum((e.d_plus_m + e.d_minus_m for e in prefix), 0.0)
+                return Solution(edges=prefix, objective=objective)
+        return None
 
     def _construct_one(self) -> Solution:
         """Build one GRASP candidate via greedy-randomized walk extension.
