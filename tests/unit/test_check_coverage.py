@@ -15,7 +15,7 @@ The integration tier (`tests/integration/test_cache_coverage.py`) covers the
 opportunistic `rebuild_index` path that closes Story 2.7 D1.
 """
 
-# pyright: reportPrivateUsage=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportMissingTypeArgument=false
+# pyright: reportPrivateUsage=false, reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportMissingTypeArgument=false
 # Reason: this file exists to pin the boundary semantics of `cache.py`'s pure
 # selector + message helpers — they are module-private by convention so other
 # call sites don't reach in, but the test tier is the right consumer. The
@@ -375,10 +375,15 @@ def test_write_entry_keeps_sibling_with_different_untagged_policy(
     pipe = "0" * 64
 
     include_manifest = Manifest(
-        area=area, untagged_policy="include", dem_version="ign_rge_alti_5m_2024-12",
-        pipeline_content_hash=pipe, osm_extract_date="2026-05-20T12:00:00Z",
-        cache_key_hash="include0000a0000", steeproute_version="0.1.0",
-        steeproute_commit="abc1234", created_at="2026-05-20T12:00:00Z",
+        area=area,
+        untagged_policy="include",
+        dem_version="ign_rge_alti_5m_2024-12",
+        pipeline_content_hash=pipe,
+        osm_extract_date="2026-05-20T12:00:00Z",
+        cache_key_hash="include0000a0000",
+        steeproute_version="0.1.0",
+        steeproute_commit="abc1234",
+        created_at="2026-05-20T12:00:00Z",
     )
     exclude_manifest = dataclasses.replace(
         include_manifest, untagged_policy="exclude", cache_key_hash="exclude0000b0000"

@@ -3,43 +3,43 @@
   "params_hash": "f0b572b9a4192deb3d3b89d6870000e2fbe8c44b1c637f7aafd33d3d95a1cc23",
   "routes": [
     {
-      "canonical_edge_sequence_hash": "578ad5d0536a1bf2487b9c7584f9349ad978d89801513fd2208aec3faadbc7fb",
-      "d_minus_m": 1211.0440873717084,
-      "d_plus_m": 1366.937057854217,
+      "canonical_edge_sequence_hash": "a84be351ac49b32a6b8df8d454cae3d33487fc9f273913f483c0b5d3a0efa01e",
+      "d_minus_m": 1079.745197496297,
+      "d_plus_m": 1134.0733770941515,
       "edge_count": 34,
-      "objective": 2577.9811452259255,
+      "objective": 2213.8185745904484,
       "route_index": 1
     },
     {
-      "canonical_edge_sequence_hash": "fc8194c3f99ac047adfd2ac41f1b934e044d9d1979d4ca9cc339e6f84eb3db92",
-      "d_minus_m": 930.2627443737456,
-      "d_plus_m": 1117.9239184326598,
-      "edge_count": 21,
-      "objective": 2048.1866628064054,
+      "canonical_edge_sequence_hash": "37c8c3bb7dc1619556b99c4453ecc2c5641ae0db752e80de00acfa16adda39b4",
+      "d_minus_m": 827.0457311324135,
+      "d_plus_m": 1253.3862196457242,
+      "edge_count": 39,
+      "objective": 2080.4319507781374,
       "route_index": 2
     },
     {
-      "canonical_edge_sequence_hash": "b9e5f4c5b5dbf575f20a72b50575abcce57d16e9c75654f7406e0c4086835b43",
-      "d_minus_m": 1183.504401168706,
-      "d_plus_m": 697.4258870695847,
-      "edge_count": 26,
-      "objective": 1880.9302882382908,
+      "canonical_edge_sequence_hash": "10aa795d97c974a8251497da90e01a654ca7ef16732091651812ede11d473d95",
+      "d_minus_m": 966.0585051642524,
+      "d_plus_m": 1017.3947514163124,
+      "edge_count": 17,
+      "objective": 1983.4532565805648,
       "route_index": 3
     },
     {
-      "canonical_edge_sequence_hash": "8d7df165a8c1c2a0ac3d4c3bde899b071c1b6b68e9a6be759be6598f2de2b09d",
-      "d_minus_m": 1102.96581216506,
-      "d_plus_m": 545.7939714973355,
-      "edge_count": 33,
-      "objective": 1648.7597836623954,
+      "canonical_edge_sequence_hash": "e9efa87d132750ac0d56a9345f5d9fb5e4203d4774d1542a058d6b8779697470",
+      "d_minus_m": 1212.289547087234,
+      "d_plus_m": 732.4664059892115,
+      "edge_count": 30,
+      "objective": 1944.7559530764456,
       "route_index": 4
     },
     {
-      "canonical_edge_sequence_hash": "fee9a51ed5a63fe1c655fe1e523d5cce49c0d32903be6006b2d0060006e48755",
-      "d_minus_m": 882.5899259632016,
-      "d_plus_m": 751.6588881199742,
-      "edge_count": 32,
-      "objective": 1634.2488140831758,
+      "canonical_edge_sequence_hash": "693b4a9d22b5a90905bc03ea68006897f436671369b7b0cc79554a95f9f90718",
+      "d_minus_m": 775.3476300239565,
+      "d_plus_m": 1121.8243144353232,
+      "edge_count": 22,
+      "objective": 1897.1719444592798,
       "route_index": 5
     }
   ],

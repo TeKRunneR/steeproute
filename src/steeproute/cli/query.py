@@ -414,19 +414,24 @@ def _build_provenance(manifest: Manifest) -> ProvenanceInfo:
 def _degradation_message(validated: ValidatedRouteSet, params: SolverParams) -> str | None:
     """Graceful-degradation explanation (FR12), or `None` for a full N-route result.
 
-    When the solver returned fewer than N distinct routes, the area genuinely
-    can't satisfy the distinctness constraint under the current `--j-max` — so we
-    say so rather than silently loosening it (Architecture §"What's not an
-    exception"). The count is `len(validated.routes)`, the same set the exit code
-    reads (§Cat 6c): passed and failed routes count alike. `len == 0` (empty area)
-    is just the extreme of the same path — no special-casing.
+    When the solver returned fewer than N routes, the area can't yield N under the
+    current constraints — so we say so rather than silently loosening them
+    (Architecture §"What's not an exception"). Two distinct causes reach this path:
+    too few routes clear the route-level slope floor `--theta` (feasibility-bound),
+    or enough routes exist but overlap too much to count as distinct under `--j-max`
+    (distinctness-bound). The CLI can't tell which bound the solver hit, so the
+    message states the observable shortfall and names both tuning levers rather than
+    asserting a single cause. The count is `len(validated.routes)`, the same set the
+    exit code reads (§Cat 6c): passed and failed routes count alike. `len == 0`
+    (empty area) is just the extreme of the same path — no special-casing.
     """
     returned = len(validated.routes)
     if returned >= params.n:
         return None
     return (
-        f"Only {returned} distinct routes satisfy J_max <= {params.j_max:.2f}. "
-        f"Returning {returned} routes; additional candidates would exceed the overlap threshold."
+        f"Only {returned} of {params.n} requested routes satisfy the current constraints "
+        f"(theta={params.theta:.2f}, J_max <= {params.j_max:.2f}); "
+        f"relax --theta or --j-max to admit more."
     )
 
 

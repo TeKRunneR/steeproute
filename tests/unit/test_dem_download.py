@@ -1,6 +1,10 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
+# pyright: reportPrivateUsage=false, reportUnannotatedClassAttribute=false
 # Reason: rasterio surfaces DatasetReader / read() as Unknown; same external-boundary
-# pattern as pipeline/dem.py and its test.
+# pattern as pipeline/dem.py and its test. The tests exercise private DEM helpers
+# (`_tile_ranges` etc.) by design, and the in-test mock-response classes need no
+# attribute annotations. (The urlopen-mock callbacks' unused `req`/`timeout` are
+# suppressed inline per-line, so a genuinely-unused param elsewhere still gets flagged.)
 """Offline unit tests for `pipeline.dem_download.resolve_dem`.
 
 The IGN WMS is never contacted: `urlopen` is monkeypatched to return synthetic
@@ -64,7 +68,7 @@ def _make_fake_urlopen(call_log: list[tuple[int, int]]) -> Any:
     the per-tile constant fill lets them verify mosaic placement and orientation.
     """
 
-    def fake(req: Any, timeout: float | None = None) -> _FakeResp:  # noqa: ARG001
+    def fake(req: Any, timeout: float | None = None) -> _FakeResp:  # noqa: ARG001  # pyright: ignore[reportUnusedParameter]
         qs = urllib.parse.parse_qs(urllib.parse.urlparse(req.full_url).query)
         width = int(qs["width"][0])
         height = int(qs["height"][0])
@@ -141,9 +145,7 @@ def test_second_call_reuses_cached_raster(
     assert len(calls) == 1, "second resolve must not re-fetch"
 
 
-def test_force_refresh_redownloads(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_force_refresh_redownloads(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`force_refresh=True` re-fetches even when a cached raster exists."""
     calls: list[tuple[int, int]] = []
     monkeypatch.setattr(dem_download, "urlopen", _make_fake_urlopen(calls))
@@ -159,7 +161,7 @@ def test_network_failure_maps_to_data_source_unavailable(
 ) -> None:
     """A urllib failure surfaces as `DataSourceUnavailableError` (exit-2 tier, NFR6)."""
 
-    def boom(req: Any, timeout: float | None = None) -> _FakeResp:  # noqa: ARG001
+    def boom(req: Any, timeout: float | None = None) -> _FakeResp:  # noqa: ARG001  # pyright: ignore[reportUnusedParameter]
         raise urllib.error.URLError("connection refused")
 
     monkeypatch.setattr(dem_download, "urlopen", boom)
@@ -174,7 +176,7 @@ def test_unexpected_payload_size_maps_to_data_source_unavailable(
 ) -> None:
     """A short / non-BIL response (e.g. an error document) is rejected, not written."""
 
-    def html_error(req: Any, timeout: float | None = None) -> _FakeResp:  # noqa: ARG001
+    def html_error(req: Any, timeout: float | None = None) -> _FakeResp:  # noqa: ARG001  # pyright: ignore[reportUnusedParameter]
         return _FakeResp(b"<ServiceExceptionReport>boom</ServiceExceptionReport>")
 
     monkeypatch.setattr(dem_download, "urlopen", html_error)
@@ -193,7 +195,7 @@ def test_right_size_xml_error_document_rejected(
 ) -> None:
     """A 200-OK XML error doc of coincidentally-correct byte length is rejected by content type."""
 
-    def xml_resp(req: Any, timeout: float | None = None) -> _FakeResp:  # noqa: ARG001
+    def xml_resp(req: Any, timeout: float | None = None) -> _FakeResp:  # noqa: ARG001  # pyright: ignore[reportUnusedParameter]
         qs = urllib.parse.parse_qs(urllib.parse.urlparse(req.full_url).query)
         width = int(qs["width"][0])
         height = int(qs["height"][0])

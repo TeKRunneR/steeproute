@@ -9,8 +9,10 @@ summary is always stdout). The `--- Run summary ---` delimiter line lets
 downstream scripts split stdout on it.
 
 All tests run in-process via `CliRunner` (the shared `run_query` fixture) — no OS
-process is needed. `--theta 0.35` reuses `test_degradation.py`'s regime to make
-distinctness binding on the committed fixture for the degraded-path test.
+process is needed. `--theta 0.50` reuses `test_degradation.py`'s regime to induce
+graceful degradation (< N=5 routes clear that floor) on the committed fixture for
+the degraded-path test — see that module for why theta, not j-max, is the binding
+lever after the Epic 9 route-discovery fixes.
 """
 
 from __future__ import annotations
@@ -26,10 +28,10 @@ from steeproute.models import Edge, Solution
 
 _SUMMARY_DELIM = "--- Run summary ---"
 
-# `--theta 0.35` makes distinctness (not feasibility) the binding constraint on
-# the committed fixture: the default --j-max 0.30 returns < N=5 (same regime as
-# test_degradation.py).
-_DEGRADE_THETA = ["--theta", "0.35"]
+# `--theta 0.50` makes feasibility the binding constraint on the committed fixture:
+# only a few routes clear that floor, so the default --j-max 0.30 returns < N=5
+# (same regime as test_degradation.py — see its docstring for why theta, not j-max).
+_DEGRADE_THETA = ["--theta", "0.50"]
 
 # An edge whose endpoints can't exist in any real contracted graph (negative
 # synthetic node ids) → the validator's `graph_membership` check fails, so the
@@ -100,7 +102,7 @@ def test_degraded_path(
     assert returned < requested, f"expected a degraded set (<N), got {out}"
 
     # The degradation explanation (Story 7.4) now lives in the summary's field.
-    deg_m = re.search(r"degradation:\s*Only (\d+) distinct routes satisfy J_max <= 0\.30\.", out)
+    deg_m = re.search(r"degradation:\s*Only (\d+) of \d+ requested routes satisfy the current", out)
     assert deg_m is not None, out
     assert int(deg_m.group(1)) == returned
 

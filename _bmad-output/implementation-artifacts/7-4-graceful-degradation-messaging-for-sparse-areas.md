@@ -4,6 +4,8 @@ Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
+> **Updated by Story 9.3:** the Epic 9 route-discovery fixes made `--j-max` non-binding on the e2e fixture, so the degradation e2e was re-anchored to a feasibility-bound `--theta` regime and `test_relaxed_jmax_produces_more_routes` was renamed `test_relaxed_theta_produces_more_routes`. The AC #2 message below was also made cause-neutral (`Only X of N requested routes satisfy the current constraints (theta=…, J_max <= …); relax --theta or --j-max to admit more.`). The ACs below record 7.4 as shipped; see Story 9.3 for the current regime + message.
+
 ## Story
 
 As a user,

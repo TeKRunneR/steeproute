@@ -117,4 +117,4 @@ development_status:
   epic-9: in-progress        # Route-Discovery Quality (correct-course 2026-06-18); runs before 8-5
   9-1-climb-detection-maximality: review
   9-2-grasp-theta-feasible-prefix-recovery: done
-  9-3-revalidation-golden-rebake-and-doc-sync: backlog
+  9-3-revalidation-golden-rebake-and-doc-sync: done

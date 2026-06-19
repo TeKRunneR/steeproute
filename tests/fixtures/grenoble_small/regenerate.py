@@ -1,5 +1,7 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
-# Reason: same osmnx/networkx boundary as pipeline/osm.py.
+# pyright: reportPrivateUsage=false
+# Reason: same osmnx/networkx boundary as pipeline/osm.py; the regen script reuses
+# `pipeline.osm._OSM_CUSTOM_FILTER` so the fixture matches the real download filter.
 """Regenerate the committed osm_graph.graphml fixture for tests/fixtures/grenoble_small/.
 
 Run from this directory:

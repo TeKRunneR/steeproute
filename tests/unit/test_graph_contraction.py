@@ -212,8 +212,8 @@ def test_minor_road_connector_follows_length_based_reuse_rule() -> None:
     _add_edge_from(g, short_road)
     _add_edge_from(g, long_road)
     # Carry the road highway tag the way the real pipeline does; contraction ignores it.
-    g[0][1][0]["highway"] = "service"
-    g[2][3][0]["highway"] = "residential"
+    g[0][1][0]["highway"] = "service"  # pyright: ignore[reportArgumentType]  # nx int edge key
+    g[2][3][0]["highway"] = "residential"  # pyright: ignore[reportArgumentType]  # nx int edge key
 
     contracted = contract_climbs(g, [], l_connector=_L_CONNECTOR)
 

@@ -1,3 +1,5 @@
+# pyright: reportUnknownMemberType=false
+# Reason: `pytest.approx` is typed as returning a partially-unknown `ApproxBase`.
 """Unit tests for `progress.py` — `ProgressEvent`, `throttle`, and the ETA helper (Story 7.1).
 
 The throttle is exercised with an injected fake clock so its gating is asserted

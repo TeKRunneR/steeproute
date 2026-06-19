@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import networkx as nx
 
-from steeproute.models import Climb, Edge, Solution, SolverParams
+from steeproute.models import Climb, ContractedGraph, Edge, Solution, SolverParams
 from steeproute.pipeline.climbs import detect_climbs
 from steeproute.pipeline.graph import contract_climbs
 from steeproute.pipeline.osm import filter_trails, max_sac_rank, parse_difficulty_cap
@@ -90,7 +90,7 @@ def _build_mixed_difficulty_chain() -> nx.MultiDiGraph:
     return g
 
 
-def _contract_from(graph: nx.MultiDiGraph) -> object:
+def _contract_from(graph: nx.MultiDiGraph) -> ContractedGraph:
     climbs = detect_climbs(
         graph,
         min_climb_slope=_MIN_CLIMB_SLOPE,
@@ -168,7 +168,7 @@ def _edge(u: int, v: int, key: int = 0) -> Edge:
     )
 
 
-def _out_and_back_contracted() -> object:
+def _out_and_back_contracted() -> ContractedGraph:
     """Contracted graph: climb 0→1→2 (super-edge) + its long reverse descent 2→1→0.
 
     The reverse connectors share their undirected `base_segment_id` with the

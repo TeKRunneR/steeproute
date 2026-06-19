@@ -318,7 +318,7 @@ def test_setup_cli_inherits_lat_lon_range_validation() -> None:
     assert "latitude" in result.exception.user_message
 
 
-def test_setup_cli_rejects_nan_radius(tmp_path: pathlib.Path) -> None:
+def test_setup_cli_rejects_nan_radius() -> None:
     """validate_setup_radius rejects non-finite radii (NaN, ±Inf).
 
     `click.FLOAT` accepts the strings "nan", "inf", "-inf" via `float()`. Without

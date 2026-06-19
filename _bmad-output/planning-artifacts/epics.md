@@ -905,6 +905,8 @@ So that Journey 2's sparse-area experience is explicit and preserves the user's 
 **And** a follow-up test `test_relaxed_jmax_produces_more_routes` runs the same query with `--j-max 0.50` on the same prepared cache and asserts: more routes returned (demonstrates iterative re-query); preprocessing cache-hit (fast re-run) — exercising Journey 2's tuning loop
 **And** the degradation explanation appears in each emitted report's metadata block so the user reading a single report can see it was part of a degraded set
 
+> **Updated by Epic 9 (Story 9.3):** the route-discovery fixes (#7, #10) made the solver return a richer, near-disjoint route set, so distinctness (`--j-max`) no longer binds on this small fixture. The degradation e2e was re-anchored to a feasibility-bound regime (`--theta 0.50` degrades; relaxing `--theta` admits more), and `test_relaxed_jmax_produces_more_routes` → `test_relaxed_theta_produces_more_routes`. The message was also made cause-neutral — `Only X of N requested routes satisfy the current constraints (theta=…, J_max <= …); relax --theta or --j-max to admit more.` — since degradation can now be feasibility- *or* distinctness-bound.
+
 ### Story 7.5: Run summary on stdout (FR22)
 
 As a user,
