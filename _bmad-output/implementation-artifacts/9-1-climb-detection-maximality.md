@@ -1,6 +1,6 @@
 # Story 9.1: Climb-detection maximality (review finding #7)
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 

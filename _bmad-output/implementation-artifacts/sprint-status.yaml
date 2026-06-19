@@ -114,7 +114,7 @@ development_status:
   8-4-readme-known-limitations-quickstart-sections: done
   8-5-final-ci-threshold-tightening-and-linux-best-effort-job: backlog  # runs after epic-9 (GRASP-ratio baseline shifts)
 
-  epic-9: in-progress        # Route-Discovery Quality (correct-course 2026-06-18); runs before 8-5
-  9-1-climb-detection-maximality: review
+  epic-9: done        # Route-Discovery Quality (correct-course 2026-06-18); runs before 8-5
+  9-1-climb-detection-maximality: done
   9-2-grasp-theta-feasible-prefix-recovery: done
   9-3-revalidation-golden-rebake-and-doc-sync: done
