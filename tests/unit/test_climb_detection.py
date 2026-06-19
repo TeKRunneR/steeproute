@@ -49,6 +49,75 @@ def _chain_graph(specs: list[tuple[float, float]]) -> nx.MultiDiGraph:
     return g
 
 
+def _steep_chain(node_ids: list[int]) -> nx.MultiDiGraph:
+    """Build a steep linear chain through `node_ids`.
+
+    Each consecutive pair is a 200 m / +100 m edge (per-edge slope 0.50). With
+    `min_climb_ground_length=300`, one edge alone (200 m) is below the floor but
+    two (400 m) clear it — so an orphaned single bottom edge would be dropped.
+    """
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    for u, v in zip(node_ids, node_ids[1:], strict=False):
+        g.add_edge(
+            u,
+            v,
+            key=0,
+            length_m=200.0,
+            d_plus_m=100.0,
+            d_minus_m=0.0,
+            avg_gradient=0.50,
+            sac_scale="hiking",
+        )
+    return g
+
+
+def test_maximal_climb_is_independent_of_node_id_labeling() -> None:
+    """Story 9.1 (review finding #7): maximal climb is labeling-independent.
+
+    The same 3-edge steep chain (each slope 0.50) under two node labelings must
+    yield the same maximal climb, and its steep bottom edge must never be
+    orphaned. Under the old forward-only / seed-order detection, the "bad"
+    labeling — where a mid-chain edge sorts before the bottom edge — seeded
+    mid-first, extended forward only, and dropped the short steep bottom edge
+    (200 m < 300 m floor) into a connector. Fails on pre-fix code (bad labeling
+    returns a 2-edge climb missing the bottom); passes once detection roots the
+    climb at its true bottom via backward extension.
+    """
+    # GOOD: bottom edge has the smallest node id → seeds first under sorted order.
+    good = _steep_chain([0, 1, 2, 3])
+    good_climbs = detect_climbs(
+        good, min_climb_slope=_MIN_CLIMB_SLOPE, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH
+    )
+
+    # BAD: identical topology + metrics, but the bottom edge (10→5) sorts AFTER
+    # the mid edge (5→30) in (u, v, key) order, so the mid edge would seed first.
+    bad = _steep_chain([10, 5, 30, 40])
+    bad_climbs = detect_climbs(
+        bad, min_climb_slope=_MIN_CLIMB_SLOPE, min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH
+    )
+
+    # Both labelings: exactly one maximal climb covering all three edges.
+    assert len(good_climbs) == 1, f"good labeling: {good_climbs}"
+    assert len(bad_climbs) == 1, f"bad labeling: {bad_climbs}"
+    assert len(good_climbs[0].edges) == 3
+    assert len(bad_climbs[0].edges) == 3
+
+    # The steep bottom edge is captured under both labelings (never orphaned).
+    good_ids = {(e.node_u, e.node_v, e.key) for e in good_climbs[0].edges}
+    bad_ids = {(e.node_u, e.node_v, e.key) for e in bad_climbs[0].edges}
+    assert (0, 1, 0) in good_ids
+    assert (10, 5, 0) in bad_ids, "the steep bottom edge the pre-fix code dropped"
+
+    # Edge order is bottom → top even when the seed fell mid-chain.
+    bad_order = [(e.node_u, e.node_v, e.key) for e in bad_climbs[0].edges]
+    assert bad_order == [(10, 5, 0), (5, 30, 0), (30, 40, 0)]
+
+    # Same chain → identical climb aggregates across the two labelings.
+    assert math.isclose(good_climbs[0].length_m, bad_climbs[0].length_m, abs_tol=1e-9)
+    assert math.isclose(good_climbs[0].d_plus_m, bad_climbs[0].d_plus_m, abs_tol=1e-9)
+    assert math.isclose(good_climbs[0].avg_slope, bad_climbs[0].avg_slope, abs_tol=1e-9)
+
+
 def test_flat_road_never_seeds_a_climb() -> None:
     """Story 6.2: ~flat minor roads never form a climb on their own.
 

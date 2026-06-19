@@ -22,14 +22,18 @@ smoothed by stage 6) and attaches four numeric metrics:
 Stage 8 (`detect_climbs`) walks the post-stage-7 MultiDiGraph and emits the
 maximal edge-disjoint contiguous edge-sequences whose cumulative directional
 uphill slope (`d_plus_sum / length_sum`) stays ≥ `min_climb_slope` and whose
-total ground length is ≥ `min_climb_ground_length`. Output is a `list[Climb]`; the input
-graph is never mutated. Stage 9 (graph contraction, Story 3.3) consumes the
-output to build the solver-side `ContractedGraph`.
+total ground length is ≥ `min_climb_ground_length`. Each candidate is grown
+from its seed in *both* directions — backward to the true steep bottom, then
+forward to the top — so the emitted climb is genuinely maximal regardless of
+node-id labeling or seed order (Story 9.1, review finding #7). Output is a
+`list[Climb]`; the input graph is never mutated. Stage 9 (graph contraction,
+Story 3.3) consumes the output to build the solver-side `ContractedGraph`.
 """
 
 from __future__ import annotations
 
 import math
+from collections import deque
 from typing import Any
 
 import networkx as nx
@@ -130,9 +134,20 @@ def detect_climbs(
 
     Walks `graph` and returns the maximal directed edge-sequences whose
     cumulative directional uphill slope (`d_plus_sum / length_sum`) stays
-    `≥ min_climb_slope` from the seed onwards and whose total `length_m` is
+    `≥ min_climb_slope` along the chain and whose total `length_m` is
     `≥ min_climb_ground_length`. Each underlying graph edge appears in at most
     one returned `Climb` — Story 3.3's back-mapping injectivity depends on it.
+
+    Maximality (Story 9.1, review finding #7): each candidate is grown from its
+    seed edge in both directions — first *backward* (prepending the steepest
+    qualifying-as-seed incoming edge until none remains) to root the climb at
+    its true steep bottom, then *forward* to its top. Because every backward
+    edge is itself `≥ min_climb_slope`, every prefix measured from the new
+    bottom stays `≥ min_climb_slope`, so the running-average constraint is
+    preserved without a recheck. This makes the output independent of node-id
+    labeling and seed order: previously a mid-chain edge seeding before the
+    chain's bottom would extend forward only and orphan the (steep) bottom edge,
+    silently demoting a real climb-start to a connector.
 
     Args:
         graph: post-stage-7 MultiDiGraph; every edge must carry the stage-7
@@ -180,10 +195,13 @@ def detect_climbs(
             continue
 
         u, v, _k = seed
-        candidate: list[tuple[int, int, int]] = [seed]
+        # The candidate is grown bottom-first: backward extensions are prepended
+        # (appendleft) so the final tuple runs bottom → top regardless of where
+        # the seed fell in the chain.
+        candidate: deque[tuple[int, int, int]] = deque([seed])
         # Parallel `set` shadow of `candidate` for O(1) membership checks in
-        # the extension picker; without it, `edge_id in candidate` is O(n)
-        # per outgoing edge, giving worst-case O(E² · avg_out_degree).
+        # the extension pickers; without it, `edge_id in candidate` is O(n)
+        # per scanned edge, giving worst-case O(E² · avg_degree).
         candidate_set: set[tuple[int, int, int]] = {seed}
         # Node-monotonicity guard: a candidate climb is a path, not a walk —
         # consumers (Story 3.3 super-edge back-mapping, Story 3.6 solver
@@ -194,8 +212,38 @@ def detect_climbs(
         visited_nodes: set[int] = {u, v}
         cum_d_plus: float = seed_data["d_plus_m"]
         cum_length: float = seed_data["length_m"]
-        head: int = v
 
+        # Backward phase: walk to the true bottom by prepending the steepest
+        # qualifying-as-seed incoming edge. Each prepended edge is itself
+        # `≥ min_climb_slope`, so every prefix measured from the new bottom
+        # stays `≥ min_climb_slope` (weighted average of two `≥ θ` quantities)
+        # — no running-average recheck is needed here.
+        bottom: int = u
+        while True:
+            back = _pick_steepest_backward(
+                graph,
+                edge_data,
+                bottom,
+                min_climb_slope,
+                consumed,
+                candidate_set,
+                visited_nodes,
+            )
+            if back is None:
+                break
+            a, _b, _kk = back
+            bd = edge_data[back]
+            cum_d_plus += bd["d_plus_m"]
+            cum_length += bd["length_m"]
+            bottom = a
+            candidate.appendleft(back)
+            candidate_set.add(back)
+            visited_nodes.add(a)
+
+        # Forward phase: greedy-steepest continuation keeping the cumulative
+        # running-average `≥ min_climb_slope`. The cumulative already includes
+        # any backward edges, so the forward semantics are unchanged.
+        head: int = v
         while True:
             extension = _pick_steepest_extension(
                 graph,
@@ -283,6 +331,46 @@ def _pick_steepest_extension(
         if new_avg < min_climb_slope:
             continue
         slope: float = ed["d_plus_m"] / length
+        if slope > best_slope:
+            best_slope = slope
+            best = edge_id
+    return best
+
+
+def _pick_steepest_backward(
+    graph: nx.MultiDiGraph,
+    edge_data: dict[tuple[int, int, int], dict[str, Any]],
+    bottom: int,
+    min_climb_slope: float,
+    consumed: set[tuple[int, int, int]],
+    candidate_set: set[tuple[int, int, int]],
+    visited_nodes: set[int],
+) -> tuple[int, int, int] | None:
+    """Steepest qualifying-as-seed incoming edge to `bottom`, or `None`.
+
+    Used to root a climb at its true steep bottom (Story 9.1). An edge
+    `(a, bottom, k)` is a valid backward extension iff it is unconsumed, not
+    already in the candidate, its source node `a` is not already on the
+    candidate's path (node-monotonicity), and it qualifies as a seed on its own
+    (`d_plus_m / length_m ≥ min_climb_slope`). Requiring per-edge qualification
+    — rather than a running-average check — keeps every prefix from the new
+    bottom `≥ min_climb_slope` (a climb only ever *starts* at a steep edge,
+    mirroring `_qualifies_as_seed`). Deterministic tie-break on `(node_u, key)`
+    via the sorted iteration order (FR29).
+    """
+    best: tuple[int, int, int] | None = None
+    best_slope: float = -math.inf
+    for in_edge in sorted(graph.in_edges(bottom, keys=True)):
+        a, b, kk = in_edge
+        edge_id: tuple[int, int, int] = (a, b, kk)
+        if edge_id in consumed or edge_id in candidate_set:
+            continue
+        if a in visited_nodes:
+            continue
+        ed = edge_data[edge_id]
+        if not _qualifies_as_seed(ed, min_climb_slope):
+            continue
+        slope: float = ed["d_plus_m"] / ed["length_m"]
         if slope > best_slope:
             best_slope = slope
             best = edge_id

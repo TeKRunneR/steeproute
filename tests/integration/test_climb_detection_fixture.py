@@ -9,7 +9,8 @@ terrain — 468 nodes, 1208 edges; see `test_pipeline_end_to_end.py`).
 The baselines below are **regression snapshots**, not independently-derived
 topology bounds. They were recorded by running the current `detect_climbs`
 against the committed fixture once during Story 3.2 dev (then re-recorded
-after the post-review node-monotonicity fix). Sanity-check against topology:
+after the post-review node-monotonicity fix, and again after Story 9.1's
+maximality fix rooted climbs at their true steep bottoms). Sanity-check against topology:
 the Le Sappey bbox spans Chamechaude's south flank, Col de Porte approaches,
 and the La Pinéa ridge — a handful of major ascents plus dozens of local
 hill sections, broadly consistent with the recorded climb count. But the
@@ -47,14 +48,16 @@ _DEM_FIXTURE_PATH = _FIXTURE_DIR / "dem.tif"
 _MIN_CLIMB_SLOPE = 0.20
 _MIN_CLIMB_GROUND_LENGTH_M = 300.0
 
-# Regression-snapshot baselines: the climb count and total D+ recorded the
-# first time the (current) `detect_climbs` ran against the committed fixture.
-# These are not independently topology-derived — see module docstring. The
-# ±10 % drift band absorbs OSM / DEM regeneration noise, not algorithm
-# changes; an algorithm change that shifts these is intentional and
-# requires re-recording the baselines.
-_BASELINE_CLIMB_COUNT = 50
-_BASELINE_TOTAL_D_PLUS_M = 8065.5
+# Regression-snapshot baselines: the climb count and total D+ recorded by
+# running the (current) `detect_climbs` against the committed fixture. These
+# are not independently topology-derived — see module docstring. The ±10 %
+# drift band absorbs OSM / DEM regeneration noise, not algorithm changes; an
+# algorithm change that shifts these is intentional and requires re-recording
+# the baselines. Story 9.1's maximality fix (climbs now rooted at their true
+# steep bottoms via backward extension) re-rooted several chains, dropping the
+# count from 50 → 45 and total D+ from 8065.5 → 7731.1 m.
+_BASELINE_CLIMB_COUNT = 45
+_BASELINE_TOTAL_D_PLUS_M = 7731.1
 _DRIFT_TOLERANCE = 0.10
 
 
