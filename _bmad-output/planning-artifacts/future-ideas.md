@@ -4,29 +4,11 @@ Running backlog of post-v1 improvements. Low-friction: append new ideas to the b
 
 Format per idea: a short title, what it does, and any notes on rationale or approach.
 
----
-
-## 1. Flag to force routes to start at a road/trail junction
-
-Add a flag that constrains route start points to junctions between a road and a trail (rather than any node in the graph).
-
-**Why:** practical starting points — where you'd realistically park or transition from road onto trail.
+> **Promoted 2026-06-25:** the former items #1 (start-at-junction flag) and #2 (direction-aware max-descent-slope flag) were pulled into v1 as **Epic 10 — Practical Route Constraints** (see `sprint-change-proposal-2026-06-25-junction-start-and-descent-cap.md`). Remaining items renumbered.
 
 ---
 
-## 2. Maximum descent-slope flag (direction-aware)
-
-Add a flag capping the slope of *descents*. A downhill trail above ~40% average slope is unpleasant; above ~50–60% it gets dangerous — yet the same segment is fine going *up*.
-
-**Behavior:** a route may only include a segment in the descending direction if its average slope (over a configurable distance window) stays at or below the threshold *measured in the uphill direction*. Segments too steep to descend safely remain eligible as climbs.
-
-**Notes:**
-- Direction-aware constraint — distinct from the existing route-level average-slope floor (FR3) and climb-detection threshold (FR3b), which are about minimums, not descent maximums.
-- Needs a distance window for the running average, similar to climb detection.
-
----
-
-## 3. Strategies for feasible search over larger areas
+## 1. Strategies for feasible search over larger areas
 
 Make searching large areas tractable within a reasonable time budget. Fuzzy/wide item — an umbrella for time-vs-area scaling techniques rather than one feature.
 

@@ -67,6 +67,11 @@ This document provides the complete epic and story breakdown for bmad-test (prod
 - FR29: User can supply an explicit random seed that, together with identical inputs and code version, produces identical output route edge-sets; the seed used is recorded in each HTML report's metadata and in each JSON sidecar.
 - FR30: System uses distinct exit codes for success, validation failure, pre-execution error, and user interrupt.
 
+**Practical-Route Constraints (opt-in; promoted from future-ideas 2026-06-25)**
+
+- FR31: User can constrain a returned route's start endpoint to a road/trail junction (a node incident to both an admitted road/connector and a trail) via an opt-in flag. Default off.
+- FR32: User can configure a direction-aware maximum descent slope — a route may descend a segment only if its windowed uphill-measured slope stays at or below the threshold, while the segment remains eligible as a climb. Opt-in; default off.
+
 ### NonFunctional Requirements
 
 **Performance**
@@ -184,6 +189,8 @@ Not applicable — CLI-only project, no UI. UX Design spec deliberately omitted 
 | FR28 (exit code + write-to-disk) | Epic 3 | Exit-code coupling from `ValidatedRouteSet` |
 | FR29 (seed reproducibility) | Epic 3 | `numpy.random.Generator` threading + metadata surfacing |
 | FR30 (distinct exit codes) | Epic 1 (scaffolding) / Epic 3 (code 1) / Epic 7 (code 130) | `run_entry_point` wrapper + feature-specific returns |
+| FR31 (start-at-junction, opt-in) | Epic 10 | Junction annotation (Stage 9) + GRASP/oracle seed restriction + validator |
+| FR32 (direction-aware descent cap, opt-in) | Epic 10 | Windowed descent metric + GRASP/oracle descent feasibility + validator |
 
 **NFR coverage:**
 
@@ -1016,7 +1023,7 @@ So that Epic 8's quality commitments are enforceable in CI and the repo can cred
 **And** the Linux job is marked `continue-on-error: true` (Linux failures visible in CI summary but not merge-gating per NFR8's "best-effort, not actively tested" stance) — unless it turns out Linux runs clean, in which case the flag is omitted and Linux gates fully
 **And** `README.md` (dev-notes section) documents the CI gates — coverage thresholds, GRASP-ratio gate, regression-golden zero-tolerance, metamorphic pass-required — with a sentence linking each gate to the PRD/Architecture commitment it enforces
 
-> **Sequencing (correct-course 2026-06-18):** Story 8.5 runs **after Epic 9**. Epic 9's θ-prefix-recovery fix (Story 9.2, review finding #10) raises the GRASP-vs-exhaustive baseline, so the `QUALITY_THRESHOLD` revisit above must be done against the post-Epic-9 ratio. The coverage-threshold and Linux-job parts of 8.5 are independent of Epic 9.
+> **Sequencing (correct-course 2026-06-18, updated 2026-06-25):** Story 8.5 runs **after Epic 10**. Epic 9's θ-prefix-recovery fix (Story 9.2, review finding #10) raises the GRASP-vs-exhaustive baseline, so the `QUALITY_THRESHOLD` revisit above must be done against the post-Epic-9 ratio. Epic 10 (correct-course 2026-06-25) adds two opt-in constraints that do **not** shift the baseline (their flags are off in the gate fixtures), but 8.5 should additionally pin Epic 10's two new flag-on golden fixtures into its regression set. The coverage-threshold and Linux-job parts of 8.5 are independent of both epics.
 
 ## Epic 9: Route-Discovery Quality (Climb Maximality & θ-Prefix Recovery)
 
@@ -1061,3 +1068,36 @@ So that the suite reflects the corrected behavior and Story 8.5 can tighten the 
 **Then** the full suite passes on Windows (default tier) and the realistic tier passes via `uv run pytest -m slow`
 **And** Story 3.7's `QUALITY_THRESHOLD` is left unchanged here (its tightening is Story 8.5's job, now sequenced after this epic)
 **And** an optional `bmad-checkpoint-preview` on a real Grenoble area confirms climbs root at their true bottoms and the returned route set improved
+
+## Epic 10: Practical Route Constraints (Junction Start & Descent Cap)
+
+Promote `future-ideas.md` items #1 and #2 into v1 as two opt-in route-practicality constraints, ahead of final release polish (Story 8.5). `--start-at-junction` (FR31) forces a route's start endpoint to a road/trail junction — where you'd realistically park or step onto the trail. `--max-descent-slope` (FR32) is a direction-aware cap that forbids descending a segment steeper than the threshold (windowed, uphill-measured) while leaving it eligible as a climb — so routes don't bomb down dangerous grades. Both default **off**, so default-parameter output is byte-identical to today and the existing regression goldens do not rebake; each feature instead adds a new golden pinning its flag on. Inserted via correct-course 2026-06-25 (`sprint-change-proposal-2026-06-25-junction-start-and-descent-cap.md`); no epic renumber; runs before Story 8.5.
+
+**FRs covered:** FR31, FR32.
+
+### Story 10.1: Junction-start constraint (FR31)
+
+As a user,
+I want an opt-in flag that forces a route's start endpoint to a road/trail junction,
+So that the surfaced route idea begins where I'd realistically park or step onto the trail.
+
+**Acceptance Criteria:**
+
+**Given** the contracted graph already distinguishes connectors (roads) from trails but marks no node as a road/trail junction, and GRASP may seed a walk anywhere
+**When** I annotate junction nodes at contraction (Stage 9) and, under `--start-at-junction`, restrict GRASP seeding and the exhaustive oracle's walk-starts to junction nodes — adding start-endpoint-is-junction to the validated constraint set (FR26/FR27/FR28), wiring FR12 messaging when the constraint limits results below N, and preserving FR29 determinism and one shared feasible set
+**Then** with the flag off, default output is byte-identical to today and the existing default-param goldens (both tiers) match without rebake
+**And** with the flag on, every returned route starts at a junction node — pinned by a new flag-on golden fixture — and a route whose start isn't a junction is banner-flagged with the non-zero exit code
+
+### Story 10.2: Direction-aware descent-slope cap (FR32)
+
+As a user,
+I want an opt-in cap that refuses to descend a segment steeper than a threshold while still letting routes climb that segment,
+So that returned routes don't bomb down dangerous grades.
+
+**Acceptance Criteria:**
+
+**Given** the edge-attribute contract has per-edge metrics but no descent-governing windowed slope, and the reuse model is undirected
+**When** I precompute a per-base-segment steepest windowed uphill-measured gradient (`max_windowed_descent_grad`), make GRASP construction and the exhaustive oracle reject any descending traversal exceeding `--max-descent-slope` (uphill unconstrained; a super-edge taken in reverse treated as a descent), add no-segment-descended-above-cap to the validated set (FR26/FR27/FR28), and keep FR29 determinism with one shared feasible set
+**Then** with the flag off, output is byte-identical to today and the existing default-param goldens (both tiers) match without rebake
+**And** with the flag on, no returned route descends an over-cap segment though it stays eligible as a climb — pinned by a new flag-on golden fixture — and a new metamorphic invariant (relax `--max-descent-slope` → best objective monotone non-decreasing) passes alongside the existing eight
+**And** the Epic 10 closeout is folded in here: re-validate the metamorphic suite and the Story 3.7 GRASP-vs-exhaustive gate (expected unchanged — flags off in those fixtures), sync PRD/architecture docs, and an optional `bmad-checkpoint-preview` on a real Grenoble area confirms sensible junction starts and avoided steep descents

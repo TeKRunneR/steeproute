@@ -357,6 +357,8 @@ All configuration via CLI flags. No config file in v1 (N=1, flag count manageabl
 | `--n` | 5 | Target result count |
 | `--area-cap` | ~500 km² | Hard area-size cap |
 | `--untagged-trails` | `include` | Policy for OSM trails without sac_scale |
+| `--start-at-junction` | off | Constrain each route's start endpoint to a road/trail junction (FR31) |
+| `--max-descent-slope` | off (None) | Direction-aware cap: forbid descending a segment whose windowed uphill slope exceeds this, while it stays eligible as a climb (FR32). Distance-window sub-parameter finalized during implementation. |
 | `--elevation-smoothing` | (meters; tuned) | Strength of the global elevation smoothing (graph-Laplacian diffusion), in meters — one canonical profile feeds solver, metric box, and plotted curve |
 | `--elevation-deadband` | 0 (off) | Hysteresis floor (m): flattens sub-floor up/down reversals out of the elevation profile, reshaping which segments clear the slope thresholds (a route-selection control, not a noise reducer) |
 
@@ -528,6 +530,11 @@ These are load-bearing for portfolio credibility. A feature-lean v1 is defensibl
 
 - **FR29**: User can supply an explicit random seed that, together with identical inputs and code version, produces identical output route edge-sets; the seed used is recorded in each HTML report's metadata and in each JSON sidecar.
 - **FR30**: System uses distinct exit codes for success, validation failure, pre-execution error, and user interrupt.
+
+### Practical-Route Constraints (opt-in; promoted from future-ideas 2026-06-25)
+
+- **FR31**: User can constrain a returned route's **start endpoint** to a road/trail junction — a node incident to both an admitted road/connector and a trail — via an opt-in flag. When unset (default), route start points are unconstrained.
+- **FR32**: User can configure a **direction-aware maximum descent slope**: a route may traverse a segment in the **descending** direction only if its average slope, measured uphill over a configurable distance window, stays at or below the threshold; the same segment remains eligible as a **climb** (uphill). Opt-in; when unset (default), descents are unconstrained.
 
 ## Non-Functional Requirements
 

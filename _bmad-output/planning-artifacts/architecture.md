@@ -251,7 +251,7 @@ Exact file names within `pipeline/` and `solver/` are placeholders; adjust durin
 | 6 | Elevation smoothing — global graph-Laplacian diffusion over the whole vertex field (each graph node a single shared variable) + optional deadband as a profile transform; **runs query-side** (see 3b) | `pipeline/smoothing.py` |
 | 7 | Per-edge metrics (L, D+, D−, gradient) | `pipeline/climbs.py` |
 | 8 | Climb detection (parameter-dependent: `min_climb_slope`, `min_climb_ground_length`) | `pipeline/climbs.py` |
-| 9 | Climb-graph contraction (climbs → super-edges; **all** connectors retained and tagged with an undirected `base_segment_id` + a `reusable` flag = `length_m < l_connector`; super-edges carry the base-segment-id set of the edges they contract) | `pipeline/graph.py` |
+| 9 | Climb-graph contraction (climbs → super-edges; **all** connectors retained and tagged with an undirected `base_segment_id` + a `reusable` flag = `length_m < l_connector`; super-edges carry the base-segment-id set of the edges they contract; each node tagged `is_road_trail_junction` = incident to both a connector and a trail — feeds FR31) | `pipeline/graph.py` |
 
 **Stage boundary style (3a):** each stage is `def stage(input_graph, config) -> output_graph`. Orchestrator wires them: `g = osm_load(area); g = filter_trails(g, cfg); g = smooth_polylines(g); ...`. Pure functions → clean unit-test targets with fixture inputs, BasedPyright-friendly, easy to cache at any boundary.
 
@@ -263,6 +263,7 @@ Exact file names within `pipeline/` and `solver/` are placeholders; adjust durin
 - `vertices_resampled` — list of `(lat, lon, elevation_m)` tuples; cached with **raw** post-stage-5 elevations, smoothed query-side (stage 6) into the single canonical profile
 - `length_m`, `d_plus_m`, `d_minus_m`, `avg_gradient` — computed query-side in stage 7 as the naive up/down sum of that one canonical profile (the metric box, the solver objective, and the plotted curve all derive from it — no separate per-edge vs. continuous smoothing)
 - `sac_scale`, `highway`, `osm_way_id` — source attributes from OSM
+- `max_windowed_descent_grad` — steepest uphill-measured running-average gradient over a configurable distance window along the base segment; parameter-independent, governs FR32 descent feasibility (compared against `--max-descent-slope` only when that flag is set)
 
 Structured stage inputs/outputs (beyond simple tuples) use dataclasses declared in `models.py`. No custom graph wrapper.
 
@@ -412,6 +413,8 @@ class TopNTracker:
 
 GRASP iteration feeds each candidate through `tracker.consider(...)`. Jaccard-overlap policy is the tracker's concern, not the solver's — testable independently against known-conflicting route pairs.
 
+**Opt-in construction constraints (Epic 10, FR31/FR32):** two optional, default-off constraints narrow the construction feasibility set when their flags are supplied. `--start-at-junction` restricts seed nodes to `is_road_trail_junction` nodes (annotated at Stage 9). `--max-descent-slope` forbids extending the walk by a *descending* traversal whose `max_windowed_descent_grad` exceeds the cap (uphill traversal unconstrained; a super-edge taken in reverse is a descent). Both must stay deterministic (FR29) and apply identically in the exhaustive oracle so GRASP and the oracle enumerate one shared feasible set. With both flags unset, construction is byte-identical to today.
+
 **Termination (5e):** the solver's `run()` loop exits on any of:
 
 | Condition | Trigger | `convergence_status` |
@@ -517,6 +520,8 @@ CLI calls `validate(...)`; the underlying per-route and set-level functions are 
 | Edge-reuse limit (undirected, base-segment; short connectors `< --l-connector` exempt) | `--l-connector` | per-route |
 | Graph membership (every edge in operational graph) | derived | per-route (sanity) |
 | Pairwise Jaccard ≤ J_max (keyed on the undirected base-segment identity, same as reuse) | `--j-max` | set-level |
+| Start endpoint is a road/trail junction (only when flag set) | `--start-at-junction` | per-route (FR31) |
+| No segment descended above the cap (windowed uphill slope; only when flag set; uphill unconstrained) | `--max-descent-slope` | per-route (FR32) |
 
 ### Category 7 — Inter-CLI contract
 
@@ -903,6 +908,8 @@ steeproute/                              # repo root (currently `bmad-test/`; re
 | FR28 — exit code + write-to-disk | `cli/query.py` + `output.py` |
 | FR29 — seed reproducibility | `solver/grasp.py` (RNG threading) + `output.py` + `cli/_shared.py` (`--seed`) |
 | FR30 — exit codes | `cli/_shared.py` (`run_entry_point`) + `errors.py` |
+| FR31 — start-at-junction (opt-in) | `pipeline/graph.py` (junction annotation) + `solver/grasp.py` (seed restriction) + oracle + `validator.py` |
+| FR32 — direction-aware descent cap (opt-in) | metrics stage (`max_windowed_descent_grad`) + `solver/grasp.py` (descent feasibility) + oracle + `validator.py` |
 
 ### Internal data flow
 
@@ -1096,6 +1103,8 @@ Architecture introduced CLI flags not enumerated in the PRD, fulfilling architec
 | `--force-refresh` | Cat 4b | Rebuild cache entry despite key match |
 | `--osm-age-warn-days N` | Cat 4f | OSM-staleness warning threshold |
 | `--dem-version TAG` | Cat 4b | Explicit DEM version tag for cache keying (overrides the IGN-layer default) |
+| `--start-at-junction` | Epic 10 (FR31) | Constrain route start endpoint to a road/trail junction (opt-in) |
+| `--max-descent-slope` | Epic 10 (FR32) | Direction-aware descent-slope cap, windowed (opt-in) |
 
 Total flag surface after additions ~22–25 across both CLIs — still below the PRD's threshold of ~25 for reconsidering a config file.
 
