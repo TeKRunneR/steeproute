@@ -56,7 +56,12 @@ from __future__ import annotations
 import networkx as nx
 
 from steeproute.models import Climb, ContractedGraph, Edge
-from steeproute.pipeline.osm import SAC_SCALE_RANK, max_sac_rank
+from steeproute.pipeline.osm import (
+    SAC_SCALE_RANK,
+    has_road_highway,
+    has_trail_highway,
+    max_sac_rank,
+)
 
 # Inverse of `SAC_SCALE_RANK` for aggregating super-edge `sac_scale`: given the
 # maximum rank across a climb's edges, look up the canonical SAC name string.
@@ -69,6 +74,7 @@ def contract_climbs(
     climbs: list[Climb],
     l_connector: float,
     split_at_junctions: bool = True,
+    annotate_junctions: bool = False,
 ) -> ContractedGraph:
     """Stage 9: build the solver-side `ContractedGraph` from stage-8 climbs.
 
@@ -107,6 +113,11 @@ def contract_climbs(
         split_at_junctions: when `True` (default), split each climb at its
             interior trail junctions (one super-edge per sub-segment); when
             `False`, emit one atomic super-edge per climb.
+        annotate_junctions: when `True`, tag every surviving node with
+            `is_road_trail_junction` (FR31, Story 10.1) — an O(E) pass the
+            solver/oracle/validator consult only under `--start-at-junction`.
+            Default `False` so the common (flag-off) query skips the work
+            entirely; the CLI passes `params.start_at_junction`.
 
     Returns:
         `ContractedGraph` whose `graph` is a fresh `MultiDiGraph` (climb
@@ -198,7 +209,66 @@ def contract_climbs(
     # none can have degree 0. Climb-internal nodes are absorbed into the
     # super-edge and simply never added unless a surviving connector touches
     # them.
+
+    # Road/trail junction annotation (Story 10.1, FR31): tag each surviving node
+    # `is_road_trail_junction` only when `--start-at-junction` is in play
+    # (`annotate_junctions`). It is an O(E) pass nothing reads otherwise, so the
+    # common flag-off query skips it. Deterministic, no RNG.
+    if annotate_junctions:
+        _annotate_junctions(contracted, super_edge_to_base)
     return ContractedGraph(graph=contracted, super_edge_to_base=super_edge_to_base)
+
+
+def is_junction_node(graph: ContractedGraph, node: int) -> bool:
+    """Single source of the road/trail junction read predicate (FR31, Story 10.1).
+
+    The seed pool (`solver.grasp`), the oracle's walk-starts
+    (`tests/integration/exhaustive_oracle.py`), and the validator
+    (`validator._validate_edges`) all gate on this one predicate, so they stay on
+    one feasible set — the same single-sourcing discipline `solver.reuse` applies
+    to the reuse rule. Reads `False` for a missing node or a graph that was built
+    without `annotate_junctions=True` (fail closed).
+    """
+    return node in graph.graph.nodes and graph.graph.nodes[node].get(
+        "is_road_trail_junction", False
+    )
+
+
+def _annotate_junctions(
+    contracted: nx.MultiDiGraph,
+    super_edge_to_base: dict[tuple[int, int, int], tuple[Edge, ...]],
+) -> None:
+    """Set `is_road_trail_junction` on every node of the freshly-built contracted graph.
+
+    A node is a road/trail junction (FR31) iff it is incident — in *either*
+    direction — to **both** a minor road and a trail. The two senses are tested
+    *independently* on each incident edge's `highway` tags (`has_road_highway` /
+    `has_trail_highway`), so a mixed `["service", "footway"]` way counts as both —
+    `classify_highway`'s "trails win" verdict would have hidden its road side and
+    silently dropped a genuine junction from the seed pool. A super-edge (a climb,
+    identified by `super_edge_to_base` membership) carries no `highway` key, so its
+    trail status comes from membership alone.
+
+    One pass over the directed edges (each visited once): an incident edge marks
+    *both* its endpoints, since incidence is undirected. Writes the attribute on
+    `contracted` only — never on `base_graph` (purity); `contracted` is owned by
+    `contract_climbs`. Set on *every* node (False for pure-road / pure-trail nodes)
+    so the attribute always exists for `is_junction_node`'s `.get(..., False)`.
+    """
+    has_road: set[int] = set()
+    has_trail: set[int] = set()
+    for u, v, k, data in contracted.edges(keys=True, data=True):
+        if (u, v, k) in super_edge_to_base:
+            has_trail.update((u, v))
+            continue
+        highway = data.get("highway")
+        if has_trail_highway(highway):
+            has_trail.update((u, v))
+        if has_road_highway(highway):
+            has_road.update((u, v))
+    junctions = has_road & has_trail
+    for node in contracted.nodes:
+        contracted.nodes[node]["is_road_trail_junction"] = node in junctions
 
 
 def _split_climb_at_junctions(

@@ -45,7 +45,9 @@ _DIFFICULTY_CAP = "T3"  # rank 3
 _J_MAX = 0.30
 
 
-def _params(*, theta: float = _THETA, j_max: float = _J_MAX) -> SolverParams:
+def _params(
+    *, theta: float = _THETA, j_max: float = _J_MAX, start_at_junction: bool = False
+) -> SolverParams:
     """`SolverParams` carrying only the fields the validator reads."""
     return SolverParams(
         theta=theta,
@@ -61,6 +63,7 @@ def _params(*, theta: float = _THETA, j_max: float = _J_MAX) -> SolverParams:
         iter_budget=100,
         time_budget=60.0,
         stagnation_iters=0,
+        start_at_junction=start_at_junction,
     )
 
 
@@ -447,3 +450,54 @@ def test_validate_route_does_not_mutate_inputs() -> None:
 
     assert route.edges == before
     assert len(graph.super_edge_to_base) == 1  # graph untouched
+
+
+# ----------------------------------------------------------------------------
+# FR31 — start-at-junction (only when params.start_at_junction is set)
+# ----------------------------------------------------------------------------
+
+
+def _mark_junctions(graph: ContractedGraph, junction_nodes: set[int]) -> None:
+    """Tag `is_road_trail_junction` on every node (True only for `junction_nodes`).
+
+    Mirrors `pipeline.graph._annotate_junctions`' contract: the attribute is set
+    on every node, so the validator's `.get(..., False)` never falls back.
+    """
+    for node in graph.graph.nodes:
+        graph.graph.nodes[node]["is_road_trail_junction"] = node in junction_nodes
+
+
+def test_start_at_junction_flagged_when_start_not_a_junction() -> None:
+    """With the flag on, a route starting at a non-junction node is flagged."""
+    edges = [_edge(0, 1)]
+    graph = _graph(edges, super_ids={(0, 1, 0)})
+    _mark_junctions(graph, junction_nodes=set())  # node 0 is NOT a junction
+
+    result = validate_route(_route(edges), graph, _params(start_at_junction=True))
+
+    assert result.passed is False
+    flagged = [v for v in result.violations if v.constraint_id == "start_at_junction"]
+    assert len(flagged) == 1
+    assert flagged[0].numeric == {"observed": 0.0, "required": 1.0}
+
+
+def test_start_at_junction_passes_when_start_is_a_junction() -> None:
+    """With the flag on, a route starting at a junction node passes the check."""
+    edges = [_edge(0, 1)]
+    graph = _graph(edges, super_ids={(0, 1, 0)})
+    _mark_junctions(graph, junction_nodes={0})  # start node 0 IS a junction
+
+    result = validate_route(_route(edges), graph, _params(start_at_junction=True))
+
+    assert not [v for v in result.violations if v.constraint_id == "start_at_junction"]
+
+
+def test_start_at_junction_not_checked_when_flag_off() -> None:
+    """With the flag off (default), the start node is never constrained."""
+    edges = [_edge(0, 1)]
+    graph = _graph(edges, super_ids={(0, 1, 0)})
+    _mark_junctions(graph, junction_nodes=set())  # not a junction — but flag is off
+
+    result = validate_route(_route(edges), graph, _params())
+
+    assert not [v for v in result.violations if v.constraint_id == "start_at_junction"]

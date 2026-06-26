@@ -45,6 +45,14 @@ a *solver* bug, not a validator one):
   replacing the earlier directed edge-simple re-check.
 - **Graph membership** is a sanity check that every route edge exists in the
   operational contracted graph.
+- **Start-at-junction** (FR31, Story 10.1) is checked only when
+  `params.start_at_junction` is set: the route's start endpoint
+  (`edges[0].node_u`) must be a road/trail junction node (via the shared
+  `pipeline.graph.is_junction_node` predicate). This *is* the enforcement of
+  FR31 — the GRASP/oracle seed-pool restriction is only an efficiency prune — so
+  the check holds independent of how the route was built; a failure flags the
+  route via the FR27 banner / FR28 exit-code path. Off by default → no effect on
+  default-parameter output.
 
 Jaccard identity is single-sourced from `solver/distinctness.py` (routes are
 wrapped as transient `Solution`s and fed to `jaccard_distance`) so set-level
@@ -72,6 +80,7 @@ from steeproute.models import (
     ValidatedRouteSet,
     route_avg_gradient,
 )
+from steeproute.pipeline.graph import is_junction_node
 from steeproute.pipeline.osm import max_sac_rank, parse_difficulty_cap
 from steeproute.solver.distinctness import jaccard_distance
 from steeproute.solver.reuse import (
@@ -164,7 +173,7 @@ def validate(
 def _validate_edges(
     edges: list[Edge] | tuple[Edge, ...], graph: ContractedGraph, params: SolverParams
 ) -> RouteValidation:
-    """Run the four per-route constraint checks over an edge sequence.
+    """Run the per-route constraint checks over an edge sequence.
 
     Shared by `validate_route` (public, takes a `Route`) and `validate` (builds
     the `Route` from a `Solution`) so neither hits the frozen-dataclass
@@ -192,6 +201,29 @@ def _validate_edges(
                 numeric={"observed": avg_gradient, "required": params.theta},
             )
         )
+
+    # Start-at-junction (FR31, Story 10.1): only when `--start-at-junction` is
+    # active. This is the *enforcement* of the constraint — the GRASP seed-pool
+    # restriction is only an efficiency prune. The route's start endpoint is
+    # `edges[0].node_u`; it must be a road/trail junction node, checked through
+    # the shared `is_junction_node` predicate (the same one the solver/oracle
+    # prune on, so a GRASP-admitted route passes). The check is independent of how
+    # the route was built, so it still catches a non-junction start if the solver
+    # ever changed to prepend or reorder edges. `is_junction_node` reads `False`
+    # for a missing node (fail closed; also caught by `graph_membership` below).
+    if params.start_at_junction and edges:
+        start_node = next(iter(edges)).node_u
+        if not is_junction_node(graph, start_node):
+            violations.append(
+                ConstraintViolation(
+                    constraint_id="start_at_junction",
+                    detail=(
+                        f"route start endpoint (node {start_node}) is not a road/trail "
+                        f"junction, but --start-at-junction is set"
+                    ),
+                    numeric={"observed": 0.0, "required": 1.0},
+                )
+            )
 
     # Per-edge checks run over *distinct* edge identities (first occurrence
     # preserved for deterministic order): a reused edge is one bad edge, not

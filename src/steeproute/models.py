@@ -165,7 +165,7 @@ class ContractedGraph:
 
 @dataclass(frozen=True, slots=True)
 class SolverParams:
-    """The 13 parameters every query records in its HTML/JSON metadata block (Architecture §Cat 9).
+    """The 14 parameters every query records in its HTML/JSON metadata block (Architecture §Cat 9).
 
     Field names match the CLI flag names verbatim so they double as the
     JSON-sidecar field names (`snake_case` per Architecture §"Serialization
@@ -197,6 +197,12 @@ class SolverParams:
     - `time_budget`: wall-clock ceiling in seconds (Epic 4 termination).
     - `stagnation_iters`: consecutive-stagnant-iterations threshold; `0`
       disables (Architecture §Cat 5e).
+    - `start_at_junction`: opt-in FR31 flag (default off). When `True`, GRASP
+      seeds construction and the exhaustive oracle starts walks only at
+      road/trail junction nodes (`is_road_trail_junction`, tagged at stage 9),
+      and the validator flags any route whose start endpoint isn't a junction.
+      Default off → byte-identical default output. Defaulted last so existing
+      positional constructions stay valid.
     """
 
     theta: float
@@ -212,6 +218,7 @@ class SolverParams:
     iter_budget: int
     time_budget: float
     stagnation_iters: int
+    start_at_junction: bool = False
 
 
 @dataclass(frozen=True, slots=True)

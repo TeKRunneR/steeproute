@@ -274,6 +274,32 @@ def classify_highway(value: object) -> str | None:
     return None
 
 
+def has_trail_highway(value: object) -> bool:
+    """True iff `value` carries any trail tag (`TRAIL_HIGHWAY_TAGS`).
+
+    Unlike `classify_highway`, this is an *independent presence* test, not a
+    mutually-exclusive verdict: a mixed `["service", "footway"]` is both a road
+    and a trail, so it answers `True` here and `True` to `has_road_highway`. The
+    junction test (FR31, `pipeline.graph._annotate_junctions`) needs both senses
+    separately, which `classify_highway`'s "trails win" tie-break would hide.
+    """
+    tags, _ = _highway_tags(value)
+    return any(t in TRAIL_HIGHWAY_TAGS for t in tags)
+
+
+def has_road_highway(value: object) -> bool:
+    """True iff `value` carries any minor-road tag (`MINOR_ROAD_HIGHWAY_TAGS`).
+
+    Independent presence test (see `has_trail_highway`): a mixed road+trail way
+    answers `True` to both. No `had_non_str` veto — every edge that survived
+    `filter_trails` into the contracted graph is already a clean trail or a clean
+    minor road, so the conservative veto `classify_highway` applies at admission
+    time has nothing left to reject here.
+    """
+    tags, _ = _highway_tags(value)
+    return any(t in MINOR_ROAD_HIGHWAY_TAGS for t in tags)
+
+
 def max_sac_rank(value: object) -> int | None:
     """Return the most-demanding SAC rank for a sac_scale value, or None if unknown.
 

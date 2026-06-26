@@ -67,6 +67,7 @@ from __future__ import annotations
 from typing import Any
 
 from steeproute.models import ContractedGraph, Edge, Solution, SolverParams, route_avg_gradient
+from steeproute.pipeline.graph import is_junction_node
 from steeproute.pipeline.osm import max_sac_rank, parse_difficulty_cap
 from steeproute.solver.distinctness import TopNTracker
 from steeproute.solver.reuse import (
@@ -116,7 +117,18 @@ def enumerate_best(
     # construction (sum over the same multiset), so any representative is fine.
     candidates: dict[frozenset[tuple[int, int, int]], Solution] = {}
 
-    for start in list(nx_graph.nodes):
+    # Start-node pool. Under `--start-at-junction` (FR31, Story 10.1) the oracle
+    # enumerates only walks that *start* at a road/trail junction node, via the
+    # shared `is_junction_node` predicate — the same one GRASP and the validator
+    # use, so all three stay on one feasible set. `_dfs` emits every prefix of a
+    # walk starting at `start`, so a prefix's start endpoint is always `start`;
+    # restricting starts therefore keeps the oracle's set start-endpoint-feasible.
+    if params.start_at_junction:
+        start_nodes = [node for node in nx_graph.nodes if is_junction_node(graph, node)]
+    else:
+        start_nodes = list(nx_graph.nodes)
+
+    for start in start_nodes:
         _dfs(
             nx_graph=nx_graph,
             current=start,

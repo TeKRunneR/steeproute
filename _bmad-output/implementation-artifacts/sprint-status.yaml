@@ -28,7 +28,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-06-25
+last_updated: 2026-06-26
 
 project: bmad-test
 project_key: NOKEY
@@ -119,6 +119,6 @@ development_status:
   9-2-grasp-theta-feasible-prefix-recovery: done
   9-3-revalidation-golden-rebake-and-doc-sync: done
 
-  epic-10: backlog        # Practical Route Constraints (correct-course 2026-06-25); runs before 8-5
-  10-1-junction-start-constraint: backlog
+  epic-10: in-progress        # Practical Route Constraints (correct-course 2026-06-25); runs before 8-5
+  10-1-junction-start-constraint: done
   10-2-direction-aware-descent-slope-cap: backlog

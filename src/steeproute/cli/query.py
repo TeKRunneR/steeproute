@@ -57,6 +57,7 @@ from steeproute.cli._shared import (
     run_entry_point,
     seed_option,
     stagnation_iters_option,
+    start_at_junction_option,
     theta_option,
     time_budget_option,
     untagged_trails_option,
@@ -103,6 +104,7 @@ DEFAULT_ITER_BUDGET: int = 2000
 @elevation_smoothing_option
 @elevation_deadband_option
 @j_max_option
+@start_at_junction_option
 @n_option
 @area_cap_option
 @untagged_trails_option
@@ -128,6 +130,7 @@ def cli(
     elevation_smoothing: float,
     elevation_deadband: float,
     j_max: float,
+    start_at_junction: bool,
     n: int,
     area_cap: float,
     untagged_trails: str,
@@ -207,6 +210,7 @@ def cli(
         l_connector=l_connector,
         min_climb_ground_length=min_climb_ground_length,
         j_max=j_max,
+        start_at_junction=start_at_junction,
         n=n,
         area_cap=area_cap,
         untagged_policy=untagged_trails,
@@ -315,7 +319,12 @@ def cli(
             min_climb_slope=min_climb_slope,
             min_climb_ground_length=min_climb_ground_length,
         )
-        contracted = contract_climbs(routable_graph, climbs, l_connector=l_connector)
+        contracted = contract_climbs(
+            routable_graph,
+            climbs,
+            l_connector=l_connector,
+            annotate_junctions=params.start_at_junction,
+        )
         solver = GraspSolver(
             contracted, params, np.random.default_rng(seed), progress_callback=progress_callback
         )
@@ -428,10 +437,19 @@ def _degradation_message(validated: ValidatedRouteSet, params: SolverParams) -> 
     returned = len(validated.routes)
     if returned >= params.n:
         return None
+    # Name the levers honestly. Build the constraint list and the matching lever
+    # list together from one flag read so the two can't drift. `--start-at-junction`
+    # (FR31) can shrink the feasible set below N on its own (few road/trail
+    # junctions in the area), so surface it when active rather than pointing only
+    # at --theta / --j-max.
+    constraints = f"theta={params.theta:.2f}, J_max <= {params.j_max:.2f}"
+    levers = "relax --theta or --j-max"
+    if params.start_at_junction:
+        constraints += ", start-at-junction"
+        levers += " or drop --start-at-junction"
     return (
         f"Only {returned} of {params.n} requested routes satisfy the current constraints "
-        f"(theta={params.theta:.2f}, J_max <= {params.j_max:.2f}); "
-        f"relax --theta or --j-max to admit more."
+        f"({constraints}); {levers} to admit more."
     )
 
 

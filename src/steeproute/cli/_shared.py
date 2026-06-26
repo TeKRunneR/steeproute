@@ -374,6 +374,17 @@ j_max_option = click.option(
     help="Top-N pairwise Jaccard ceiling (segment-overlap distinctness).",
 )
 
+start_at_junction_option = click.option(
+    "--start-at-junction/--no-start-at-junction",
+    "start_at_junction",
+    default=False,
+    show_default=True,
+    help=(
+        "Constrain each route's start endpoint to a road/trail junction — a node "
+        "incident to both an admitted minor road and a trail (opt-in; FR31)."
+    ),
+)
+
 n_option = click.option(
     "--n",
     type=click.INT,

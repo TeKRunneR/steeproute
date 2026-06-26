@@ -108,6 +108,7 @@ from steeproute.models import (
     SolverParams,
     route_avg_gradient,
 )
+from steeproute.pipeline.graph import is_junction_node
 from steeproute.pipeline.osm import max_sac_rank, parse_difficulty_cap
 from steeproute.progress import ProgressCallback, ProgressEvent, estimate_remaining
 from steeproute.solver.distinctness import TopNTracker
@@ -190,9 +191,22 @@ class GraspSolver:
             base_segment_id_map(graph)
         )
         self._tracker: TopNTracker = TopNTracker(params.n, params.j_max, self._segment_map)
-        # Sort nodes ascending so start-node sampling is deterministic across
-        # Python / networkx versions (dict-insertion order is the FR29 fragility).
-        self._nodes: tuple[int, ...] = tuple(sorted(graph.graph.nodes))
+        # Seed-node pool. Sorted ascending so start-node sampling is deterministic
+        # across Python / networkx versions (dict-insertion order is the FR29
+        # fragility). Under `--start-at-junction` (FR31, Story 10.1) the pool is
+        # pruned to road/trail junction nodes via the shared `is_junction_node`
+        # predicate — the same one the oracle and validator use, so all three stay
+        # on one feasible set. This restriction is an *efficiency/guidance* prune,
+        # not the constraint's enforcement: FR31 is enforced by the validator's
+        # independent `start_at_junction` check on `edges[0].node_u`, which holds
+        # whatever the solver does. An empty pool (no junctions) makes `run()`
+        # return `[]` via its existing `if not self._nodes` guard — correct FR12.
+        all_nodes = sorted(graph.graph.nodes)
+        if params.start_at_junction:
+            nodes = [n for n in all_nodes if is_junction_node(graph, n)]
+        else:
+            nodes = all_nodes
+        self._nodes: tuple[int, ...] = tuple(nodes)
         self._cap_rank: int = parse_difficulty_cap(params.difficulty_cap)
         # Base-segment ids subject to the once-only reuse rule, computed once per
         # graph (Story 5.2). Single-sourced with the oracle + validator via

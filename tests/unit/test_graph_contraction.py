@@ -21,7 +21,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from steeproute.models import Climb, Edge
-from steeproute.pipeline.graph import contract_climbs
+from steeproute.pipeline.graph import contract_climbs, is_junction_node
 
 _L_CONNECTOR = 200.0
 
@@ -654,6 +654,148 @@ def test_contract_climbs_does_not_mutate_input_graph() -> None:
         snapshot_id, snapshot_contents = snapshots[(u, v, k)]
         assert id(data) == snapshot_id, f"edge ({u}, {v}, {k}) data dict was replaced"
         assert dict(data) == snapshot_contents, f"edge ({u}, {v}, {k}) data dict contents mutated"
+
+
+# ----------------------------------------------------------------------------
+# Story 10.1: road/trail junction annotation (FR31)
+# ----------------------------------------------------------------------------
+
+
+def _add_edge_with_highway(g: nx.MultiDiGraph, edge: Edge, highway: str | list[str]) -> None:
+    """Mirror an `Edge` into `g` and attach an OSM `highway` tag (drives junction detection)."""
+    _add_edge_from(g, edge)
+    g[edge.node_u][edge.node_v][edge.key]["highway"] = highway  # pyright: ignore[reportArgumentType]
+
+
+def test_junction_node_incident_to_road_and_trail_is_flagged() -> None:
+    """A node touched by both a minor road and a trail edge is a road/trail junction.
+
+    Node 1 is incident to a trail (`path` 0→1) and a minor road (`service` 1→2),
+    so `is_road_trail_junction` is True there. The road-only end (2) and the
+    trail-only end (0) are False.
+    """
+    trail = _make_edge(0, 1, length_m=300.0, d_plus_m=20.0, d_minus_m=20.0)
+    road = _make_edge(1, 2, length_m=300.0, d_plus_m=1.0, d_minus_m=1.0, sac_scale=None)
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    _add_edge_with_highway(g, trail, "path")
+    _add_edge_with_highway(g, road, "service")
+
+    contracted = contract_climbs(g, [], l_connector=_L_CONNECTOR, annotate_junctions=True)
+
+    assert contracted.graph.nodes[1]["is_road_trail_junction"] is True
+    assert contracted.graph.nodes[0]["is_road_trail_junction"] is False
+    assert contracted.graph.nodes[2]["is_road_trail_junction"] is False
+
+
+def test_super_edge_counts_as_trail_for_junction() -> None:
+    """A climb super-edge satisfies the 'trail' side of the junction test.
+
+    The climb 0→1→2 contracts to a super-edge (no `highway` tag); a minor road
+    `service` joins at endpoint 2. Node 2 is therefore a road/trail junction
+    even though its only trail evidence is the (highway-less) super-edge.
+    """
+    climb_edges = [
+        _make_edge(0, 1, length_m=200.0, d_plus_m=60.0),
+        _make_edge(1, 2, length_m=200.0, d_plus_m=60.0),
+    ]
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    for e in climb_edges:
+        _add_edge_with_highway(g, e, "path")
+    road = _make_edge(2, 3, length_m=300.0, d_plus_m=1.0, d_minus_m=1.0, sac_scale=None)
+    _add_edge_with_highway(g, road, "residential")
+    climb = _climb_from_edges(climb_edges)
+
+    contracted = contract_climbs(g, [climb], l_connector=_L_CONNECTOR, annotate_junctions=True)
+
+    # Node 2: incident to the super-edge (trail) and the road → junction.
+    assert contracted.graph.nodes[2]["is_road_trail_junction"] is True
+    # Node 3: road only → not a junction.
+    assert contracted.graph.nodes[3]["is_road_trail_junction"] is False
+
+
+def test_trail_only_node_is_not_a_junction() -> None:
+    """Two trail edges meeting (no road) is not a road/trail junction."""
+    a = _make_edge(0, 1, length_m=300.0, d_plus_m=20.0, d_minus_m=20.0)
+    b = _make_edge(1, 2, length_m=300.0, d_plus_m=20.0, d_minus_m=20.0)
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    _add_edge_with_highway(g, a, "footway")
+    _add_edge_with_highway(g, b, "path")
+
+    contracted = contract_climbs(g, [], l_connector=_L_CONNECTOR, annotate_junctions=True)
+
+    assert contracted.graph.nodes[1]["is_road_trail_junction"] is False
+
+
+def test_junction_detected_across_edge_direction() -> None:
+    """Incidence is checked in both directions: a road arriving *into* the node counts.
+
+    The road is oriented 2→1 (incoming at node 1) and the trail 1→0 (outgoing).
+    Node 1 must still be flagged a junction — incidence is undirected.
+    """
+    road = _make_edge(2, 1, length_m=300.0, d_plus_m=1.0, d_minus_m=1.0, sac_scale=None)
+    trail = _make_edge(1, 0, length_m=300.0, d_plus_m=20.0, d_minus_m=20.0)
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    _add_edge_with_highway(g, road, "unclassified")
+    _add_edge_with_highway(g, trail, "path")
+
+    contracted = contract_climbs(g, [], l_connector=_L_CONNECTOR, annotate_junctions=True)
+
+    assert contracted.graph.nodes[1]["is_road_trail_junction"] is True
+
+
+def test_every_node_carries_the_junction_attribute() -> None:
+    """The annotation is set on every node (False where not a junction), never absent."""
+    a = _make_edge(0, 1, length_m=300.0, d_plus_m=20.0, d_minus_m=20.0)
+    b = _make_edge(2, 3, length_m=300.0, d_plus_m=1.0, d_minus_m=1.0, sac_scale=None)
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    _add_edge_with_highway(g, a, "path")
+    _add_edge_with_highway(g, b, "service")
+
+    contracted = contract_climbs(g, [], l_connector=_L_CONNECTOR, annotate_junctions=True)
+
+    for node in contracted.graph.nodes:
+        assert "is_road_trail_junction" in contracted.graph.nodes[node]
+
+
+def test_mixed_road_trail_edge_makes_node_a_junction() -> None:
+    """A single way tagged both road and trail (`["service", "footway"]`) is both senses.
+
+    `classify_highway` calls this edge a `"trail"` (trails win), which would hide
+    its road side. Junction detection tests road- and trail-tag presence
+    independently, so a node whose only road evidence is such a mixed way is
+    still flagged a junction (Story 10.1 review #1).
+    """
+    mixed = _make_edge(0, 1, length_m=300.0, d_plus_m=1.0, d_minus_m=1.0, sac_scale=None)
+    trail = _make_edge(1, 2, length_m=300.0, d_plus_m=20.0, d_minus_m=20.0)
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    _add_edge_with_highway(g, mixed, ["service", "footway"])
+    _add_edge_with_highway(g, trail, "path")
+
+    contracted = contract_climbs(g, [], l_connector=_L_CONNECTOR, annotate_junctions=True)
+
+    # Node 1: incident to the mixed road+trail way (road side) and the pure trail.
+    assert contracted.graph.nodes[1]["is_road_trail_junction"] is True
+    # Node 0: only the mixed way — which carries BOTH senses → junction on its own.
+    assert contracted.graph.nodes[0]["is_road_trail_junction"] is True
+
+
+def test_junction_attribute_absent_when_not_requested() -> None:
+    """With `annotate_junctions=False` (default), the O(E) pass is skipped — no attribute.
+
+    The flag-off query path never sets `is_road_trail_junction`; downstream reads
+    go through `is_junction_node`, which fails closed (Story 10.1 review #3).
+    """
+    trail = _make_edge(0, 1, length_m=300.0, d_plus_m=20.0, d_minus_m=20.0)
+    road = _make_edge(1, 2, length_m=300.0, d_plus_m=1.0, d_minus_m=1.0, sac_scale=None)
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    _add_edge_with_highway(g, trail, "path")
+    _add_edge_with_highway(g, road, "service")
+
+    contracted = contract_climbs(g, [], l_connector=_L_CONNECTOR)
+
+    for node in contracted.graph.nodes:
+        assert "is_road_trail_junction" not in contracted.graph.nodes[node]
+    assert is_junction_node(contracted, 1) is False
 
 
 # ----------------------------------------------------------------------------

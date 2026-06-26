@@ -94,6 +94,14 @@ class Fixture:
     tier: str = "fast"
 
 
+# CLI flags pinned as booleans (`click` on/off switches). In `pinned_params` their
+# value is the string `"true"`/`"false"`; `run_fixture` renders `"true"` as the bare
+# flag and `"false"` as nothing. Membership here is keyed by flag *name*, not by the
+# value string, so a value-taking param whose value happens to be `"true"` still
+# renders as a `--flag value` pair (Story 10.1 review #5).
+_BOOLEAN_FLAGS: frozenset[str] = frozenset({"--start-at-junction"})
+
+
 # The pinned param set shared by every fixture. Pinned explicitly (never inherited
 # from CLI defaults) so a default re-tuning or a new param can't silently move a
 # golden. `--time-budget` is pinned high so the wall-clock terminator never binds —
@@ -173,6 +181,26 @@ FIXTURES: tuple[Fixture, ...] = (
 # `uv run update-regression --all --tier realistic`.
 REALISTIC_FIXTURES: tuple[Fixture, ...] = tuple(
     replace(f, pinned_params=dict(_REALISTIC_PARAMS), tier="realistic") for f in FIXTURES
+)
+
+
+# Flag-on goldens (Epic 10): each pins one new opt-in constraint *on*, on a real
+# cache, leaving the default-param goldens above untouched (the non-regression
+# proof). Deliberately kept OUT of `FIXTURES` for now — folding these into the
+# zero-tolerance CI gate + the realistic tier is Story 8.5's job; Story 10.1 only
+# creates the fixture, its committed golden, and the junction-start property
+# assertion (`tests/e2e/test_junction_start.py`). `--start-at-junction` is a
+# boolean pinned param (`"true"`/`"false"`); `run_fixture` renders it as a bare
+# flag rather than a `--flag value` pair.
+FLAG_ON_FIXTURES: tuple[Fixture, ...] = (
+    Fixture(
+        name="grenoble_small_junction",
+        cache_dir=_FIXTURES_ROOT / "grenoble_small" / "cache",
+        center=(45.260, 5.788),
+        radius_km=1.5,
+        seed=42,
+        pinned_params={**_PINNED_PARAMS, "--start-at-junction": "true"},
+    ),
 )
 
 
@@ -278,7 +306,22 @@ def run_fixture(fixture: Fixture) -> list[Sidecar]:
             "--quiet",
         ]
         for flag, value in fixture.pinned_params.items():
-            args += [flag, value]
+            # Boolean pinned params (`_BOOLEAN_FLAGS`, e.g. `--start-at-junction`)
+            # render as a bare flag, not a `--flag value` pair: `"true"` emits the
+            # flag, `"false"` emits nothing. Pinning the value in the dict (rather
+            # than appending the bare flag) keeps it inside the `params_hash`
+            # fingerprint so a flag-on golden can't be confused with its flag-off
+            # sibling. Keyed by flag name so a value-taking param whose value is
+            # the literal `"true"` is unaffected; an unexpected value fails loud.
+            if flag in _BOOLEAN_FLAGS:
+                if value not in ("true", "false"):
+                    raise ValueError(
+                        f"boolean pinned param {flag!r} must be 'true' or 'false', got {value!r}"
+                    )
+                if value == "true":
+                    args.append(flag)
+            else:
+                args += [flag, value]
         result = CliRunner().invoke(query_cli, args, catch_exceptions=False)
         if result.exit_code not in (0, 1):
             raise RuntimeError(
@@ -329,10 +372,16 @@ def diff_goldens(old: Golden | None, new: Golden) -> str:
 def _select(fixture_name: str | None, all_fixtures: bool, tier: str) -> list[Fixture]:
     pool = REALISTIC_FIXTURES if tier == "realistic" else FIXTURES
     if all_fixtures:
+        # `--all` regenerates the standard tier only — the Epic 10 `FLAG_ON_FIXTURES`
+        # are not yet part of the bulk/CI set (folded in by Story 8.5). They remain
+        # individually regenerable by name below.
         return list(pool)
-    selected = [f for f in pool if f.name == fixture_name]
+    # Named lookup also searches the fast-tier flag-on fixtures, so
+    # `update-regression --fixture grenoble_small_junction` works.
+    named_pool = list(pool) + (list(FLAG_ON_FIXTURES) if tier == "fast" else [])
+    selected = [f for f in named_pool if f.name == fixture_name]
     if not selected:
-        known = ", ".join(f.name for f in pool) or "(none registered)"
+        known = ", ".join(f.name for f in named_pool) or "(none registered)"
         raise SystemExit(
             f"Unknown fixture {fixture_name!r} in tier {tier!r}. Known fixtures: {known}."
         )

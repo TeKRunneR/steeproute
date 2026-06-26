@@ -1,0 +1,47 @@
+{
+  "fixture_name": "grenoble_small_junction",
+  "params_hash": "5ef2581a01b2c865b5970cb8db11b2c7ebf4308eedb582153cbeb1027c8f9600",
+  "routes": [
+    {
+      "canonical_edge_sequence_hash": "2db7655ac9a67a37913c3a9b47f5f1a15d27a0f44e3d55769fbadb26ab95a4f6",
+      "d_minus_m": 251.62171954284463,
+      "d_plus_m": 478.4341333942648,
+      "edge_count": 17,
+      "objective": 730.0558529371094,
+      "route_index": 1
+    },
+    {
+      "canonical_edge_sequence_hash": "b0cc3a5e61b791681639306ff0e609d6adf20582c2a0388c313d9654ce5fe63c",
+      "d_minus_m": 122.42827894658211,
+      "d_plus_m": 583.8375129339136,
+      "edge_count": 28,
+      "objective": 706.2657918804957,
+      "route_index": 2
+    },
+    {
+      "canonical_edge_sequence_hash": "9c1fdfdd8a9c7ef05754c7cfc7d729c2c241363e76de011d6f9a4700a157903c",
+      "d_minus_m": 245.22999073399387,
+      "d_plus_m": 415.7169767353264,
+      "edge_count": 33,
+      "objective": 660.9469674693203,
+      "route_index": 3
+    },
+    {
+      "canonical_edge_sequence_hash": "75b3fb861f8f7f501581c0c4b9f52f5067ce54eb22a673ed8df855dcbffd0810",
+      "d_minus_m": 102.47063970565773,
+      "d_plus_m": 417.3875101642842,
+      "edge_count": 18,
+      "objective": 519.8581498699419,
+      "route_index": 4
+    },
+    {
+      "canonical_edge_sequence_hash": "6373865a3ad56ac1e02d51c5a6687101584e4eaf3fb8c3832893194e93e442bd",
+      "d_minus_m": 110.51965049461023,
+      "d_plus_m": 404.39740821461567,
+      "edge_count": 20,
+      "objective": 514.9170587092259,
+      "route_index": 5
+    }
+  ],
+  "seed": 42
+}
