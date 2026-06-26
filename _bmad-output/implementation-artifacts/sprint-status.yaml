@@ -119,6 +119,6 @@ development_status:
   9-2-grasp-theta-feasible-prefix-recovery: done
   9-3-revalidation-golden-rebake-and-doc-sync: done
 
-  epic-10: in-progress        # Practical Route Constraints (correct-course 2026-06-25); runs before 8-5
+  epic-10: done        # Practical Route Constraints (correct-course 2026-06-25); runs before 8-5
   10-1-junction-start-constraint: done
-  10-2-direction-aware-descent-slope-cap: backlog
+  10-2-direction-aware-descent-slope-cap: done

@@ -201,6 +201,19 @@ FLAG_ON_FIXTURES: tuple[Fixture, ...] = (
         seed=42,
         pinned_params={**_PINNED_PARAMS, "--start-at-junction": "true"},
     ),
+    # Story 10.2 (FR32): `--max-descent-slope` pinned on. A value-taking float, so
+    # `run_fixture` renders it as a `--flag value` pair — no `_BOOLEAN_FLAGS` entry
+    # needed (unlike the bare `--start-at-junction`). The cap is low enough to bite
+    # on this terrain (it changes the route set vs the flag-off goldens) while still
+    # returning routes; `tests/e2e/test_descent_cap.py` pins the property + golden.
+    Fixture(
+        name="grenoble_small_descent",
+        cache_dir=_FIXTURES_ROOT / "grenoble_small" / "cache",
+        center=(45.260, 5.788),
+        radius_km=1.5,
+        seed=42,
+        pinned_params={**_PINNED_PARAMS, "--max-descent-slope": "0.40"},
+    ),
 )
 
 

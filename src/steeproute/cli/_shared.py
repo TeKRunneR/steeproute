@@ -179,6 +179,7 @@ def validate_solver_options(
     time_budget: float,
     stagnation_iters: int | None,
     progress_interval: float,
+    max_descent_slope: float | None = None,
 ) -> None:
     """Query-side solver-parameter sanity checks at the CLI boundary (§Cat 10 → exit 2).
 
@@ -259,6 +260,17 @@ def validate_solver_options(
     # `0` disables the stagnation check (§Cat 5e); negative is nonsensical.
     if stagnation_iters is not None and stagnation_iters < 0:
         raise BadCLIArgError(f"--stagnation-iters {stagnation_iters} must be >= 0.")
+    # `--max-descent-slope` is opt-in: `None` (unset) = off, no check. When set it
+    # must be a finite, strictly positive gradient — a `0`/negative cap would forbid
+    # *every* descent (nonsensical; drop the flag to disable), and NaN/inf would slip
+    # past the descent comparison (IEEE-754) exactly like the floats checked above.
+    if max_descent_slope is not None:
+        if not math.isfinite(max_descent_slope):
+            raise BadCLIArgError(
+                f"--max-descent-slope {max_descent_slope!r} must be a finite number."
+            )
+        if max_descent_slope <= 0.0:
+            raise BadCLIArgError(f"--max-descent-slope {max_descent_slope:g} must be positive.")
 
 
 def ensure_output_dir(output_dir: pathlib.Path) -> None:
@@ -382,6 +394,18 @@ start_at_junction_option = click.option(
     help=(
         "Constrain each route's start endpoint to a road/trail junction — a node "
         "incident to both an admitted minor road and a trail (opt-in; FR31)."
+    ),
+)
+
+max_descent_slope_option = click.option(
+    "--max-descent-slope",
+    type=click.FLOAT,
+    default=None,
+    show_default=True,
+    help=(
+        "Direction-aware descent cap: forbid descending a segment whose windowed "
+        "uphill slope exceeds this, while it stays eligible as a climb (opt-in; "
+        "off when unset; FR32)."
     ),
 )
 

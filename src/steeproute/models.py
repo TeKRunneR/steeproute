@@ -165,7 +165,7 @@ class ContractedGraph:
 
 @dataclass(frozen=True, slots=True)
 class SolverParams:
-    """The 14 parameters every query records in its HTML/JSON metadata block (Architecture §Cat 9).
+    """The 15 parameters every query records in its HTML/JSON metadata block (Architecture §Cat 9).
 
     Field names match the CLI flag names verbatim so they double as the
     JSON-sidecar field names (`snake_case` per Architecture §"Serialization
@@ -203,6 +203,12 @@ class SolverParams:
       and the validator flags any route whose start endpoint isn't a junction.
       Default off → byte-identical default output. Defaulted last so existing
       positional constructions stay valid.
+    - `max_descent_slope`: opt-in FR32 cap (default `None` = off). When set, GRASP
+      construction, the exhaustive oracle, and the validator reject any
+      *descending* traversal of an edge whose `max_windowed_descent_grad` exceeds
+      this; uphill traversal is unconstrained, so the same segment stays eligible
+      as a climb. Default off → byte-identical default output. Defaulted last so
+      existing positional constructions stay valid.
     """
 
     theta: float
@@ -219,6 +225,7 @@ class SolverParams:
     time_budget: float
     stagnation_iters: int
     start_at_junction: bool = False
+    max_descent_slope: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

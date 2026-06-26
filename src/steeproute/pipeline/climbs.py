@@ -18,6 +18,15 @@ smoothed by stage 6) and attaches four numeric metrics:
   Architecture §Cat 4 where `"d_plus_m"` and `"d_minus_m"` are both positive).
 - `avg_gradient` — `(d_plus_m + d_minus_m) / length_m`. Total absolute altitude
   change per horizontal meter; dimensionless and ≥ 0. Not a signed slope.
+- `max_windowed_descent_grad` — steepest sustained *descending* grade over a fixed
+  distance window (`_DESCENT_WINDOW_M`), measured as the net elevation *drop* / run
+  between window endpoints, in this directed edge's own traversal direction (a
+  window that nets a climb contributes nothing). Because the reciprocal edge carries
+  reversed `vertices_resampled`, it records the descent grade for the *opposite*
+  direction — so the value is direction-aware, mirroring `d_plus_m`/`d_minus_m`.
+  Governs the opt-in FR32 descent cap (Story 10.2), compared against
+  `--max-descent-slope` only when that flag is set. Parameter-independent of all
+  `SolverParams`.
 
 Stage 8 (`detect_climbs`) walks the post-stage-7 MultiDiGraph and emits the
 maximal edge-disjoint contiguous edge-sequences whose cumulative directional
@@ -52,9 +61,20 @@ _EARTH_RADIUS_M: float = 6_378_137.0
 # below any real edge, so it never rejects production data.
 _MIN_METRIC_LENGTH_M: float = 1e-6
 
+# Distance window (m) for the FR32 windowed descent metric (Story 10.2). The
+# steepest *sustained* grade is measured over a sliding window of this ground
+# length, so a short cliff section is caught even when the whole-edge
+# `avg_gradient` averages it away. A module-scope named constant (not a CLI flag)
+# keeps `max_windowed_descent_grad` parameter-independent — the Architecture §3c
+# contract and FR29 determinism both rely on the metric being a pure function of
+# the cached geometry. PROVISIONAL: ~30 m spans ~3 resampled segments (≈10 m
+# spacing); a future story may surface it as `--descent-window` if needed (PRD
+# FR32 leaves the door open).
+_DESCENT_WINDOW_M: float = 30.0
+
 
 def compute_edge_metrics(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
-    """Stage 7: attach `length_m`, `d_plus_m`, `d_minus_m`, `avg_gradient` per edge.
+    """Stage 7: attach `length_m`, `d_plus_m`, `d_minus_m`, `avg_gradient`, `max_windowed_descent_grad` per edge.
 
     Args:
         graph: input MultiDiGraph; every edge must carry `vertices_resampled`
@@ -68,7 +88,11 @@ def compute_edge_metrics(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
     out: nx.MultiDiGraph = graph.copy()
     for _u, _v, _k, data in out.edges(data=True, keys=True):
         verts: list[tuple[float, float, float]] = data["vertices_resampled"]
-        length_m = _cumulative_2d_distance_m(verts)
+        # One projected-distance pass per edge: `length_m` is the last cumulative
+        # value, and the windowed-descent scan reuses the same array (the two used
+        # to recompute the identical equirectangular projection independently).
+        cum_dist = _cumulative_2d_distances(verts)
+        length_m = cum_dist[-1] if cum_dist else 0.0
         d_plus_m, d_minus_m = _elevation_gain_loss(verts)
         # length_m > 0 is guaranteed by stage 4's degenerate-edge drop; we
         # express the contract as a postcondition rather than as defensive
@@ -78,6 +102,7 @@ def compute_edge_metrics(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
         data["d_plus_m"] = d_plus_m
         data["d_minus_m"] = d_minus_m
         data["avg_gradient"] = avg_gradient
+        data["max_windowed_descent_grad"] = _max_windowed_descent_grad(verts, cum_dist)
     return out
 
 
@@ -107,22 +132,87 @@ def is_valid_for_metrics(verts: list[tuple[float, float, float]]) -> bool:
     return _cumulative_2d_distance_m(verts) >= _MIN_METRIC_LENGTH_M
 
 
-def _cumulative_2d_distance_m(verts: list[tuple[float, float, float]]) -> float:
-    """Cumulative ground-distance in meters along the `(lat, lon)` polyline.
+def _cumulative_2d_distances(verts: list[tuple[float, float, float]]) -> list[float]:
+    """Prefix-sum of ground-distance in meters: `out[i]` = distance from `verts[0]` to `verts[i]`.
 
     Local equirectangular projection at the polyline's mean latitude — the same
     pattern as `pipeline.smoothing._resample_meters`. Accurate to ~0.1% over
-    edge-scale distances; no external projection dependency.
+    edge-scale distances; no external projection dependency. The single source of
+    projected distance for stage 7: both whole-edge `length_m` (the last element)
+    and `_max_windowed_descent_grad` read this one array, so the projection is
+    computed once per edge and the two cannot drift.
     """
-    mean_lat = sum(lat for lat, _lon, _elev in verts) / len(verts)
+    n = len(verts)
+    cum: list[float] = [0.0] * n
+    if n < 2:
+        return cum
+    mean_lat = sum(lat for lat, _lon, _elev in verts) / n
     deg_to_m_lat = _EARTH_RADIUS_M * math.radians(1.0)
     deg_to_m_lon = deg_to_m_lat * math.cos(math.radians(mean_lat))
-    total = 0.0
-    for i in range(1, len(verts)):
+    for i in range(1, n):
         dlat = (verts[i][0] - verts[i - 1][0]) * deg_to_m_lat
         dlon = (verts[i][1] - verts[i - 1][1]) * deg_to_m_lon
-        total += math.hypot(dlat, dlon)
-    return total
+        cum[i] = cum[i - 1] + math.hypot(dlat, dlon)
+    return cum
+
+
+def _cumulative_2d_distance_m(verts: list[tuple[float, float, float]]) -> float:
+    """Total ground-distance in meters along the `(lat, lon)` polyline (the prefix sum's last term)."""
+    cum = _cumulative_2d_distances(verts)
+    return cum[-1] if cum else 0.0
+
+
+def _max_windowed_descent_grad(
+    verts: list[tuple[float, float, float]], cum_dist: list[float]
+) -> float:
+    """Steepest sustained *descending* grade over a `_DESCENT_WINDOW_M` window — the FR32 metric.
+
+    Directional property of this directed edge (Story 10.2): the maximum, over every
+    sliding window of ≥ `_DESCENT_WINDOW_M` ground-meters, of the net elevation
+    *drop* / horizontal_run between the window endpoints, walking `verts` in stored
+    order. A window that nets a *climb* contributes nothing (`drop <= 0` → grade
+    `0.0`): we never want to forbid a traversal because a sub-section *ascends*
+    steeply — only because it *descends* steeply. The reciprocal edge carries
+    reversed `vertices_resampled`, so it records the descent grade for the opposite
+    direction (`d_plus_m`/`d_minus_m` are oriented the same way). The window catches
+    a short steep descent a whole-edge `avg_gradient` would average away; a window
+    that drops then climbs back nets a gentle grade *by design* — the cap targets
+    *sustained* descents, not transient pitches.
+
+    Windows shorter than `_DESCENT_WINDOW_M` are ignored to suppress single-vertex
+    noise; an edge whose *entire* polyline is shorter than the window falls back to
+    its end-to-end descent grade so a short steep descending connector is still
+    measured. Returns `0.0` for a degenerate (< 2 vertex) or zero-length polyline,
+    or one that never descends. `cum_dist` is the prefix-sum from
+    `_cumulative_2d_distances` (same projection, computed once per edge); no RNG.
+    """
+    n = len(verts)
+    if n < 2:
+        return 0.0
+
+    best = 0.0
+    saw_full_window = False
+    j = 0
+    for i in range(n):
+        if j < i:
+            j = i
+        while j < n - 1 and cum_dist[j] - cum_dist[i] < _DESCENT_WINDOW_M:
+            j += 1
+        run = cum_dist[j] - cum_dist[i]
+        if run >= _DESCENT_WINDOW_M:
+            saw_full_window = True
+            drop = verts[i][2] - verts[j][2]  # > 0 iff this window descends i → j
+            if drop > 0.0:
+                grad = drop / run
+                if grad > best:
+                    best = grad
+    if not saw_full_window:
+        # Whole polyline is shorter than one window: measure its end-to-end descent.
+        total_run = cum_dist[n - 1]
+        drop = verts[0][2] - verts[n - 1][2]
+        if total_run > 0.0 and drop > 0.0:
+            best = drop / total_run
+    return best
 
 
 def detect_climbs(

@@ -46,6 +46,7 @@ from steeproute.cli._shared import (
     iter_budget_option,
     j_max_option,
     l_connector_option,
+    max_descent_slope_option,
     min_climb_ground_length_option,
     min_climb_slope_option,
     n_option,
@@ -105,6 +106,7 @@ DEFAULT_ITER_BUDGET: int = 2000
 @elevation_deadband_option
 @j_max_option
 @start_at_junction_option
+@max_descent_slope_option
 @n_option
 @area_cap_option
 @untagged_trails_option
@@ -131,6 +133,7 @@ def cli(
     elevation_deadband: float,
     j_max: float,
     start_at_junction: bool,
+    max_descent_slope: float | None,
     n: int,
     area_cap: float,
     untagged_trails: str,
@@ -174,6 +177,7 @@ def cli(
         time_budget=time_budget,
         stagnation_iters=stagnation_iters,
         progress_interval=progress_interval,
+        max_descent_slope=max_descent_slope,
     )
     # Create the output directory now so an unusable `--output-dir` fails as a
     # clean exit 2 rather than an `OSError` traceback mid-render.
@@ -211,6 +215,7 @@ def cli(
         min_climb_ground_length=min_climb_ground_length,
         j_max=j_max,
         start_at_junction=start_at_junction,
+        max_descent_slope=max_descent_slope,
         n=n,
         area_cap=area_cap,
         untagged_policy=untagged_trails,
@@ -447,6 +452,11 @@ def _degradation_message(validated: ValidatedRouteSet, params: SolverParams) -> 
     if params.start_at_junction:
         constraints += ", start-at-junction"
         levers += " or drop --start-at-junction"
+    # --max-descent-slope (FR32) can shrink the feasible set below N on its own
+    # (steep terrain leaves few descendable routes), so surface it when active.
+    if params.max_descent_slope is not None:
+        constraints += f", max-descent-slope={params.max_descent_slope:.2f}"
+        levers += " or raise/drop --max-descent-slope"
     return (
         f"Only {returned} of {params.n} requested routes satisfy the current constraints "
         f"({constraints}); {levers} to admit more."

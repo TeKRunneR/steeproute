@@ -22,9 +22,9 @@ start node by greedy-randomized walk extension:
    (via the injected `numpy.random.Generator`).
 2. At each step, build the restricted candidate list (RCL): the outgoing edges
    from the current node that pass the feasibility filters (directed-edge-simple
-   + no non-exempt base segment already used + SAC cap), sorted by per-edge
-   objective contribution (`d_plus_m + d_minus_m`) descending, truncated to
-   `RCL_SIZE` entries.
+   + no non-exempt base segment already used + SAC cap + the opt-in FR32 descent
+   cap), sorted by per-edge objective contribution (`d_plus_m + d_minus_m`)
+   descending, truncated to `RCL_SIZE` entries.
 3. Sample one edge uniformly from the RCL; append it; advance the current
    node to its `node_v`.
 4. Repeat until the RCL is empty (no feasible extension); the walk emits as a
@@ -111,6 +111,7 @@ from steeproute.models import (
 from steeproute.pipeline.graph import is_junction_node
 from steeproute.pipeline.osm import max_sac_rank, parse_difficulty_cap
 from steeproute.progress import ProgressCallback, ProgressEvent, estimate_remaining
+from steeproute.solver.descent import descends_over_cap
 from steeproute.solver.distinctness import TopNTracker
 from steeproute.solver.reuse import (
     base_segment_id_map,
@@ -208,6 +209,10 @@ class GraspSolver:
             nodes = all_nodes
         self._nodes: tuple[int, ...] = tuple(nodes)
         self._cap_rank: int = parse_difficulty_cap(params.difficulty_cap)
+        # Direction-aware descent cap (FR32, Story 10.2). `None` → off; when set,
+        # `_build_rcl` drops any descending candidate edge steeper than this, via
+        # the `solver.descent` predicate single-sourced with the oracle + validator.
+        self._max_descent_slope: float | None = params.max_descent_slope
         # Base-segment ids subject to the once-only reuse rule, computed once per
         # graph (Story 5.2). Single-sourced with the oracle + validator via
         # `solver/reuse.py` so all three share one feasible set.
@@ -453,6 +458,10 @@ class GraspSolver:
                 continue
             rank = max_sac_rank(data["sac_scale"])
             if rank is not None and rank > cap_rank:
+                continue
+            # Direction-aware descent cap (FR32): drop a descending traversal
+            # steeper than the cap; uphill is unconstrained. Off when unset.
+            if descends_over_cap(data, self._max_descent_slope):
                 continue
             feasible.append(
                 (

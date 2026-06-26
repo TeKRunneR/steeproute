@@ -94,6 +94,7 @@ def _check_solver_options(
     time_budget: float = 600.0,
     stagnation_iters: int | None = None,
     progress_interval: float = 5.0,
+    max_descent_slope: float | None = None,
 ) -> None:
     """Call `validate_solver_options` with in-range defaults; tests override one field."""
     validate_solver_options(
@@ -109,6 +110,7 @@ def _check_solver_options(
         time_budget=time_budget,
         stagnation_iters=stagnation_iters,
         progress_interval=progress_interval,
+        max_descent_slope=max_descent_slope,
     )
 
 
@@ -124,6 +126,11 @@ def test_validate_solver_options_accepts_boundary_values() -> None:
     # Story 7.2: stagnation_iters=0 legitimately disables the check; a tiny
     # positive time_budget is in-range (the §Cat 5e check just trips sooner).
     _check_solver_options(stagnation_iters=0, time_budget=0.001)
+    # Story 10.2: `--max-descent-slope` is opt-in — `None` (unset) is the default
+    # and any finite, strictly positive gradient is accepted.
+    _check_solver_options(max_descent_slope=None)
+    _check_solver_options(max_descent_slope=0.01)
+    _check_solver_options(max_descent_slope=2.0)
 
 
 @pytest.mark.parametrize(
@@ -171,6 +178,12 @@ def test_validate_solver_options_accepts_boundary_values() -> None:
         (lambda: _check_solver_options(time_budget=0.0), "--time-budget"),
         (lambda: _check_solver_options(time_budget=-1.0), "--time-budget"),
         (lambda: _check_solver_options(stagnation_iters=-1), "--stagnation-iters"),
+        # Story 10.2 flag: NaN/inf would slip past the IEEE-754 descent comparison;
+        # 0/negative would forbid every descent (drop the flag to disable instead).
+        (lambda: _check_solver_options(max_descent_slope=float("nan")), "--max-descent-slope"),
+        (lambda: _check_solver_options(max_descent_slope=float("inf")), "--max-descent-slope"),
+        (lambda: _check_solver_options(max_descent_slope=0.0), "--max-descent-slope"),
+        (lambda: _check_solver_options(max_descent_slope=-0.1), "--max-descent-slope"),
     ],
 )
 def test_validate_solver_options_rejects_out_of_range(

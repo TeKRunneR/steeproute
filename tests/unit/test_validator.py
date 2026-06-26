@@ -46,7 +46,11 @@ _J_MAX = 0.30
 
 
 def _params(
-    *, theta: float = _THETA, j_max: float = _J_MAX, start_at_junction: bool = False
+    *,
+    theta: float = _THETA,
+    j_max: float = _J_MAX,
+    start_at_junction: bool = False,
+    max_descent_slope: float | None = None,
 ) -> SolverParams:
     """`SolverParams` carrying only the fields the validator reads."""
     return SolverParams(
@@ -64,6 +68,7 @@ def _params(
         time_budget=60.0,
         stagnation_iters=0,
         start_at_junction=start_at_junction,
+        max_descent_slope=max_descent_slope,
     )
 
 
@@ -101,6 +106,7 @@ def _graph(
     *,
     base_ids: dict[tuple[int, int, int], frozenset[tuple[int, int, int]]] | None = None,
     reusable_ids: set[tuple[int, int, int]] | None = None,
+    descent_grads: dict[tuple[int, int, int], float] | None = None,
 ) -> ContractedGraph:
     """Build a `ContractedGraph` whose nx-graph contains exactly `edges`.
 
@@ -116,6 +122,7 @@ def _graph(
     """
     base_ids = base_ids or {}
     reusable_ids = reusable_ids or set()
+    descent_grads = descent_grads or {}
     g: nx.MultiDiGraph = nx.MultiDiGraph()
     super_edge_to_base: dict[tuple[int, int, int], tuple[Edge, ...]] = {}
     for e in edges:
@@ -129,6 +136,7 @@ def _graph(
             d_minus_m=e.d_minus_m,
             avg_gradient=e.avg_gradient,
             sac_scale=e.sac_scale,
+            max_windowed_descent_grad=descent_grads.get(eid, 0.0),
             base_segment_id=base_ids.get(eid, frozenset({_seg(e.node_u, e.node_v, e.key)})),
             reusable=eid in reusable_ids,
         )
@@ -221,6 +229,60 @@ def test_validate_route_admits_edge_within_cap_and_untagged() -> None:
     graph = _graph(edges, super_ids={(0, 1, 0), (1, 2, 0)})
 
     result = validate_route(_route(edges), graph, _params())
+
+    assert result.passed is True
+    assert result.violations == []
+
+
+# ----------------------------------------------------------------------------
+# AC #5 (Story 10.2) — direction-aware descent cap (per edge, opt-in FR32)
+# ----------------------------------------------------------------------------
+
+
+def test_validate_route_flags_descent_above_cap() -> None:
+    """A descending traversal (net loss) of an over-cap segment → `max_descent_slope`."""
+    # Net descent (d_minus > d_plus); avg_gradient clears θ so only the cap can bite.
+    edges = [_edge(0, 1, length_m=400.0, d_plus_m=10.0, d_minus_m=200.0, avg_gradient=0.525)]
+    graph = _graph(edges, super_ids=set(), descent_grads={(0, 1, 0): 0.60})
+
+    result = validate_route(_route(edges), graph, _params(max_descent_slope=0.45))
+
+    assert result.passed is False
+    flagged = [v for v in result.violations if v.constraint_id == "max_descent_slope"]
+    assert len(flagged) == 1
+    assert abs(flagged[0].numeric["observed"] - 0.60) < 1e-9
+    assert flagged[0].numeric["required"] == 0.45
+
+
+def test_validate_route_admits_uphill_over_cap_segment() -> None:
+    """An over-cap segment traversed *uphill* is NOT flagged — it stays eligible as a climb."""
+    # Net climb (d_plus > d_minus) over the SAME steep segment grade as above.
+    edges = [_edge(0, 1, length_m=400.0, d_plus_m=200.0, d_minus_m=10.0, avg_gradient=0.525)]
+    graph = _graph(edges, super_ids={(0, 1, 0)}, descent_grads={(0, 1, 0): 0.60})
+
+    result = validate_route(_route(edges), graph, _params(max_descent_slope=0.45))
+
+    assert result.passed is True
+    assert result.violations == []
+
+
+def test_validate_route_admits_descent_at_or_below_cap() -> None:
+    """A descent whose windowed grade is exactly the cap passes — the limit is `>`, not `>=`."""
+    edges = [_edge(0, 1, length_m=400.0, d_plus_m=10.0, d_minus_m=200.0, avg_gradient=0.525)]
+    graph = _graph(edges, super_ids=set(), descent_grads={(0, 1, 0): 0.45})
+
+    result = validate_route(_route(edges), graph, _params(max_descent_slope=0.45))
+
+    assert result.passed is True
+    assert result.violations == []
+
+
+def test_validate_route_descent_cap_off_by_default() -> None:
+    """With the cap unset, even a steep descent of an over-cap segment is not flagged."""
+    edges = [_edge(0, 1, length_m=400.0, d_plus_m=10.0, d_minus_m=200.0, avg_gradient=0.525)]
+    graph = _graph(edges, super_ids=set(), descent_grads={(0, 1, 0): 0.99})
+
+    result = validate_route(_route(edges), graph, _params())  # max_descent_slope=None
 
     assert result.passed is True
     assert result.violations == []

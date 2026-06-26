@@ -7,11 +7,15 @@ returned explanation. Story 10.1 adds the `--start-at-junction` lever wording.
 
 from __future__ import annotations
 
-from steeproute.cli.query import _degradation_message
-from steeproute.models import SolverParams, ValidatedRouteSet
+from typing import cast
+
+from steeproute.cli.query import _degradation_message  # pyright: ignore[reportPrivateUsage]
+from steeproute.models import Route, SolverParams, ValidatedRouteSet
 
 
-def _params(*, n: int = 5, start_at_junction: bool = False) -> SolverParams:
+def _params(
+    *, n: int = 5, start_at_junction: bool = False, max_descent_slope: float | None = None
+) -> SolverParams:
     return SolverParams(
         theta=0.20,
         min_climb_slope=0.20,
@@ -27,14 +31,17 @@ def _params(*, n: int = 5, start_at_junction: bool = False) -> SolverParams:
         time_budget=60.0,
         stagnation_iters=0,
         start_at_junction=start_at_junction,
+        max_descent_slope=max_descent_slope,
     )
 
 
 def _route_set(returned: int) -> ValidatedRouteSet:
     """A `ValidatedRouteSet` whose `len(routes)` is `returned` (contents irrelevant here)."""
     # `_degradation_message` reads only the count; `None` placeholders keep it cheap
-    # and avoid building real `Route`s the function never inspects.
-    return ValidatedRouteSet(routes=[None] * returned, set_violations=[])  # type: ignore[list-item]
+    # and avoid building real `Route`s the function never inspects (cast for the type
+    # checker — the list is never indexed, only counted).
+    routes = cast("list[Route]", [None] * returned)
+    return ValidatedRouteSet(routes=routes, set_violations=[])
 
 
 def test_full_set_returns_no_message() -> None:
@@ -58,3 +65,21 @@ def test_degraded_message_flag_on_names_start_at_junction_lever() -> None:
     assert msg is not None
     assert "start-at-junction" in msg
     assert "drop --start-at-junction" in msg
+
+
+def test_degraded_message_descent_cap_names_max_descent_slope_lever() -> None:
+    """Cap on: the message surfaces --max-descent-slope as both a cause and a lever (FR32)."""
+    msg = _degradation_message(_route_set(2), _params(n=5, max_descent_slope=0.45))
+    assert msg is not None
+    assert "max-descent-slope=0.45" in msg
+    assert "raise/drop --max-descent-slope" in msg
+
+
+def test_degraded_message_both_new_constraints_compose() -> None:
+    """Both opt-in constraints active: both appear as causes and levers."""
+    msg = _degradation_message(
+        _route_set(1), _params(n=5, start_at_junction=True, max_descent_slope=0.50)
+    )
+    assert msg is not None
+    assert "start-at-junction" in msg and "max-descent-slope=0.50" in msg
+    assert "drop --start-at-junction" in msg and "raise/drop --max-descent-slope" in msg

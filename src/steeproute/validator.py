@@ -53,6 +53,14 @@ a *solver* bug, not a validator one):
   the check holds independent of how the route was built; a failure flags the
   route via the FR27 banner / FR28 exit-code path. Off by default → no effect on
   default-parameter output.
+- **Max-descent-slope** (FR32, Story 10.2) is checked only when
+  `params.max_descent_slope` is set: a *descending* traversal (net elevation loss
+  in that direction) of an edge whose `max_windowed_descent_grad` exceeds the cap
+  is flagged, via the shared `solver.descent.descends_over_cap` predicate. Uphill
+  traversal is unconstrained, so the same segment stays eligible as a climb. This
+  *is* the enforcement of FR32 — the GRASP/oracle prune is only an efficiency
+  layer — so it holds independent of how the route was built. Off by default → no
+  effect on default-parameter output.
 
 Jaccard identity is single-sourced from `solver/distinctness.py` (routes are
 wrapped as transient `Solution`s and fed to `jaccard_distance`) so set-level
@@ -82,6 +90,7 @@ from steeproute.models import (
 )
 from steeproute.pipeline.graph import is_junction_node
 from steeproute.pipeline.osm import max_sac_rank, parse_difficulty_cap
+from steeproute.solver.descent import descends_over_cap
 from steeproute.solver.distinctness import jaccard_distance
 from steeproute.solver.reuse import (
     base_segment_id_map,
@@ -261,6 +270,32 @@ def _validate_edges(
                     constraint_id="graph_membership",
                     detail=f"edge {edge_id} is not present in the operational contracted graph",
                     numeric={"observed": 0.0, "required": 1.0},
+                )
+            )
+
+        # Direction-aware descent cap (FR32, Story 10.2): only when
+        # `--max-descent-slope` is active. This *is* the enforcement of the cap —
+        # the GRASP/oracle RCL prune is only an efficiency layer — so the check
+        # holds independent of how the route was built. A descending traversal
+        # (net loss in this direction) of a segment whose windowed grade exceeds
+        # the cap is flagged via the shared `solver.descent` predicate (the same
+        # one the solver/oracle prune on, so a GRASP-admitted route passes).
+        # Uphill traversal is never flagged → the segment stays climbable. Off by
+        # default → no effect on default-parameter output.
+        edge_data = nx_graph.get_edge_data(edge.node_u, edge.node_v, edge.key)
+        if descends_over_cap(edge_data, params.max_descent_slope):
+            # `descends_over_cap` returns False when the cap is unset, so reaching
+            # here means it is set (narrowing for the type checker and the reader).
+            assert params.max_descent_slope is not None
+            grad = edge_data.get("max_windowed_descent_grad", 0.0)
+            violations.append(
+                ConstraintViolation(
+                    constraint_id="max_descent_slope",
+                    detail=(
+                        f"edge {edge_id} descends a segment whose windowed slope "
+                        f"{grad:.4f} exceeds the descent cap {params.max_descent_slope}"
+                    ),
+                    numeric={"observed": grad, "required": float(params.max_descent_slope)},
                 )
             )
 

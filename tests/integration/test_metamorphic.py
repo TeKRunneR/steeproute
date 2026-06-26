@@ -5,7 +5,8 @@
 # because pytest's `prepend` mode puts the test dir on sys.path — same shape as
 # `from exhaustive_oracle import ...` in `test_solver_on_toy_graph.py`.
 """Metamorphic invariants for the GRASP solver — the 8 logical relations from
-PRD Appendix A(b) (Architecture §Cat 11a/11c).
+PRD Appendix A(b) (Architecture §Cat 11a/11c), plus the FR32 descent-cap relation
+(Story 10.2).
 
 Metamorphic testing catches logical bugs that unit tests miss — inverted Jaccard,
 broken seed threading, wrong objective direction, node-ID order leaking into the
@@ -74,6 +75,19 @@ The two invariants that *do* touch the base-segment identity — node-relabel
 isomorphism and add-edge monotonicity — exercise it explicitly (the relabel
 transform remaps the identity tuples; the add-edge transform tags the new edge
 with a fresh, non-colliding id so it cannot retro-block an existing segment).
+
+Why the descent-cap invariant uses its own fixture (Story 10.2)
+==============================================================
+
+The 9th relation — `relax --max-descent-slope (raise the cap) → best objective
+non-decreasing` — needs a graph that actually has a *descent* to cap. The toy
+factory models every super-edge as a net climb (`d_minus_m` is a small fraction of
+`d_plus_m`), so no traversal is a descent and the cap would be inert (vacuous). The
+invariant therefore builds a tiny dedicated descent-bearing `ContractedGraph`
+(`_descent_graph`) where the highest-objective route descends a steep segment: a
+tight cap blocks that descent and forces a lower-objective uphill alternative, a
+loose cap admits it. GRASP reaches the optimum on this 4-node graph for every seed,
+so the relation holds deterministically. Same direction as `relax_difficulty_cap`.
 
 `pytest.skip`/`xfail` are forbidden here (Architecture §Cat 11c — pass-required).
 """
@@ -402,6 +416,85 @@ def test_graph_isomorphism_objective_identical(seed: int) -> None:
     assert new_obj == old_obj, (
         f"seed {seed}: relabelling node ids changed the best objective "
         f"{old_obj}->{new_obj} — node-id ordering is leaking into the result"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# FR32 descent-cap monotonicity (Story 10.2) — dedicated descent fixture (the
+# toy factory models no descents; see the module docstring).
+# --------------------------------------------------------------------------- #
+
+
+def _descent_graph() -> ContractedGraph:
+    """A 4-node graph whose best route descends a steep, cappable segment.
+
+    super 0→1 (uphill, obj 250) then either descent 1→2 (net loss, windowed grad
+    0.70, obj 300) or super 1→3 (uphill, obj 100). Best route off the cap is
+    [0→1, 1→2] (obj 550); a cap below 0.70 blocks the descent, leaving [0→1, 1→3]
+    (obj 350).
+    """
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+
+    def _add(
+        u: int, v: int, *, length_m: float, d_plus_m: float, d_minus_m: float, grad: float
+    ) -> Edge:
+        avg = (d_plus_m + d_minus_m) / length_m
+        g.add_edge(
+            u,
+            v,
+            key=0,
+            length_m=length_m,
+            d_plus_m=d_plus_m,
+            d_minus_m=d_minus_m,
+            avg_gradient=avg,
+            sac_scale="hiking",
+            max_windowed_descent_grad=grad,
+            base_segment_id=frozenset({(min(u, v), max(u, v), 0)}),
+            reusable=False,
+        )
+        return Edge(u, v, 0, length_m, d_plus_m, d_minus_m, avg, "hiking")
+
+    e01 = _add(0, 1, length_m=400.0, d_plus_m=250.0, d_minus_m=0.0, grad=0.0)
+    e12 = _add(1, 2, length_m=400.0, d_plus_m=0.0, d_minus_m=300.0, grad=0.70)
+    e13 = _add(1, 3, length_m=400.0, d_plus_m=100.0, d_minus_m=0.0, grad=0.0)
+    return ContractedGraph(
+        graph=g, super_edge_to_base={(0, 1, 0): (e01,), (1, 2, 0): (e12,), (1, 3, 0): (e13,)}
+    )
+
+
+def _descent_params(*, max_descent_slope: float | None, seed: int) -> SolverParams:
+    return SolverParams(
+        theta=0.20,
+        min_climb_slope=0.20,
+        difficulty_cap="T5",
+        l_connector=200.0,
+        min_climb_ground_length=300.0,
+        j_max=0.30,
+        n=5,
+        area_cap=500.0,
+        untagged_policy="include",
+        seed=seed,
+        iter_budget=_ITER_BUDGET,
+        time_budget=3600.0,
+        stagnation_iters=0,
+        max_descent_slope=max_descent_slope,
+    )
+
+
+@pytest.mark.parametrize("seed", _SEEDS)
+def test_relax_max_descent_slope_objective_non_decreasing(seed: int) -> None:
+    """Raising the descent cap admits descents it previously forbade → best objective must not drop."""
+    graph = _descent_graph()
+    tight, loose = 0.45, 2.0  # 0.45 blocks the 0.70 descent; 2.0 admits everything
+    old_obj = _best_objective(graph, _descent_params(max_descent_slope=tight, seed=seed))
+    new_obj = _best_objective(graph, _descent_params(max_descent_slope=loose, seed=seed))
+    assert new_obj >= old_obj, (
+        f"seed {seed}: relaxing max_descent_slope {tight}->{loose} dropped objective "
+        f"{old_obj}->{new_obj}"
+    )
+    assert new_obj > old_obj, (
+        f"seed {seed}: relaxing max_descent_slope {tight}->{loose} was a no-op "
+        f"({old_obj}=={new_obj}) — test is vacuous, retune the fixture/seed"
     )
 
 

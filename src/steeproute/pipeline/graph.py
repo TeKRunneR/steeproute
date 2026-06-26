@@ -187,6 +187,22 @@ def contract_climbs(
             # atomic-climb path summed over the whole (min-length-guaranteed) climb.
             avg_gradient: float = (d_plus_m + d_minus_m) / length_m if length_m > 0 else 0.0
             sac_scale: str | None = _aggregate_sac_scale(seg_edges)
+            # Carry the FR32 descent metric onto the super-edge as the steepest
+            # window across its base edges (Story 10.2). A forward super-edge is a
+            # climb (net uphill) so it is never itself a *descent* — this value is
+            # not read by the descent check on the super-edge — but keeping the
+            # full edge-attribute contract uniform on every contracted edge avoids
+            # `.get(..., 0.0)` surprises downstream. Read from `base_graph` data
+            # (`Edge` carries no metric); missing → 0.0 (hand-built test graphs).
+            max_windowed_descent_grad: float = max(
+                (
+                    (base_graph.get_edge_data(e.node_u, e.node_v, e.key) or {}).get(
+                        "max_windowed_descent_grad", 0.0
+                    )
+                    for e in seg_edges
+                ),
+                default=0.0,
+            )
             base_segment_id: frozenset[tuple[int, int, int]] = frozenset(
                 _base_segment_id(e.node_u, e.node_v, e.key) for e in seg_edges
             )
@@ -199,6 +215,7 @@ def contract_climbs(
                 d_minus_m=d_minus_m,
                 avg_gradient=avg_gradient,
                 sac_scale=sac_scale,
+                max_windowed_descent_grad=max_windowed_descent_grad,
                 base_segment_id=base_segment_id,
                 reusable=False,
             )

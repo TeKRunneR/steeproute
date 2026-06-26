@@ -263,7 +263,7 @@ Exact file names within `pipeline/` and `solver/` are placeholders; adjust durin
 - `vertices_resampled` — list of `(lat, lon, elevation_m)` tuples; cached with **raw** post-stage-5 elevations, smoothed query-side (stage 6) into the single canonical profile
 - `length_m`, `d_plus_m`, `d_minus_m`, `avg_gradient` — computed query-side in stage 7 as the naive up/down sum of that one canonical profile (the metric box, the solver objective, and the plotted curve all derive from it — no separate per-edge vs. continuous smoothing)
 - `sac_scale`, `highway`, `osm_way_id` — source attributes from OSM
-- `max_windowed_descent_grad` — steepest uphill-measured running-average gradient over a configurable distance window along the base segment; parameter-independent, governs FR32 descent feasibility (compared against `--max-descent-slope` only when that flag is set)
+- `max_windowed_descent_grad` — steepest uphill-measured running-average gradient over a fixed distance window (`pipeline.climbs._DESCENT_WINDOW_M`, a module constant — kept off the CLI so the metric stays parameter-independent) along the base segment; computed in stage 7, direction-agnostic, governs FR32 descent feasibility (compared against `--max-descent-slope` only when that flag is set)
 
 Structured stage inputs/outputs (beyond simple tuples) use dataclasses declared in `models.py`. No custom graph wrapper.
 

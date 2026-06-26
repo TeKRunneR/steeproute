@@ -115,6 +115,35 @@ def test_single_climb_collapses_into_one_super_edge() -> None:
     assert set(contracted.graph.nodes) == {0, 4}
 
 
+def test_contract_carries_windowed_descent_metric() -> None:
+    """Story 10.2: `max_windowed_descent_grad` carries onto connectors verbatim and onto
+    super-edges as the max over their base edges."""
+    connector = _make_edge(10, 11, length_m=100.0, d_plus_m=5.0, d_minus_m=5.0)
+    climb_edges = [
+        _make_edge(0, 1, length_m=100.0, d_plus_m=25.0),
+        _make_edge(1, 2, length_m=100.0, d_plus_m=25.0),
+    ]
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    for e in [connector, *climb_edges]:
+        _add_edge_from(g, e)
+    # Stage 7 attaches this metric; mirror it onto the hand-built base edges.
+    g.edges[10, 11, 0]["max_windowed_descent_grad"] = 0.42
+    g.edges[0, 1, 0]["max_windowed_descent_grad"] = 0.30
+    g.edges[1, 2, 0]["max_windowed_descent_grad"] = 0.55
+
+    cg = contract_climbs(g, [_climb_from_edges(climb_edges)], l_connector=_L_CONNECTOR)
+
+    # Connector carried over verbatim.
+    assert cg.graph.edges[10, 11, 0]["max_windowed_descent_grad"] == 0.42
+    # Super-edge (0 -> 2) takes the steepest window across its base edges.
+    super_id = next(iter(cg.super_edge_to_base))
+    assert math.isclose(
+        cg.graph.edges[super_id[0], super_id[1], super_id[2]]["max_windowed_descent_grad"],
+        0.55,
+        abs_tol=1e-9,
+    )
+
+
 def test_super_edge_aggregate_equals_sum_of_underlying_edges() -> None:
     """AC #2: super-edge `length_m` / `d_plus_m` / `d_minus_m` = sum of base edges."""
     edges = [

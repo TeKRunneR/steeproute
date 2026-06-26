@@ -36,7 +36,12 @@ Semantics:
     - Undirected base-segment reuse: an edge is infeasible iff any of its
       non-exempt base-segment ids is already used on the current walk
       (`solver.reuse.blocking_ids` against the graph's non-exempt id set). Exempt
-      short connectors never block. Note the *candidate-dedup* key below stays
+      short connectors never block.
+    - Direction-aware descent cap (FR32, opt-in): a *descending* traversal whose
+      `max_windowed_descent_grad` exceeds `--max-descent-slope` is dropped
+      (`solver.descent.descends_over_cap`); uphill is unconstrained. Off when the
+      cap is unset. Single-sourced with GRASP + the validator. Note the
+      *candidate-dedup* key below stays
       *directed* (`(node_u, node_v, key)`) — its only job is to collapse
       different traversal orderings of the same directed edge-set. The
       **distinctness/Jaccard** step (the `TopNTracker` below) keys on the
@@ -69,6 +74,7 @@ from typing import Any
 from steeproute.models import ContractedGraph, Edge, Solution, SolverParams, route_avg_gradient
 from steeproute.pipeline.graph import is_junction_node
 from steeproute.pipeline.osm import max_sac_rank, parse_difficulty_cap
+from steeproute.solver.descent import descends_over_cap
 from steeproute.solver.distinctness import TopNTracker
 from steeproute.solver.reuse import (
     base_segment_id_map,
@@ -88,9 +94,9 @@ def enumerate_best(
 
     Args:
         graph: post-stage-9 `ContractedGraph` — super-edges + long connectors.
-        params: only `theta`, `difficulty_cap`, and `j_max` are read here; the
-            remaining `SolverParams` fields (`seed`, `iter_budget`, etc.) are
-            GRASP-only and the oracle ignores them.
+        params: only `theta`, `difficulty_cap`, `j_max`, `start_at_junction`, and
+            `max_descent_slope` are read here; the remaining `SolverParams` fields
+            (`seed`, `iter_budget`, etc.) are GRASP-only and the oracle ignores them.
         n: desired top-N route count. The result may be shorter than `n` when
             fewer feasible-and-distinct routes exist (FR12 graceful
             degradation), or empty when none qualify.
@@ -137,6 +143,7 @@ def enumerate_best(
             used_segments=set(),
             cap_rank=cap_rank,
             non_exempt=non_exempt,
+            max_descent_slope=params.max_descent_slope,
             results=candidates,
         )
 
@@ -164,6 +171,7 @@ def _dfs(
     used_segments: set[tuple[int, int, int]],
     cap_rank: int,
     non_exempt: frozenset[tuple[int, int, int]],
+    max_descent_slope: float | None,
     results: dict[frozenset[tuple[int, int, int]], Solution],
 ) -> None:
     """Backtracking walk-enumerator; emits each non-empty prefix as a candidate.
@@ -196,6 +204,10 @@ def _dfs(
         rank = max_sac_rank(data["sac_scale"])
         if rank is not None and rank > cap_rank:
             continue
+        # Direction-aware descent cap (FR32, Story 10.2): mirror GRASP's RCL filter
+        # via the shared `solver.descent` predicate so both enumerate one feasible set.
+        if descends_over_cap(data, max_descent_slope):
+            continue
         edge = Edge(
             node_u=u,
             node_v=v,
@@ -217,6 +229,7 @@ def _dfs(
             used_segments=used_segments,
             cap_rank=cap_rank,
             non_exempt=non_exempt,
+            max_descent_slope=max_descent_slope,
             results=results,
         )
         path_edges.pop()

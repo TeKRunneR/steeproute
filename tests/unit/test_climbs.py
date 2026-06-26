@@ -154,6 +154,98 @@ def test_compute_edge_metrics_mixed_up_down_separates_components() -> None:
     assert math.isclose(data["avg_gradient"], expected_grad, rel_tol=1e-6)
 
 
+# --- AC #1 (Story 10.2): windowed descent metric -----------------------------
+
+# Per-segment horizontal distance for a 0.0001° latitude step (the spacing every
+# synthetic profile below uses): same equirectangular projection as production.
+_SEG_LEN_M = _DEG_TO_M_LAT * 0.0001
+
+
+def test_max_windowed_descent_grad_flat_profile_is_zero() -> None:
+    """Flat elevation → no grade in any window → metric 0.0."""
+    verts = [(45.0, 5.0, 1000.0)] + [(45.0 + 0.0001 * i, 5.0, 1000.0) for i in range(1, 6)]
+    out = compute_edge_metrics(_single_edge_graph_with_elevation(verts))
+    assert out.edges[0, 1, 0]["max_windowed_descent_grad"] == 0.0
+
+
+def test_max_windowed_descent_grad_uniform_descent_equals_segment_grade() -> None:
+    """A uniform -5 m/segment descent → every window has the same grade = 5 / segment-length."""
+    verts = [(45.0 + 0.0001 * i, 5.0, 1000.0 - 5.0 * i) for i in range(6)]
+    out = compute_edge_metrics(_single_edge_graph_with_elevation(verts))
+    metric = out.edges[0, 1, 0]["max_windowed_descent_grad"]
+    assert math.isclose(metric, 5.0 / _SEG_LEN_M, rel_tol=1e-6)
+
+
+def test_max_windowed_descent_grad_is_descent_only_not_ascent() -> None:
+    """The metric measures descents in the stored direction; the reversed (ascending) profile → 0.0.
+
+    Direction-awareness is the whole point of FR32: a segment climbed steeply must
+    NOT be capped. Walking `verts` downhill yields the steep grade; the reciprocal
+    edge (reversed vertices, the same physical segment climbed) yields 0.0.
+    """
+    down = [(45.0 + 0.0001 * i, 5.0, 1000.0 - 7.0 * i) for i in range(6)]
+    up = [(45.0 + 0.0001 * i, 5.0, 1000.0 + 7.0 * i) for i in range(6)]
+    grad_down = compute_edge_metrics(_single_edge_graph_with_elevation(down)).edges[0, 1, 0][
+        "max_windowed_descent_grad"
+    ]
+    grad_up = compute_edge_metrics(_single_edge_graph_with_elevation(up)).edges[0, 1, 0][
+        "max_windowed_descent_grad"
+    ]
+    assert grad_down > 0.0
+    assert grad_up == 0.0
+
+
+def test_max_windowed_descent_grad_short_edge_falls_back_to_whole_edge_grade() -> None:
+    """An edge whose whole polyline is shorter than the window → its end-to-end descent grade."""
+    # Two vertices ≈ 11 m apart (< the 30 m window), descending 20 m: metric is drop / length.
+    verts = [(45.0, 5.0, 1020.0), (45.0001, 5.0, 1000.0)]
+    out = compute_edge_metrics(_single_edge_graph_with_elevation(verts))
+    metric = out.edges[0, 1, 0]["max_windowed_descent_grad"]
+    assert math.isclose(metric, 20.0 / _SEG_LEN_M, rel_tol=1e-6)
+
+
+def test_max_windowed_descent_grad_short_ascending_edge_is_zero() -> None:
+    """A sub-window edge that only *climbs* is not a descent → metric 0.0 (the fallback is descent-only)."""
+    verts = [(45.0, 5.0, 1000.0), (45.0001, 5.0, 1020.0)]
+    out = compute_edge_metrics(_single_edge_graph_with_elevation(verts))
+    assert out.edges[0, 1, 0]["max_windowed_descent_grad"] == 0.0
+
+
+def test_max_windowed_descent_grad_captures_steep_window_over_whole_edge_average() -> None:
+    """A short steep descent dominates the metric even though the whole-edge avg_gradient is gentle."""
+    # Five flat vertices then a steep -40 m/segment descent of three segments.
+    elevations = [1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 960.0, 920.0, 880.0]
+    verts = [(45.0 + 0.0001 * i, 5.0, elevations[i]) for i in range(len(elevations))]
+    data = compute_edge_metrics(_single_edge_graph_with_elevation(verts)).edges[0, 1, 0]
+    metric = data["max_windowed_descent_grad"]
+    # The steepest window is the three-segment steep descent (Δ=120 m).
+    assert math.isclose(metric, 120.0 / (3.0 * _SEG_LEN_M), rel_tol=1e-6)
+    # ...and it is far steeper than the edge's averaged-out gradient.
+    assert metric > data["avg_gradient"]
+
+
+def test_max_windowed_descent_grad_ignores_steep_ascent_within_net_descent() -> None:
+    """Finding #3: a net descent whose steepest window *ascends* is not reported as a steep descent.
+
+    A gentle (-5 m/seg) descent interrupted by one steep (+12 m/seg) up-bump nets a
+    loss overall, so the edge *is* a descent — but its steepest sustained 30 m window
+    is the ascent. That window must contribute 0 to the descent metric (else the cap
+    would forbid the traversal for a steep *climb*); the reported grade is the gentle
+    descent's, well below the ascent's grade.
+    """
+    elevations = [1000.0, 995.0, 990.0, 985.0, 980.0, 992.0, 1004.0, 1016.0, 1011.0, 1006.0, 1001.0, 996.0]
+    verts = [(45.0 + 0.0001 * i, 5.0, elevations[i]) for i in range(len(elevations))]
+    data = compute_edge_metrics(_single_edge_graph_with_elevation(verts)).edges[0, 1, 0]
+    # Net loss over the edge → it *is* a descent (d_minus 40 > d_plus 36)...
+    assert data["d_minus_m"] > data["d_plus_m"]
+    # ...but the only steep sustained window is the +12 m/seg ascent, which the
+    # descent metric ignores. The reported grade is the uniform -5 m/seg descent,
+    # far below where the +12 m/seg ascent would have landed under an abs measure.
+    metric = data["max_windowed_descent_grad"]
+    assert math.isclose(metric, 5.0 / _SEG_LEN_M, rel_tol=1e-6)
+    assert metric < 12.0 / _SEG_LEN_M
+
+
 # --- pure-function discipline + attribute contract ---------------------------
 
 
