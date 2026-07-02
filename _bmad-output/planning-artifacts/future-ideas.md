@@ -27,3 +27,5 @@ Make searching large areas tractable within a reasonable time budget. Fuzzy/wide
 
 - Performance profiling to identify bottlenecks.
 - Try a Rust rewrite to see if that offers significant gain
+
+**Researched 2026-07-02:** see `research/technical-steeproute-performance-tuning-research-2026-07-02.md` — phased roadmap (instrument → profile → benchmark → cheap wins → conditional native kernel), Rust scoped to PyO3 hot-loop extraction, rustworkx identified as a no-Rust-authorship alternative.
