@@ -280,8 +280,9 @@ def test_setup_index_lists_all_written_entries(tmp_path: pathlib.Path) -> None:
 def test_setup_cache_miss_auto_downloads_dem_for_area(tmp_path: pathlib.Path) -> None:
     """The cache-miss branch resolves the DEM via auto-download (no `--dem-path` flag).
 
-    `resolve_dem` is called exactly once, with the requested area and
-    `force_refresh=False`, and its returned path feeds the pipeline.
+    `resolve_dem` is called exactly once with `force_refresh=False`, sized to the
+    prepared graph's geometry bounds — a `(west, south, east, north)` bbox that
+    brackets the requested center — and its returned path feeds the pipeline.
     """
     dem_mock = Mock(return_value=_DEM_FIXTURE_PATH)
     runner = CliRunner()
@@ -296,7 +297,13 @@ def test_setup_cache_miss_auto_downloads_dem_for_area(tmp_path: pathlib.Path) ->
     assert "cache-miss" in result.output
     dem_mock.assert_called_once()
     call = dem_mock.call_args
-    assert call.args[0] == Area(center=(_CENTER_LAT, _CENTER_LON), radius_km=_RADIUS_KM)
+    # DEM is now sized from the graph's actual geometry envelope (not the nominal
+    # area), so the first positional arg is a (west, south, east, north) bbox that
+    # must be well-formed and contain the requested center.
+    west, south, east, north = call.args[0]
+    assert west < east and south < north
+    assert west < _CENTER_LON < east
+    assert south < _CENTER_LAT < north
     assert call.kwargs["force_refresh"] is False
 
 

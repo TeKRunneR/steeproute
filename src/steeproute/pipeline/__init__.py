@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import logging
 import math
+import pathlib
 
 import networkx as nx
 
@@ -129,9 +130,10 @@ def run_setup_stages(area: Area, config: PipelineConfig) -> nx.MultiDiGraph:
     """
     # Fail-fast on a missing DEM so we don't waste minutes on OSM + smoothing
     # stages before discovering at stage 5 that the file isn't there. In the CLI
-    # flow `cli/setup.py` resolves this path via `resolve_dem` (auto-download), so
-    # a missing file here means a corrupt/evicted cache entry; the orchestrator is
-    # also called from tests and future scripts, so the guard belongs here too.
+    # flow `cli/setup.py` resolves the DEM via `resolve_dem` (auto-download) *after*
+    # building the geometry, so this guard fires only for the test / script callers
+    # that pass a pre-existing fixture DEM; a missing file there means a
+    # corrupt/evicted cache entry.
     if not config.dem_path.is_file():
         raise BadCLIArgError(
             f"DEM file {config.dem_path} does not exist or is not a regular file.",
@@ -140,9 +142,26 @@ def run_setup_stages(area: Area, config: PipelineConfig) -> nx.MultiDiGraph:
                 "to a corrupt cache — re-run steeproute-setup with --force-refresh."
             ),
         )
+    graph = build_graph_geometry(area, config.untagged_policy)
+    return attach_elevation(graph, config.dem_path)
+
+
+def build_graph_geometry(area: Area, untagged_policy: str) -> nx.MultiDiGraph:
+    """Run the DEM-independent setup stages 1-4 and return the geometry-only graph.
+
+    Stages 1-4 (`osm_load` → `filter_trails` → `smooth_polylines` →
+    `resample_edges`, plus the non-empty / orphan / short-edge guards) need no
+    elevation data. Splitting them out lets `cli/setup.py` size the DEM from the
+    *actual* edge geometry (`pipeline.dem_download.graph_dem_bounds`) before
+    `attach_elevation` runs, guaranteeing DEM coverage of every probed vertex.
+
+    Returns a `MultiDiGraph` whose edges carry the post-stage-4 contract
+    (`geometry`, `sac_scale`, `highway`, `osm_way_id`) — no `vertices_resampled`
+    elevation yet — and at least one edge (the non-empty guard).
+    """
     graph = osm_load(area)
-    graph = filter_trails(graph, config.untagged_policy, _SETUP_DIFFICULTY_CAP)
-    _assert_non_empty(graph, area, config.untagged_policy)
+    graph = filter_trails(graph, untagged_policy, _SETUP_DIFFICULTY_CAP)
+    _assert_non_empty(graph, area, untagged_policy)
     graph = _drop_orphan_nodes(graph)
     graph = smooth_polylines(graph)
     graph = resample_edges(graph)
@@ -151,8 +170,18 @@ def run_setup_stages(area: Area, config: PipelineConfig) -> nx.MultiDiGraph:
     # stage-4 (resample) drop degenerate edges, and `_drop_short_edges` adds
     # the < 1 mm prune on top. A pathological fixture could leave a zero-edge
     # graph that then hits `sample_elevation` with no actionable error.
-    _assert_non_empty(graph, area, config.untagged_policy)
-    graph = sample_elevation(graph, config.dem_path)
+    _assert_non_empty(graph, area, untagged_policy)
+    return graph
+
+
+def attach_elevation(graph: nx.MultiDiGraph, dem_path: pathlib.Path) -> nx.MultiDiGraph:
+    """Run stage 5 (`sample_elevation`) + the finite-elevation guard on `graph`.
+
+    `dem_path` must cover every edge-geometry vertex — `cli/setup.py` ensures this
+    by sizing the raster from `graph_dem_bounds(graph)`. A vertex outside the DEM
+    raises `DEMCoverageError` from `sample_elevation`.
+    """
+    graph = sample_elevation(graph, dem_path)
     _assert_finite_elevations(graph)
     return graph
 

@@ -65,9 +65,13 @@ from steeproute.errors import (
     CacheCorruptedError,
     CacheNotFoundError,
 )
-from steeproute.models import Area, PipelineConfig
-from steeproute.pipeline import run_setup_stages
-from steeproute.pipeline.dem_download import DEFAULT_DEM_VERSION, resolve_dem
+from steeproute.models import Area
+from steeproute.pipeline import attach_elevation, build_graph_geometry
+from steeproute.pipeline.dem_download import (
+    DEFAULT_DEM_VERSION,
+    graph_dem_bounds,
+    resolve_dem,
+)
 from steeproute.provenance import get_commit_short, iso8601_utc_now
 
 _logger = logging.getLogger(__name__)
@@ -154,17 +158,21 @@ def cli(
             )
 
     if not cache_hit:
-        # Auto-download the DEM for the area (cached + reused under the cache
-        # root). `--force-refresh` re-fetches it so a forced rebuild gets fresh
-        # elevation data, not a stale cached raster.
+        # Build the graph geometry first (stages 1-4, DEM-independent), then size
+        # the DEM from its *actual* extent so the raster covers every vertex
+        # `sample_elevation` probes. osmnx `simplify=True` can push simplified edge
+        # geometry past the nominal OSM bbox by an unbounded amount near switchbacks,
+        # so a fixed radius+padding ring is not safe (it failed at radius 10 km in
+        # the Alps). `--force-refresh` re-fetches the raster so a forced rebuild gets
+        # fresh elevation data, not a stale cached one.
+        graph = build_graph_geometry(area, untagged_trails)
         dem_path = resolve_dem(
-            area,
+            graph_dem_bounds(graph),
             cache_root,
             dem_version=resolved_dem_version,
             force_refresh=force_refresh,
         )
-        config = PipelineConfig(untagged_policy=untagged_trails, dem_path=dem_path)
-        graph = run_setup_stages(area, config)
+        graph = attach_elevation(graph, dem_path)
         now = iso8601_utc_now()
         manifest = Manifest(
             area=area,

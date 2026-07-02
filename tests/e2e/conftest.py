@@ -60,7 +60,7 @@ def _osm_load_from_fixture(_area: Area) -> nx.MultiDiGraph:
 
 
 def _resolve_dem_from_fixture(
-    _area: Area,
+    _bounds: tuple[float, float, float, float],
     _cache_root: pathlib.Path,
     **_kwargs: object,
 ) -> pathlib.Path:

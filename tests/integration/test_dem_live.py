@@ -1,6 +1,8 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
+# pyright: reportPrivateUsage=false
 # Reason: rasterio surfaces DatasetReader / read() as Unknown; same external-boundary
-# pattern as pipeline/dem.py.
+# pattern as pipeline/dem.py. `_padded_bbox` is the area→bbox helper the live fetch
+# uses to build a realistic bbox, same private-helper access as test_dem_download.py.
 """Live DEM-download integration test — calls the IGN WMS; skipped in default CI.
 
 Run locally with:
@@ -21,7 +23,7 @@ import pytest
 import rasterio
 
 from steeproute.models import Area
-from steeproute.pipeline.dem_download import resolve_dem
+from steeproute.pipeline.dem_download import _padded_bbox, resolve_dem
 
 # Le Sappey-en-Chartreuse — same center as the committed fixture; a tiny radius
 # keeps the live fetch fast and the payload small.
@@ -35,7 +37,7 @@ _MAX_PLAUSIBLE_M = 3000.0
 
 @pytest.mark.live
 def test_live_resolve_dem_fetches_plausible_alpine_elevations(tmp_path: pathlib.Path) -> None:
-    path = resolve_dem(_AREA, tmp_path)
+    path = resolve_dem(_padded_bbox(_AREA), tmp_path)
     assert path.is_file()
 
     with rasterio.open(path) as dataset:

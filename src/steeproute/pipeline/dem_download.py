@@ -9,11 +9,14 @@ fetch IGN RGE ALTI HIGHRES (5 m native) over the public, key-less Géoplateforme
 WMS as raw IEEE-754 float32 (`image/x-bil;bits=32`), and write a single-band
 float32 GeoTIFF in WGS84 (EPSG:4326).
 
-`resolve_dem(area, cache_root)` is the entry point. It covers the OSM bbox plus
-a padding ring (so the strict-bounds `sample_elevation` never trips on osmnx
-simplification overshoot), tiles the request so any area up to the setup radius
-ceiling stays at native 5 m, mosaics the tiles, and caches the result per-area
-under `<cache-root>/steeproute/dem/`. A cached raster is reused unless
+`resolve_dem(bounds, cache_root)` is the entry point. The setup path derives
+`bounds` from the prepared graph's geometry envelope (`graph_dem_bounds`) so the
+raster always covers the vertices `sample_elevation` probes — osmnx
+`simplify=True` can push simplified edge geometry past the nominal OSM fetch bbox
+by an unbounded amount near switchbacks, which a fixed radius+padding ring cannot
+safely cover. `resolve_dem` tiles the request so any area up to the setup radius
+ceiling stays at native 5 m, mosaics the tiles, and caches the result keyed on the
+bbox under `<cache-root>/steeproute/dem/`. A cached raster is reused unless
 `force_refresh` is set. Every network / payload failure maps to
 `DataSourceUnavailableError("DEM source unreachable.", …)` so `run_entry_point`
 surfaces it as exit 2 with the same wording as the existing DEM-open failure
@@ -27,6 +30,7 @@ in the OS store but not in `certifi`'s vendored bundle.
 from __future__ import annotations
 
 import hashlib
+import http.client
 import logging
 import math
 import os
@@ -36,8 +40,10 @@ import urllib.parse
 from collections.abc import Iterator
 from urllib.request import Request, urlopen
 
+import networkx as nx
 import numpy as np
 import rasterio
+import shapely
 import truststore
 from rasterio.transform import from_bounds
 
@@ -69,10 +75,19 @@ DEFAULT_DEM_VERSION: str = "ign-rgealti-highres"
 # Target ground resolution in meters/pixel. RGE ALTI HIGHRES is 5 m native.
 _TARGET_RES_M: float = 5.0
 
-# Padding ring (m) added around the OSM bbox half-side, so the DEM fully covers
-# trail vertices that osmnx simplification can push slightly past the fetch bbox
-# — `sample_elevation` is strict-bounds-fail-fast. Mirrors the fixture's 100 m.
+# Padding ring (m) for the area→bbox convenience (`_padded_bbox`), retained for
+# the offline/live DEM tests that fetch a raster for a nominal area. The
+# production setup path no longer sizes the DEM this way — see `graph_dem_bounds`.
 _PADDING_M: float = 100.0
+
+# Safety margin (m) added around the *actual graph geometry* envelope when sizing
+# the DEM in the setup path. osmnx `simplify=True` produces edge-geometry that can
+# bulge past the nominal OSM fetch bbox by an unbounded amount near switchbacks
+# (mountain hairpins in the Alps), so a fixed padding over the radius is not safe.
+# Sizing from the geometry envelope guarantees coverage; the margin only needs to
+# keep the extreme vertices strictly interior so `sample_elevation`'s half-open
+# bounds check (east/north exclusive) passes — 100 m is comfortable headroom.
+_GRAPH_BOUNDS_MARGIN_M: float = 100.0
 
 # Max pixels per WMS GetMap tile dimension. A single IGN request is capped; 2048
 # stays well under it and keeps each tile's BIL payload ~16 MB. Larger areas are
@@ -98,17 +113,19 @@ _BBOX_DECIMALS: int = 6
 
 
 def resolve_dem(
-    area: Area,
+    bounds: tuple[float, float, float, float],
     cache_root: pathlib.Path,
     *,
     dem_version: str = DEFAULT_DEM_VERSION,
     force_refresh: bool = False,
 ) -> pathlib.Path:
-    """Return a local DEM GeoTIFF covering `area`, downloading + caching if absent.
+    """Return a local DEM GeoTIFF covering `bounds`, downloading + caching if absent.
 
     Args:
-        area: search area (`center` is `(lat, lon)`, `radius_km` is the bbox
-            half-side). The DEM covers this bbox plus `_PADDING_M` on each side.
+        bounds: `(west, south, east, north)` in WGS84 degrees that the raster must
+            cover. The setup path derives this from the prepared graph's geometry
+            envelope via `graph_dem_bounds`, so the DEM is guaranteed to cover
+            every vertex `sample_elevation` will probe.
         cache_root: cache root from `cache.resolve_cache_root` (honors `--cache-dir`).
         dem_version: DEM release tag. Folded into the raster cache key so a changed
             `--dem-version` (e.g. after an IGN dataset bump) re-downloads rather than
@@ -122,18 +139,19 @@ def resolve_dem(
         DataSourceUnavailableError: the IGN WMS is unreachable, times out, returns
             an HTTP error, or returns an unexpected / non-BIL payload.
     """
-    west, south, east, north = _padded_bbox(area)
-    width, height = _grid_dims(west, south, east, north, area.center[0])
+    west, south, east, north = bounds
+    center_lat = (south + north) / 2.0
+    width, height = _grid_dims(west, south, east, north, center_lat)
     dem_key = _dem_cache_key(west, south, east, north, width, height, dem_version)
     path = dem_cache_path_for(cache_root, dem_key)
 
     if path.is_file() and not force_refresh:
-        _logger.debug("DEM cache hit for area %s: %s", area.center, path)
+        _logger.debug("DEM cache hit for bounds %s: %s", bounds, path)
         return path
 
     _logger.debug(
-        "DEM cache miss for area %s; fetching %dx%d px from IGN WMS.",
-        area.center,
+        "DEM cache miss for bounds %s; fetching %dx%d px from IGN WMS.",
+        bounds,
         width,
         height,
     )
@@ -142,8 +160,52 @@ def resolve_dem(
     return path
 
 
-def _padded_bbox(area: Area) -> tuple[float, float, float, float]:
-    """Return `(west, south, east, north)` in WGS84 degrees covering area + padding."""
+def graph_dem_bounds(
+    graph: nx.MultiDiGraph,
+    *,
+    margin_m: float = _GRAPH_BOUNDS_MARGIN_M,
+) -> tuple[float, float, float, float]:
+    """Return the WGS84 `(west, south, east, north)` covering every edge vertex + margin.
+
+    Sizing the DEM from the graph's actual edge geometry — rather than the nominal
+    OSM fetch bbox — guarantees the raster covers the vertices `sample_elevation`
+    probes, regardless of how far osmnx's simplified geometry bulges past the fetch
+    bbox (see `_GRAPH_BOUNDS_MARGIN_M`). The margin keeps the extreme vertices
+    strictly interior to the raster so the half-open east/north bounds check passes.
+
+    Must be called on the post-stage-4 graph (every edge carries a `LineString`
+    `geometry`); the orchestrator's non-empty guard ensures at least one edge.
+    """
+    minx = miny = math.inf
+    maxx = maxy = -math.inf
+    for _u, _v, _k, data in graph.edges(data=True, keys=True):
+        geom = data.get("geometry")
+        if not isinstance(geom, shapely.LineString):
+            raise TypeError(
+                "pipeline.dem_download: edge geometry must be a shapely.LineString, "
+                f"got {type(geom).__name__}"
+            )
+        gx0, gy0, gx1, gy1 = geom.bounds
+        minx, miny = min(minx, gx0), min(miny, gy0)
+        maxx, maxy = max(maxx, gx1), max(maxy, gy1)
+    if not all(math.isfinite(v) for v in (minx, miny, maxx, maxy)):
+        raise ValueError(
+            "pipeline.dem_download: graph has no edge geometry to bound; "
+            "graph_dem_bounds requires a non-empty post-stage-4 graph."
+        )
+    lat = (miny + maxy) / 2.0
+    margin_lat = margin_m / _M_PER_DEG_LAT
+    margin_lon = margin_m / (_M_PER_DEG_LAT * math.cos(math.radians(lat)))
+    return (minx - margin_lon, miny - margin_lat, maxx + margin_lon, maxy + margin_lat)
+
+
+def _padded_bbox(area: Area) -> tuple[float, float, float, float]:  # pyright: ignore[reportUnusedFunction]
+    """Return `(west, south, east, north)` in WGS84 degrees covering area + padding.
+
+    Retained as the canonical area→bbox derivation for the offline/live DEM tests
+    (`test_dem_download` / `test_dem_live`) that fetch a raster for a nominal area.
+    The production setup path sizes the DEM from `graph_dem_bounds` instead.
+    """
     lat, lon = area.center
     half_side_m = area.radius_km * 1000.0 + _PADDING_M
     half_lat_deg = half_side_m / _M_PER_DEG_LAT
@@ -280,6 +342,11 @@ def _wms_get_bil(
         with urlopen(req, timeout=_HTTP_TIMEOUT_S) as resp:
             content_type = resp.headers.get_content_type()
             body = resp.read()
+    except http.client.IncompleteRead as exc:
+        raise DataSourceUnavailableError(
+            "DEM source unreachable.",
+            detail=f"IGN WMS GetMap returned a truncated response: {exc!r}",
+        ) from exc
     except (urllib.error.URLError, OSError) as exc:
         # `URLError` is the base of urllib's network failures (`HTTPError`,
         # connection refused, DNS, TLS); `OSError` covers low-level socket /
