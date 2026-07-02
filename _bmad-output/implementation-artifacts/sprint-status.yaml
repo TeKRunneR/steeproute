@@ -113,12 +113,21 @@ development_status:
   8-3-readme-gallery-with-3-5-pre-computed-example-reports: done
   8-4-readme-known-limitations-quickstart-sections: done
   8-5-final-ci-threshold-tightening-and-linux-best-effort-job: deferred  # 2026-07-02: CI tightening adds little for this project
+  epic-8-retrospective: optional
 
   epic-9: done        # Route-Discovery Quality (correct-course 2026-06-18); runs before 8-5
   9-1-climb-detection-maximality: done
   9-2-grasp-theta-feasible-prefix-recovery: done
   9-3-revalidation-golden-rebake-and-doc-sync: done
+  epic-9-retrospective: optional
 
   epic-10: done        # Practical Route Constraints (correct-course 2026-06-25); runs before 8-5
   10-1-junction-start-constraint: done
   10-2-direction-aware-descent-slope-cap: done
+  epic-10-retrospective: optional
+
+  epic-11: backlog        # Performance Instrumentation & Baseline (post-v1 increment 2026-07-02)
+  11-1-setup-stage-timing-seams-and-progress-reporting: backlog
+  11-2-profile-solver-and-setup-pipeline-into-a-ranked-bottleneck-list: backlog
+  11-3-dedicated-benchmark-suite-pinning-pre-optimization-baselines: backlog
+  epic-11-retrospective: optional

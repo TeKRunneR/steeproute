@@ -3,6 +3,7 @@ stepsCompleted: ['step-01-validate-prerequisites', 'step-02-design-epics', 'step
 inputDocuments:
   - _bmad-output/planning-artifacts/prd.md
   - _bmad-output/planning-artifacts/architecture.md
+  - _bmad-output/planning-artifacts/research/technical-steeproute-performance-tuning-research-2026-07-02.md
 ---
 
 # bmad-test - Epic Breakdown
@@ -71,6 +72,10 @@ This document provides the complete epic and story breakdown for bmad-test (prod
 
 - FR31: User can constrain a returned route's start endpoint to a road/trail junction (a node incident to both an admitted road/connector and a trail) via an opt-in flag. Default off.
 - FR32: User can configure a direction-aware maximum descent slope — a route may descend a segment only if its windowed uphill-measured slope stays at or below the threshold, while the segment remains eligible as a climb. Opt-in; default off.
+
+**Setup Progress Reporting (post-v1 increment 2026-07-02)**
+
+- FR33: `steeproute-setup` emits progress during preparation: each pipeline stage announces itself when it starts and reports elapsed time when it completes, and long-running stages emit within-stage progress (e.g. DEM tile fetch reports `tile i/N`) so the user can always distinguish "working" from "stuck". Follows the existing stream discipline (progress on stdout, suppressed by `--quiet`, errors/warnings on stderr).
 
 ### NonFunctional Requirements
 
@@ -150,6 +155,21 @@ Derived from the Architecture document — requirements that shape epic and stor
 
 - README contains a first-class "Known Limitations" section covering data-level error (DEM/polyline-drift cliff-bias) and solver-level error (GRASP heuristic non-optimality).
 
+**Performance Instrumentation & Baseline (research 2026-07-02 — Phases 0–2; post-v1 increment):**
+
+Derived from `research/technical-steeproute-performance-tuning-research-2026-07-02.md` and the decisions recorded in it. These drive Epic 11 stories; they are dev-tooling/measurement work, not PRD FRs.
+
+- T1: Stage-level timing seams — one reusable decorator/context-manager around each setup pipeline stage; the same seam serves FR33 progress output and profiling attribution.
+- T2: Verify osmnx HTTP cache is enabled and persistent under `platformdirs`; fix if not.
+- T3: Deliverable: per-stage wall-clock breakdown of a real setup run on a Grenoble-scale area.
+- T4: py-spy flamegraphs of a realistic GRASP run (~200k iter-budget, Grenoble-scale area); py-spy is native on Windows, Scalene/WSL2 is fallback only if Python-vs-native attribution is ambiguous.
+- T5: Deliverable: ranked bottleneck list with Python-vs-native attribution answering the research's decision question (scoring math vs. networkx calls vs. loop skeleton) — the input that scopes Phase 3+.
+- T6: Dedicated `tests/benchmarks/` pytest-benchmark suite, excluded from the default run (marker/testpath, same exclusion pattern as `live`/`slow`); never mixed into functional tests.
+- T7: Throughput metric: seconds per 1k GRASP iterations at fixed seed/params on the `grenoble_small` fixture; setup-stage wall-clock as the second metric family.
+- T8: Baselines pinned (`--benchmark-autosave` / `--benchmark-compare`) before any optimization work lands.
+
+Constraints: Phases 0–2 are behavior-preserving — regression goldens stay green untouched; the only observable change is FR33's new setup output. Phase order is non-negotiable (no optimization before flamegraphs). Phases 3–4 are explicitly out of scope until T5's bottleneck list exists.
+
 ### UX Design Requirements
 
 Not applicable — CLI-only project, no UI. UX Design spec deliberately omitted per PRD project-type configuration.
@@ -191,10 +211,11 @@ Not applicable — CLI-only project, no UI. UX Design spec deliberately omitted 
 | FR30 (distinct exit codes) | Epic 1 (scaffolding) / Epic 3 (code 1) / Epic 7 (code 130) | `run_entry_point` wrapper + feature-specific returns |
 | FR31 (start-at-junction, opt-in) | Epic 10 | Junction annotation (Stage 9) + GRASP/oracle seed restriction + validator |
 | FR32 (direction-aware descent cap, opt-in) | Epic 10 | Windowed descent metric + GRASP/oracle descent feasibility + validator |
+| FR33 (setup progress) | Epic 11 | Stage seams shared with profiling instrumentation; stream discipline per Architecture Cat 8 |
 
 **NFR coverage:**
 
-- NFR1 (compute budget ≤10min design target): Epic 7 — time-budget termination, stagnation, progress reporting surfaces elapsed
+- NFR1 (compute budget ≤10min design target): Epic 7 — time-budget termination, stagnation, progress reporting surfaces elapsed; Epic 11 makes the target measurable (benchmark baselines + per-stage timing)
 - NFR2 (16 GB memory envelope): Epic 8 — validated during gallery generation; documented if notable
 - NFR3 (Ctrl-C preserves output + cache valid): Epic 7
 - NFR4 (seeded determinism, edge-set level): Epic 3
@@ -1101,3 +1122,52 @@ So that returned routes don't bomb down dangerous grades.
 **Then** with the flag off, output is byte-identical to today and the existing default-param goldens (both tiers) match without rebake
 **And** with the flag on, no returned route descends an over-cap segment though it stays eligible as a climb — pinned by a new flag-on golden fixture — and a new metamorphic invariant (relax `--max-descent-slope` → best objective monotone non-decreasing) passes alongside the existing eight
 **And** the Epic 10 closeout is folded in here: re-validate the metamorphic suite and the Story 3.7 GRASP-vs-exhaustive gate (expected unchanged — flags off in those fixtures), sync PRD/architecture docs, and an optional `bmad-checkpoint-preview` on a real Grenoble area confirms sensible junction starts and avoided steep descents
+
+## Epic 11: Performance Instrumentation & Baseline
+
+Establish the measurement foundation the performance-tuning roadmap requires before any optimization work, and close the v1 gap where `steeproute-setup` runs for minutes in complete silence. One reusable stage-timing seam serves both goals: each setup pipeline stage announces itself and reports elapsed time, long stages (DEM tile fetch) emit within-stage progress so "working" is distinguishable from "stuck" (FR33), and the same seams give profiling its per-stage attribution. py-spy flamegraphs of a realistic GRASP run (~200k iterations, Grenoble-scale) produce the epic's decision deliverable — a ranked bottleneck list with Python-vs-native attribution answering the research's central question (scoring math vs. networkx calls vs. loop skeleton). A dedicated `tests/benchmarks/` pytest-benchmark suite (excluded from the default run) pins throughput baselines — seconds per 1k GRASP iterations at fixed seed/params, setup-stage wall-clock — before anything changes. Behavior-preserving apart from the new setup output: regression goldens stay green untouched. Phases 3–4 of the roadmap (cheap wins, conditional native kernel) are deliberately **not** planned here — their scope depends on the bottleneck list this epic produces. Promotes the `future-ideas.md` "Performance tuning" item per `research/technical-steeproute-performance-tuning-research-2026-07-02.md` (Phases 0–2); inserted via post-v1 increment run 2026-07-02; no epic renumber.
+
+**FRs covered:** FR33. Supports NFR1 (the ~10-min design target becomes measurable rather than anecdotal).
+
+### Story 11.1: Setup-stage timing seams and progress reporting (FR33)
+
+As a user,
+I want `steeproute-setup` to tell me which stage it's running, how long each completed stage took, and progress within long stages,
+So that a multi-minute setup run is visibly working rather than apparently hung.
+
+**Acceptance Criteria:**
+
+**Given** `steeproute-setup` currently emits nothing between invocation and the end-of-run summary
+**When** I add one reusable stage-timing seam (context manager or decorator, natural home `progress.py`) wrapped around every setup pipeline stage — emitting a stage-start line and a stage-complete line with elapsed time to stdout, within-stage `tile i/N` progress for the DEM tile-fetch loop, and an honest "single request, typically takes minutes" start line for the blocking OSM/Overpass download
+**Then** a real setup run prints a per-stage timeline whose stage times account for the run's wall-clock (the T3 deliverable), and `--quiet` suppresses all progress while errors/warnings stay on stderr (Architecture Cat 8)
+**And** the seam also captures timings machine-readably (e.g. a per-stage dict on the run result), so Story 11.2's attribution reuses it rather than re-instrumenting
+**And** osmnx's HTTP cache is verified enabled and persistent under `platformdirs`, fixed if not (T2), with the outcome asserted by a test or recorded in the story's close-out
+**And** existing e2e setup tests stay green, extended to assert stage lines present by default and absent under `--quiet`; regression goldens untouched
+
+### Story 11.2: Profile solver and setup pipeline into a ranked bottleneck list
+
+As a developer,
+I want py-spy flamegraphs of a realistic GRASP run plus the instrumented setup breakdown, analyzed into a ranked bottleneck list,
+So that Phase 3 optimization targets measured hotspots instead of guesses.
+
+**Acceptance Criteria:**
+
+**Given** Story 11.1's seams exist and py-spy is available as a dev dependency (native on Windows)
+**When** I profile a quality-params GRASP run (~200k iter-budget / 10k stagnation, Grenoble-scale prepared area) with `py-spy record`, and run a cold-cache real setup capturing the per-stage breakdown
+**Then** a findings document in `_bmad-output/planning-artifacts/` records: the ranked bottleneck list with percentage attribution, Python-vs-native attribution per hotspot, and an explicit answer to the research's decision question — scoring math vs. networkx calls vs. loop skeleton — plus the setup per-stage table separating network wait from CPU work
+**And** the document closes with a Phase-3 recommendation following the research's decision tree (numpy batching / rustworkx / PyO3 kernel / setup-side levers), flamegraph artifacts committed or linked
+**And** Scalene-under-WSL2 is used only if flamegraphs leave the Python-vs-native split ambiguous; no production code changes in this story
+
+### Story 11.3: Dedicated benchmark suite pinning pre-optimization baselines
+
+As a developer,
+I want a `tests/benchmarks/` pytest-benchmark suite measuring solver throughput and setup-stage wall-clock, excluded from the default test run,
+So that every future optimization is judged against pinned baselines instead of anecdotes.
+
+**Acceptance Criteria:**
+
+**Given** Stories 11.1–11.2 are complete and no optimization work has landed
+**When** I add pytest-benchmark as a dev dependency and create `tests/benchmarks/` with its own marker/testpath excluded from the default run (same pattern as `live`/`slow`), with benchmark fixtures sized for measurement (the `grenoble_small` graph, fixed seed and params) independent of functional fixtures
+**Then** the suite measures seconds per 1k GRASP iterations at fixed seed/params (throughput) and per-stage setup timings on cached fixture data (no live network), and `--benchmark-autosave` baselines are committed or their location documented
+**And** the default `uv run pytest` collects zero benchmark tests and all functional tests are unmodified
+**And** the dev-notes/README document the `--benchmark-compare` workflow expected around every future optimization commit
