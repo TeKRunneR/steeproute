@@ -215,7 +215,7 @@ Not applicable — CLI-only project, no UI. UX Design spec deliberately omitted 
 
 **NFR coverage:**
 
-- NFR1 (compute budget ≤10min design target): Epic 7 — time-budget termination, stagnation, progress reporting surfaces elapsed; Epic 11 makes the target measurable (benchmark baselines + per-stage timing)
+- NFR1 (compute budget ≤10min design target): Epic 7 — time-budget termination, stagnation, progress reporting surfaces elapsed; Epic 11 makes the target measurable (benchmark baselines + per-stage timing); Epic 12 raises solver throughput against those baselines
 - NFR2 (16 GB memory envelope): Epic 8 — validated during gallery generation; documented if notable
 - NFR3 (Ctrl-C preserves output + cache valid): Epic 7
 - NFR4 (seeded determinism, edge-set level): Epic 3
@@ -1171,3 +1171,64 @@ So that every future optimization is judged against pinned baselines instead of 
 **Then** the suite measures seconds per 1k GRASP iterations at fixed seed/params (throughput) and per-stage setup timings on cached fixture data (no live network), and `--benchmark-autosave` baselines are committed or their location documented
 **And** the default `uv run pytest` collects zero benchmark tests and all functional tests are unmodified
 **And** the dev-notes/README document the `--benchmark-compare` workflow expected around every future optimization commit
+
+## Epic 12: Solver Performance Optimization (Phase 3 — Pure-Python Cheap Wins)
+
+Execute the Phase-3 optimizations the bottleneck analysis indicts, in its ranked order. Profiling (Story 11.2) resolved the research's decision question: the GRASP solver is ~94% of query wall-clock and its cost is the bespoke loop skeleton plus per-step object churn — pure-Python data-structure waste, not scoring math (no batchable dense math exists) and not networkx algorithms (rustworkx explicitly not indicated). Estimated combined headroom ≈2.5–4×. Stories 12.1–12.2 are behavior-identical (same candidates, same order — regression goldens stay green untouched); Story 12.3 batches RNG draws, which changes the seeded draw sequence and carries the epic's one documented golden rebake (Story 9.3 reconciliation precedent). Every story is judged against the Epic 11 benchmark baselines (`--benchmark-compare`); the epic closes with a fresh profile and an explicit Phase-4 go/no-go (extract-interface-first → PyO3 kernel is the designated branch if the target is missed). Setup-pipeline optimization stays out of scope — ~81% network wait, one-time cost per area. Promotes the Phase-3 recommendation in `research/steeproute-bottleneck-analysis-2026-07-03.md`; inserted via correct-course 2026-07-03 (see `sprint-change-proposal-2026-07-03-solver-optimization.md`); no epic renumber.
+
+**FRs covered:** none new — performance work on existing behavior. Supports NFR1 (widens the margin under the ~10-minute design target) and preserves NFR4 (seeded determinism holds under 12.3's new draw scheme, with rebaked goldens).
+
+### Story 12.1: Precompute static per-node adjacency for RCL construction
+
+As a user,
+I want the solver to stop rebuilding static graph data on every walk step,
+So that queries run substantially faster with identical results.
+
+**Acceptance Criteria:**
+
+**Given** the contracted climb graph is immutable for the duration of a solve
+**When** `run()` precomputes, once per solve, a per-node adjacency table of pre-built records (`Edge` object, blocking frozenset, static sort order) and `_build_rcl` consumes it — no networkx view construction, no `Edge` re-wrapping, no `blocking_ids` recomputation, no re-sorting per step
+**Then** solver output is behavior-identical (same candidates in the same order for the same seed) and the full regression-golden suite passes untouched
+**And** the benchmark suite shows a material throughput gain over the pinned Story 11.3 baseline (analysis attributes ~35–40% of the run to the eliminated work), recorded via `--benchmark-compare` in the story close-out
+**And** solver public interfaces, validator, and exhaustive oracle are unchanged
+
+### Story 12.2: Incremental θ-prefix metrics and cached distinctness sets
+
+As a user,
+I want prefix finalization and distinctness checks to stop recomputing unchanged values,
+So that per-iteration overhead drops further with identical results.
+
+**Acceptance Criteria:**
+
+**Given** `_best_theta_prefix` currently re-sums the whole prefix per candidate (quadratic in walk length) and `_canonical_edge_set` is recomputed per pairwise comparison
+**When** prefix scanning maintains running `Σlength / ΣD+ / ΣD−` sums, with the canonical `route_avg_gradient` retained as the final acceptance gate (admitted values stay bit-identical to the validator's, per the models.py contract), and each held solution's canonical edge set is computed once at insertion
+**Then** the regression-golden suite passes untouched
+**And** the benchmark suite shows a throughput gain over the post-12.1 baseline consistent with the ~15% combined attribution, recorded via `--benchmark-compare`
+
+### Story 12.3: Batched RNG draws with documented golden rebake
+
+As a user,
+I want the per-step scalar RNG boundary overhead removed,
+So that the last measured hotspot (~13% of the run) is captured.
+
+**Acceptance Criteria:**
+
+**Given** the hot path currently makes one scalar `Generator.integers` call per walk step — the profile's only native time, all boundary overhead
+**When** RNG draws are batched/chunked so per-step scalar calls disappear from the hot path, preserving the determinism contract (same `--seed` + code + prepared data → identical output edge-sets, NFR4)
+**Then** because the draw sequence changes, regression goldens are rebaked once via the documented `update-regression` workflow with commit-message rationale (Story 9.3 precedent)
+**And** the GRASP-vs-exhaustive quality gate and metamorphic invariants pass on the new outputs
+**And** the benchmark gain over the post-12.2 baseline is recorded via `--benchmark-compare`
+
+### Story 12.4: Re-profile, benchmark reconciliation, and Phase-4 decision
+
+As a developer,
+I want a post-optimization profile and a consolidated benchmark comparison against the Epic 11 baselines,
+So that the Phase-4 decision (PyO3 kernel or stop) is made on measurements, not projections.
+
+**Acceptance Criteria:**
+
+**Given** Stories 12.1–12.3 have landed with per-story benchmark records
+**When** I capture a fresh py-spy profile of the same quality-params workload, plus one confirming capture on a larger area (the analysis's single-area caveat), and consolidate cumulative speedup vs the Story 11.3 baselines
+**Then** a findings update in `_bmad-output/planning-artifacts/research/` records the new profile shape, the cumulative speedup, and whether the measured result lands inside the predicted 2.5–4× band
+**And** the document closes with an explicit Phase-4 go/no-go recommendation (extract-interface-first → PyO3 `steeproute-core` kernel is the designated branch; rustworkx and numpy batching remain not indicated) — Phase-4 stories are not planned in this epic
+**And** no production code changes in this story
