@@ -79,6 +79,8 @@ dev = [
     "basedpyright>=1.38.0",
     "funlog>=0.2.1",
     "hypothesis>=6.0",
+    "py-spy>=0.4.2",
+    "pytest-benchmark>=5.2.3",
 ]
 
 [project.scripts]
@@ -225,11 +227,13 @@ filterwarnings = []
 markers = [
     "live: tests that hit external services; skipped in default CI (run with `uv run pytest -m live`)",
     "slow: realistic-budget regression goldens (~65s); skipped by default (run with `uv run pytest -m slow`)",
+    "benchmark: pytest-benchmark performance baselines (tests/benchmarks/); skipped by default (run with `uv run pytest tests/benchmarks -m benchmark`)",
 ]
-# Default collection excludes live- and slow-marked tests so the inner loop stays
-# fast and offline. Override locally with `uv run pytest -m live` / `-m slow` to run
-# only that tier, or `uv run pytest -m ""` to run everything.
-addopts = ["-m", "not live and not slow"]
+# Default collection excludes live-, slow-, and benchmark-marked tests so the inner
+# loop stays fast and offline. Override locally with `uv run pytest -m live` /
+# `-m slow` / `-m benchmark` to run only that tier, or `uv run pytest -m ""` to run
+# everything.
+addopts = ["-m", "not live and not slow and not benchmark"]
 
 [tool.coverage.run]
 source = ["src/steeproute"]

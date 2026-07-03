@@ -123,6 +123,34 @@ This re-runs the fixture(s), prints a before/after diff, and overwrites the gold
   be disabled temporarily it requires an explicit issue reference and commit-message rationale
   (Architecture §Cat 11c).
 
+### Performance benchmarks
+
+`tests/benchmarks/` is a pytest-benchmark suite pinning throughput baselines: **seconds per
+1k GRASP iterations** (fixed seed/params on the `grenoble_small` contracted graph) and per-stage
+setup wall-clock on committed fixture data (offline — network stages are out of scope; their
+baseline is the profiling capture in `_bmad-output/planning-artifacts/research/profiling/`).
+Benchmarks measure time, never route output — quality regressions are the goldens' job above.
+Excluded from the default test run (`benchmark` marker, same pattern as `live`/`slow`):
+
+```
+uv run pytest tests/benchmarks -m benchmark
+```
+
+Run it standalone as shown (not via bare `-m benchmark` from the repo root — `tests/unit` and
+`tests/integration` can't be collected in one invocation), and without `--cov` (coverage
+instrumentation distorts timings).
+
+**Around every optimization commit:** compare against the saved baseline, then save the new one.
+
+```
+uv run pytest tests/benchmarks -m benchmark --benchmark-compare   # vs latest saved run
+uv run pytest tests/benchmarks -m benchmark --benchmark-autosave  # pin the new baseline
+```
+
+Baselines live in `.benchmarks/` and are committed — but they are **machine-local**: numbers are
+only comparable across runs on the same machine. The pre-optimization baseline (Epic 11, 2026-07-03)
+is the reference point every Phase-3 optimization is judged against.
+
 * * *
 
 *This project was built from

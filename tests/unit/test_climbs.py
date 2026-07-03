@@ -233,7 +233,20 @@ def test_max_windowed_descent_grad_ignores_steep_ascent_within_net_descent() -> 
     would forbid the traversal for a steep *climb*); the reported grade is the gentle
     descent's, well below the ascent's grade.
     """
-    elevations = [1000.0, 995.0, 990.0, 985.0, 980.0, 992.0, 1004.0, 1016.0, 1011.0, 1006.0, 1001.0, 996.0]
+    elevations = [
+        1000.0,
+        995.0,
+        990.0,
+        985.0,
+        980.0,
+        992.0,
+        1004.0,
+        1016.0,
+        1011.0,
+        1006.0,
+        1001.0,
+        996.0,
+    ]
     verts = [(45.0 + 0.0001 * i, 5.0, elevations[i]) for i in range(len(elevations))]
     data = compute_edge_metrics(_single_edge_graph_with_elevation(verts)).edges[0, 1, 0]
     # Net loss over the edge → it *is* a descent (d_minus 40 > d_plus 36)...
