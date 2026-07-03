@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
+from typing import NamedTuple
 
 from steeproute.models import Solution
 
@@ -60,6 +61,23 @@ def _canonical_edge_set(
     return frozenset(ids)
 
 
+def _jaccard_from_sets(
+    edges_a: frozenset[tuple[int, int, int]], edges_b: frozenset[tuple[int, int, int]]
+) -> float:
+    """Jaccard distance over two already-canonical identity sets.
+
+    The set math of `jaccard_distance`, factored out (Story 12.2) so
+    `TopNTracker` can compare cached canonical sets without re-projecting the
+    solutions on every pairwise comparison. Same definition: both-empty →
+    `0.0`.
+    """
+    union = edges_a | edges_b
+    if not union:
+        return 0.0
+    intersection = edges_a & edges_b
+    return 1.0 - len(intersection) / len(union)
+
+
 def jaccard_distance(a: Solution, b: Solution, segment_map: SegmentMap | None = None) -> float:
     """Return `1 - |E(a) ∩ E(b)| / |E(a) ∪ E(b)|` over canonical identity sets.
 
@@ -71,13 +89,20 @@ def jaccard_distance(a: Solution, b: Solution, segment_map: SegmentMap | None = 
 
     Pure: takes no shared state, mutates nothing.
     """
-    edges_a = _canonical_edge_set(a, segment_map)
-    edges_b = _canonical_edge_set(b, segment_map)
-    union = edges_a | edges_b
-    if not union:
-        return 0.0
-    intersection = edges_a & edges_b
-    return 1.0 - len(intersection) / len(union)
+    return _jaccard_from_sets(
+        _canonical_edge_set(a, segment_map), _canonical_edge_set(b, segment_map)
+    )
+
+
+class _HeldEntry(NamedTuple):
+    """A held solution paired with its cached canonical edge-identity set.
+
+    The set is computed once at insertion (Story 12.2) — `Solution` is
+    immutable, so it can never go stale.
+    """
+
+    solution: Solution
+    canonical: frozenset[tuple[int, int, int]]
 
 
 class TopNTracker:
@@ -134,6 +159,14 @@ class TopNTracker:
     `frozen=True, slots=True` (Story 3.1) so this is safe — the tracker
     cannot mutate the values, and the values cannot be mutated through
     other references either.
+
+    Caching (Story 12.2): each held entry pairs the `Solution` with its
+    canonical edge-identity set, computed **once at insertion** — the 11.2
+    profile attributed ~7% of query wall-clock to re-projecting immutable held
+    solutions on every pairwise comparison. Immutability makes the cache safe;
+    a cached frozenset is *equal* to a recomputed one, so every distance,
+    overlap verdict, and admission decision is unchanged. The cache lives here
+    rather than on `Solution` because `slots=True` forbids attaching attributes.
     """
 
     def __init__(self, n: int, j_max: float, segment_map: SegmentMap | None = None) -> None:
@@ -147,7 +180,7 @@ class TopNTracker:
         # base-segment distinctness (Story 6.1), shared with the reuse rule so
         # admission and the validator's set-level check see one identity.
         self._segment_map: SegmentMap | None = segment_map
-        self._held: list[Solution] = []
+        self._held: list[_HeldEntry] = []
 
     def consider(self, solution: Solution) -> bool:
         """Try to admit `solution`. Returns `True` iff the held set changed.
@@ -163,49 +196,52 @@ class TopNTracker:
         """
         if not math.isfinite(solution.objective):
             raise ValueError(f"solution.objective must be finite, got {solution.objective}")
+        # Candidate's canonical set: once per consider() call, not once per
+        # held comparison (Story 12.2). Held sets were cached at insertion.
+        candidate_set = _canonical_edge_set(solution, self._segment_map)
         overlap_threshold = 1.0 - self._j_max
         overlapping = [
-            s
-            for s in self._held
-            if jaccard_distance(solution, s, self._segment_map) < overlap_threshold
+            entry
+            for entry in self._held
+            if _jaccard_from_sets(candidate_set, entry.canonical) < overlap_threshold
         ]
 
         if not overlapping:
             if len(self._held) < self._n:
-                self._held.append(solution)
+                self._held.append(_HeldEntry(solution, candidate_set))
                 return True
             # Capacity reached; evict the worst if the newcomer beats it.
             worst = self._worst_held()
-            if solution.objective > worst.objective:
+            if solution.objective > worst.solution.objective:
                 self._held.remove(worst)
-                self._held.append(solution)
+                self._held.append(_HeldEntry(solution, candidate_set))
                 return True
             return False
 
         # Overlap branch: candidate must strictly beat every overlapping
         # incumbent to maintain the pairwise-distinct invariant.
-        if all(solution.objective > s.objective for s in overlapping):
-            for s in overlapping:
-                self._held.remove(s)
-            self._held.append(solution)
+        if all(solution.objective > entry.solution.objective for entry in overlapping):
+            for entry in overlapping:
+                self._held.remove(entry)
+            self._held.append(_HeldEntry(solution, candidate_set))
             return True
         return False
 
     def current_top(self) -> list[Solution]:
         """Held solutions, objective-descending with deterministic tie-break."""
-        return sorted(self._held, key=_sort_key)
+        return sorted((entry.solution for entry in self._held), key=_sort_key)
 
     def total_objective(self) -> float:
         """Sum of held objectives. `0.0` on an empty tracker (stagnation hook)."""
-        return sum(s.objective for s in self._held)
+        return sum(entry.solution.objective for entry in self._held)
 
-    def _worst_held(self) -> Solution:
-        """Lowest-objective held solution (last in the deterministic sort order).
+    def _worst_held(self) -> _HeldEntry:
+        """Lowest-objective held entry (last in the deterministic sort order).
 
-        `max(items, key=_sort_key)` is equivalent to `sorted(items, key=_sort_key)[-1]`
+        `max(items, key=...)` is equivalent to `sorted(items, key=...)[-1]`
         — the worst-in-sort-order is the same as the max-by-sort-key.
         """
-        return max(self._held, key=_sort_key)
+        return max(self._held, key=lambda entry: _sort_key(entry.solution))
 
 
 def _sort_key(solution: Solution) -> tuple[float, tuple[tuple[int, int, int], ...]]:

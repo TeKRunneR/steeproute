@@ -383,12 +383,38 @@ class GraspSolver:
         pure function of the already-deterministic walk; no RNG). The empty walk
         has no non-empty prefix and yields `None`, so `run()`'s old
         `if solution.edges` guard is subsumed.
+
+        Each prefix is tested in O(1) from forward cumulative sums (Story 12.2)
+        instead of re-summing the whole prefix per candidate (quadratic in walk
+        length). The cumulative sums are the same left fold `route_avg_gradient`
+        computes — start `0.0`, add per edge in walk order — so the value at
+        every `end` is bit-identical to `route_avg_gradient(edges[:end])`, and
+        the zero-length branch (`0.0` when `Σlength ≤ 0`) is mirrored exactly.
+        The winning prefix still passes through the canonical
+        `_route_slope_ok` gate before admission, keeping the models.py
+        single-sourcing contract (solver / validator / oracle compare
+        bit-identical values) structural rather than incidental; by the fold
+        identity the gate always agrees with the incremental test.
         """
-        for end in range(len(edges), 0, -1):
+        n = len(edges)
+        cum_length = [0.0] * (n + 1)
+        cum_climb = [0.0] * (n + 1)
+        length = 0.0
+        climb = 0.0
+        for i, e in enumerate(edges, start=1):
+            length += e.length_m
+            climb += e.d_plus_m + e.d_minus_m
+            cum_length[i] = length
+            cum_climb[i] = climb
+        theta = self._params.theta
+        for end in range(n, 0, -1):
+            total_length = cum_length[end]
+            gradient = cum_climb[end] / total_length if total_length > 0.0 else 0.0
+            if gradient < theta:
+                continue
             prefix = edges[:end]
             if self._route_slope_ok(prefix):
-                objective = sum((e.d_plus_m + e.d_minus_m for e in prefix), 0.0)
-                return Solution(edges=prefix, objective=objective)
+                return Solution(edges=prefix, objective=cum_climb[end])
         return None
 
     def _construct_one(self) -> Solution:
