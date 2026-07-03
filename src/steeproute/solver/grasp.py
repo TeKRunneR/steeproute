@@ -89,14 +89,17 @@ networkx versions, where dict-insertion order is not a contract (see
 - **Start-node sampling** draws an index into `tuple(sorted(graph.graph.nodes))`
   (sorted once in `__init__`), so the start node depends only on the RNG, not
   on node-insertion order.
-- **RCL ranking** ends in a total sort (`-objective`, then `(node_v, key)`),
-  which fully determines the candidate order regardless of the order
-  `nx_graph.out_edges(...)` yields edges in.
+- **RCL ranking** comes from the per-node adjacency table `run()` precomputes
+  once per solve (Story 12.1): each node's candidate records are pre-sorted by
+  the total key (`-objective`, then `(node_v, key)`), which fully determines
+  the candidate order regardless of the order `graph.edges(...)` yields edges
+  in during the table build.
 """
 
 from __future__ import annotations
 
 import time
+from typing import NamedTuple
 
 import numpy as np
 
@@ -143,6 +146,21 @@ flag once the Story 3.7 quality gate establishes a baseline. Five is the
 classic "small but not greedy" default; smaller values starve diversity,
 larger values approach uniform-random construction.
 """
+
+
+class _CandidateRecord(NamedTuple):
+    """One pre-built RCL candidate in the per-node adjacency table (Story 12.1).
+
+    Everything about a candidate that does not depend on walk state, computed
+    once per solve so `_build_rcl` never touches the networkx graph, never
+    re-wraps `Edge` objects, and never recomputes blocking sets in the hot loop.
+    `directed_id` is `(node_u, node_v, key)` — pre-built so the `used_directed`
+    membership test needs no per-step tuple construction.
+    """
+
+    directed_id: tuple[int, int, int]
+    edge: Edge
+    blocking: frozenset[tuple[int, int, int]]
 
 
 class GraspSolver:
@@ -231,6 +249,11 @@ class GraspSolver:
         # admission). It equals `(i + 1) − stagnation_counter` at any point, since
         # the stagnation counter resets to 0 exactly when an admission lands.
         self.convergence_iteration: int = 0
+        # Per-node adjacency table of pre-built candidate records (Story 12.1).
+        # Empty until `run()` builds it once per solve — solver instances are
+        # single-run, and building it inside `run()` keeps the (one-off) cost
+        # inside the benchmark suite's measured region.
+        self._adjacency: dict[int, tuple[_CandidateRecord, ...]] = {}
 
     @property
     def best_so_far(self) -> list[Solution]:
@@ -270,6 +293,10 @@ class GraspSolver:
         """
         if not self._nodes:
             return self._tracker.current_top()
+        # Once-per-solve precompute (Story 12.1): the contracted graph is
+        # immutable for the duration of a solve, so every walk-state-independent
+        # part of RCL construction is hoisted out of the hot loop here.
+        self._adjacency = self._build_adjacency()
         callback = self._progress_callback
         stagnation_iters = self._params.stagnation_iters
         time_budget = self._params.time_budget
@@ -407,6 +434,66 @@ class GraspSolver:
         objective = sum((e.d_plus_m + e.d_minus_m for e in path_edges), 0.0)
         return Solution(edges=tuple(path_edges), objective=objective)
 
+    def _build_adjacency(self) -> dict[int, tuple[_CandidateRecord, ...]]:
+        """Per-node adjacency table of pre-built candidate records (Story 12.1).
+
+        One pass over the immutable contracted graph, hoisting everything about
+        RCL construction that does not depend on walk state — the 11.2 profile
+        attributed ~35–40% of query wall-clock to redoing this per step:
+
+        - **Static filters applied once.** SAC cap (`max_sac_rank(sac_scale) >
+          cap_rank` rejects; `None` / unrecognized values pass — cleared
+          `filter_trails` upstream) and the direction-aware descent cap (FR32;
+          off when unset). Both read only edge data and per-solve params, so an
+          edge failing them can never become feasible and is dropped from the
+          table outright — exactly the edges the old per-step loop re-rejected
+          on every visit.
+        - **`Edge` built once** per graph edge instead of re-wrapped per visit
+          (`Edge` is frozen, so sharing one instance across RCLs/solutions is
+          safe), alongside its pre-built `directed_id` triple.
+        - **Blocking sets computed once** — single-sourced via
+          `solver.reuse.blocking_ids` against `self._non_exempt_ids`, same as
+          before.
+        - **Static sort applied once per node**: by per-edge objective
+          contribution `d_plus_m + d_minus_m` descending, ties broken by
+          `(node_v, key)` ascending. The key is static per edge and total —
+          `node_u` is omitted because it is constant within a node's records,
+          and `(node_v, key)` is unique per source node in a `MultiDiGraph` —
+          so this pre-sort fully determines candidate order (FR29) regardless
+          of the order `graph.edges(...)` yields edges in.
+
+        Nodes with no surviving out-edges are simply absent; `_build_rcl` reads
+        with `.get(current, ())`.
+        """
+        cap_rank = self._cap_rank
+        grouped: dict[int, list[_CandidateRecord]] = {}
+        for u, v, k, data in self._graph.graph.edges(keys=True, data=True):
+            rank = max_sac_rank(data["sac_scale"])
+            if rank is not None and rank > cap_rank:
+                continue
+            if descends_over_cap(data, self._max_descent_slope):
+                continue
+            record = _CandidateRecord(
+                directed_id=(u, v, k),
+                edge=Edge(
+                    node_u=u,
+                    node_v=v,
+                    key=k,
+                    length_m=data["length_m"],
+                    d_plus_m=data["d_plus_m"],
+                    d_minus_m=data["d_minus_m"],
+                    avg_gradient=data["avg_gradient"],
+                    sac_scale=data["sac_scale"],
+                ),
+                blocking=blocking_ids(data, u, v, k, self._non_exempt_ids),
+            )
+            grouped.setdefault(u, []).append(record)
+        for records in grouped.values():
+            records.sort(
+                key=lambda r: (-(r.edge.d_plus_m + r.edge.d_minus_m), r.edge.node_v, r.edge.key)
+            )
+        return {u: tuple(records) for u, records in grouped.items()}
+
     def _build_rcl(
         self,
         current: int,
@@ -419,66 +506,36 @@ class GraspSolver:
         `_construct_one` records them on the chosen edge without a second graph
         lookup.
 
-        Feasibility (same filters as `tests/integration/exhaustive_oracle.py`):
+        Consumes the pre-sorted per-node table `run()` built once per solve
+        (`_build_adjacency`, Story 12.1) — no graph access, no `Edge`
+        construction, no set math beyond the walk-state checks, no sorting.
+        Only the two walk-state-dependent filters run here (same feasibility as
+        `tests/integration/exhaustive_oracle.py`):
 
-        - Reuse: an edge is rejected iff its directed `(u, v, key)` is already in
-          `used_directed` (edge-simple → termination) OR any of its non-exempt
-          base-segment ids is already in `used_segments` (undirected
-          base-segment once-only, Story 5.2). The blocking-id set is
-          single-sourced via `solver.reuse.blocking_ids` against
-          `self._non_exempt_ids`; an exempt short connector has an empty blocking
-          set, so only the directed-simple bound limits it (to once per
-          direction).
-        - SAC cap: `max_sac_rank(sac_scale) > cap_rank` rejects. `None` /
-          unrecognized values pass (cleared `filter_trails` upstream).
+        - Directed edge-simple: rejected iff `directed_id` is already in
+          `used_directed` (→ termination).
+        - Undirected base-segment once-only (Story 5.2): rejected iff any
+          blocking id is already in `used_segments`. An exempt short connector
+          has an empty blocking set, so only the directed-simple bound limits
+          it (to once per direction).
+
+        Because each node's records are pre-sorted by the total static key,
+        collecting the first `RCL_SIZE` survivors in table order is identical
+        to the old filter-everything → sort → truncate — same candidates, same
+        order (FR29).
 
         The slope floor θ is **not** an RCL filter: it is a route-level
         constraint enforced at finalization (`run` / `_route_slope_ok`), not a
         per-edge one. Every edge that clears the two filters above is a
         candidate regardless of its own gradient.
-
-        Ranking: by per-edge objective contribution `d_plus_m + d_minus_m`
-        descending; ties broken by `(node_v, key)` ascending. This `feasible.sort`
-        is the *sole* determinant of order — and hence of FR29 reproducibility —
-        so it does not matter what order `nx_graph.out_edges(...)` yields the
-        edges in (the dict-insertion order is not a contract, but it is also
-        not observed: the final sort fully re-orders). `node_u` is omitted from
-        the tie-break because it is always `current` within one call; `(node_v,
-        key)` is unique per source node in a `MultiDiGraph`, so the tie-break is
-        total.
         """
-        nx_graph = self._graph.graph
-        cap_rank = self._cap_rank
-        feasible: list[tuple[Edge, frozenset[tuple[int, int, int]]]] = []
-        for u, v, k, data in nx_graph.out_edges(current, keys=True, data=True):
-            if (u, v, k) in used_directed:
+        rcl: list[tuple[Edge, frozenset[tuple[int, int, int]]]] = []
+        for directed_id, edge, blocking in self._adjacency.get(current, ()):
+            if directed_id in used_directed:
                 continue
-            blocking = blocking_ids(data, u, v, k, self._non_exempt_ids)
             if blocking & used_segments:
                 continue
-            rank = max_sac_rank(data["sac_scale"])
-            if rank is not None and rank > cap_rank:
-                continue
-            # Direction-aware descent cap (FR32): drop a descending traversal
-            # steeper than the cap; uphill is unconstrained. Off when unset.
-            if descends_over_cap(data, self._max_descent_slope):
-                continue
-            feasible.append(
-                (
-                    Edge(
-                        node_u=u,
-                        node_v=v,
-                        key=k,
-                        length_m=data["length_m"],
-                        d_plus_m=data["d_plus_m"],
-                        d_minus_m=data["d_minus_m"],
-                        avg_gradient=data["avg_gradient"],
-                        sac_scale=data["sac_scale"],
-                    ),
-                    blocking,
-                )
-            )
-        feasible.sort(
-            key=lambda pair: (-(pair[0].d_plus_m + pair[0].d_minus_m), pair[0].node_v, pair[0].key)
-        )
-        return feasible[:RCL_SIZE]
+            rcl.append((edge, blocking))
+            if len(rcl) == RCL_SIZE:
+                break
+        return rcl
