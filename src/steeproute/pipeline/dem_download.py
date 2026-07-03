@@ -50,6 +50,7 @@ from rasterio.transform import from_bounds
 from steeproute.cache import dem_cache_path_for
 from steeproute.errors import DataSourceUnavailableError
 from steeproute.models import Area
+from steeproute.progress import StageProgress
 
 _logger = logging.getLogger(__name__)
 
@@ -118,6 +119,7 @@ def resolve_dem(
     *,
     dem_version: str = DEFAULT_DEM_VERSION,
     force_refresh: bool = False,
+    progress: StageProgress | None = None,
 ) -> pathlib.Path:
     """Return a local DEM GeoTIFF covering `bounds`, downloading + caching if absent.
 
@@ -131,6 +133,8 @@ def resolve_dem(
             `--dem-version` (e.g. after an IGN dataset bump) re-downloads rather than
             relabelling stale bytes — keeping the manifest's `dem_version` honest.
         force_refresh: re-download even when a cached raster exists.
+        progress: optional stage seam (Story 11.1, FR33) — the tile-fetch loop
+            reports `tile i/N` through it. `None` (the default) is silent.
 
     Returns:
         Path to a single-band float32 WGS84 GeoTIFF readable by `sample_elevation`.
@@ -155,7 +159,7 @@ def resolve_dem(
         width,
         height,
     )
-    arr = _fetch_mosaic(west, south, east, north, width, height)
+    arr = _fetch_mosaic(west, south, east, north, width, height, progress=progress)
     _write_geotiff_atomic(path, arr, west, south, east, north)
     return path
 
@@ -276,16 +280,27 @@ def _fetch_mosaic(
     north: float,
     width: int,
     height: int,
+    *,
+    progress: StageProgress | None = None,
 ) -> np.ndarray:
     """Fetch the DEM as one or more WMS tiles and stitch into a single float32 array.
 
     Row 0 of the returned array is the north edge (WMS GetMap origin), matching
     rasterio's top-left raster origin so the later `from_bounds` transform is correct.
+    When `progress` is set, each tile announces itself as `tile i/N` before its
+    blocking WMS request (FR33 within-stage progress — "working", not "stuck").
     """
     truststore.inject_into_ssl()
     arr = np.empty((height, width), dtype=_BIL_DTYPE)
-    for y0, y1 in _tile_ranges(height):
-        for x0, x1 in _tile_ranges(width):
+    row_ranges = list(_tile_ranges(height))
+    col_ranges = list(_tile_ranges(width))
+    total_tiles = len(row_ranges) * len(col_ranges)
+    tile_index = 0
+    for y0, y1 in row_ranges:
+        for x0, x1 in col_ranges:
+            tile_index += 1
+            if progress is not None:
+                progress.line(f"tile {tile_index}/{total_tiles}")
             tile_w = x1 - x0
             tile_h = y1 - y0
             # Linearly interpolate this tile's sub-bbox over the full bbox.

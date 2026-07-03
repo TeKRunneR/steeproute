@@ -69,6 +69,7 @@ from steeproute.pipeline.smoothing import (
     resample_edges,
     smooth_polylines,
 )
+from steeproute.progress import StageProgress
 
 _logger = logging.getLogger(__name__)
 
@@ -97,7 +98,12 @@ _EARTH_RADIUS_M: float = 6_378_137.0
 _PIPELINE_LENGTH_FLOOR_M: float = 1e-3
 
 
-def run_setup_stages(area: Area, config: PipelineConfig) -> nx.MultiDiGraph:
+def run_setup_stages(
+    area: Area,
+    config: PipelineConfig,
+    *,
+    progress: StageProgress | None = None,
+) -> nx.MultiDiGraph:
     """Run the setup-side pipeline (stages 1-5) end-to-end for `area`.
 
     Wires the five stage functions with four orchestrator-level inter-stage
@@ -109,6 +115,9 @@ def run_setup_stages(area: Area, config: PipelineConfig) -> nx.MultiDiGraph:
         area: search area to ingest (drives OSM fetch + DEM coverage check).
         config: per-run knobs — `untagged_policy` (passed to `filter_trails`)
             and `dem_path` (passed to `sample_elevation`).
+        progress: optional stage-timing seam (Story 11.1, FR33) — each stage
+            announces start/elapsed through it and records into its `timings`
+            dict. `None` (the default) is silent, preserving existing callers.
 
     Returns:
         A `networkx.MultiDiGraph` with the raw post-stage-5 edge-attribute
@@ -142,11 +151,16 @@ def run_setup_stages(area: Area, config: PipelineConfig) -> nx.MultiDiGraph:
                 "to a corrupt cache — re-run steeproute-setup with --force-refresh."
             ),
         )
-    graph = build_graph_geometry(area, config.untagged_policy)
-    return attach_elevation(graph, config.dem_path)
+    graph = build_graph_geometry(area, config.untagged_policy, progress=progress)
+    return attach_elevation(graph, config.dem_path, progress=progress)
 
 
-def build_graph_geometry(area: Area, untagged_policy: str) -> nx.MultiDiGraph:
+def build_graph_geometry(
+    area: Area,
+    untagged_policy: str,
+    *,
+    progress: StageProgress | None = None,
+) -> nx.MultiDiGraph:
     """Run the DEM-independent setup stages 1-4 and return the geometry-only graph.
 
     Stages 1-4 (`osm_load` → `filter_trails` → `smooth_polylines` →
@@ -155,34 +169,51 @@ def build_graph_geometry(area: Area, untagged_policy: str) -> nx.MultiDiGraph:
     *actual* edge geometry (`pipeline.dem_download.graph_dem_bounds`) before
     `attach_elevation` runs, guaranteeing DEM coverage of every probed vertex.
 
+    Each stage runs inside `progress.stage(...)` (Story 11.1, FR33): the guards
+    are folded into their preceding stage (they cost microseconds — a separate
+    timeline line would be noise). The stage functions themselves stay pure and
+    seam-free; only the orchestrator observes them.
+
     Returns a `MultiDiGraph` whose edges carry the post-stage-4 contract
     (`geometry`, `sac_scale`, `highway`, `osm_way_id`) — no `vertices_resampled`
     elevation yet — and at least one edge (the non-empty guard).
     """
-    graph = osm_load(area)
-    graph = filter_trails(graph, untagged_policy, _SETUP_DIFFICULTY_CAP)
-    _assert_non_empty(graph, area, untagged_policy)
-    graph = _drop_orphan_nodes(graph)
-    graph = smooth_polylines(graph)
-    graph = resample_edges(graph)
-    graph = _drop_short_edges(graph)
-    # Re-assert non-empty after the post-stage-4 prunes: stage-3 (smooth) and
-    # stage-4 (resample) drop degenerate edges, and `_drop_short_edges` adds
-    # the < 1 mm prune on top. A pathological fixture could leave a zero-edge
-    # graph that then hits `sample_elevation` with no actionable error.
-    _assert_non_empty(graph, area, untagged_policy)
+    seam = progress if progress is not None else StageProgress()
+    with seam.stage("osm-download", note="one Overpass request; typically takes minutes"):
+        graph = osm_load(area)
+    with seam.stage("trail-filter"):
+        graph = filter_trails(graph, untagged_policy, _SETUP_DIFFICULTY_CAP)
+        _assert_non_empty(graph, area, untagged_policy)
+        graph = _drop_orphan_nodes(graph)
+    with seam.stage("polyline-smoothing"):
+        graph = smooth_polylines(graph)
+    with seam.stage("resampling"):
+        graph = resample_edges(graph)
+        graph = _drop_short_edges(graph)
+        # Re-assert non-empty after the post-stage-4 prunes: stage-3 (smooth) and
+        # stage-4 (resample) drop degenerate edges, and `_drop_short_edges` adds
+        # the < 1 mm prune on top. A pathological fixture could leave a zero-edge
+        # graph that then hits `sample_elevation` with no actionable error.
+        _assert_non_empty(graph, area, untagged_policy)
     return graph
 
 
-def attach_elevation(graph: nx.MultiDiGraph, dem_path: pathlib.Path) -> nx.MultiDiGraph:
+def attach_elevation(
+    graph: nx.MultiDiGraph,
+    dem_path: pathlib.Path,
+    *,
+    progress: StageProgress | None = None,
+) -> nx.MultiDiGraph:
     """Run stage 5 (`sample_elevation`) + the finite-elevation guard on `graph`.
 
     `dem_path` must cover every edge-geometry vertex — `cli/setup.py` ensures this
     by sizing the raster from `graph_dem_bounds(graph)`. A vertex outside the DEM
     raises `DEMCoverageError` from `sample_elevation`.
     """
-    graph = sample_elevation(graph, dem_path)
-    _assert_finite_elevations(graph)
+    seam = progress if progress is not None else StageProgress()
+    with seam.stage("elevation-sampling"):
+        graph = sample_elevation(graph, dem_path)
+        _assert_finite_elevations(graph)
     return graph
 
 

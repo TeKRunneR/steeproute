@@ -66,6 +66,11 @@ _AREAS_SUBDIR: str = "areas"
 # Auto-downloaded DEM rasters live alongside the `areas/` entries but in their
 # own subtree so a `dem/` listing stays separable from prepared cache entries.
 _DEM_SUBDIR: str = "dem"
+# osmnx's Overpass HTTP-response cache (Story 11.1, T2). osmnx 2.x defaults its
+# `settings.cache_folder` to a CWD-relative `./cache`; `cli/setup.py` repoints it
+# here so responses persist under the same `--cache-dir`-aware root as everything
+# else instead of littering whatever directory setup happened to run from.
+_OSMNX_SUBDIR: str = "osmnx"
 _APP_NAME: str = "steeproute"
 
 # File names inside an entry directory. Order matters for Cat 4d: graph + bounds
@@ -355,6 +360,18 @@ def dem_cache_path_for(cache_root: pathlib.Path, dem_key: str) -> pathlib.Path:
     check existence — that is the caller's reuse decision.
     """
     return cache_root / _CACHE_SUBDIR / _DEM_SUBDIR / f"{dem_key}.tif"
+
+
+def osmnx_cache_dir_for(cache_root: pathlib.Path) -> pathlib.Path:
+    """Return the canonical osmnx HTTP-cache directory under `cache_root`.
+
+    Single source of truth for the `<cache-root>/steeproute/osmnx/` layout —
+    parallels `entry_dir_for` / `dem_cache_path_for` so `cli/setup.py` never
+    reconstructs the layout by hand. See `_OSMNX_SUBDIR` for why osmnx's
+    CWD-relative default is repointed here (Story 11.1, T2). Does not create
+    the directory — osmnx does that itself on first cache write.
+    """
+    return cache_root / _CACHE_SUBDIR / _OSMNX_SUBDIR
 
 
 def write_text_atomic(path: pathlib.Path, text: str) -> None:

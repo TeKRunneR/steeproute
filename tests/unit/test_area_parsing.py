@@ -361,22 +361,25 @@ def test_setup_cli_does_not_enforce_area_cap(tmp_path: pathlib.Path) -> None:
     A 30 km radius (~2827 km²) would be rejected by the query CLI's default cap of 500 km²,
     but setup accepts it because area-cap enforcement is query-only. The setup CLI does
     apply its own `validate_setup_radius` ceiling (Story 2.8), set at 50 km — 30 is below
-    that. We patch `resolve_dem` with a sentinel so the run reaches the download step
-    offline; the sentinel propagating proves the 30 km radius passed validation with no
-    area-cap rejection (a real area-cap check would have raised `BadCLIArgError` first).
+    that. We patch `osm_load` (the first pipeline step) with a sentinel: any area-cap
+    check would raise `BadCLIArgError` at the CLI boundary before the pipeline starts,
+    so the sentinel propagating proves the 30 km radius passed validation with no
+    area-cap rejection — without ever touching the network. (Patching a later step
+    such as `resolve_dem` would first run the real stage-1 Overpass download for this
+    30 km area: minutes of live network per suite run.)
     """
     from unittest.mock import patch
 
     runner = CliRunner()
-    sentinel = RuntimeError("reached DEM download")
-    with patch("steeproute.cli.setup.resolve_dem", side_effect=sentinel):
+    sentinel = RuntimeError("reached OSM download")
+    with patch("steeproute.pipeline.osm_load", side_effect=sentinel):
         result = runner.invoke(
             setup_cli,
             ["--center", "45.0716,6.1079", "--radius", "30", "--cache-dir", str(tmp_path)],
             catch_exceptions=True,
         )
     # The run got past `validate_setup_radius` and any would-be area-cap check,
-    # reaching `resolve_dem` (the sentinel) — confirming no area-cap rejection.
+    # reaching stage 1 (the sentinel) — confirming no area-cap rejection.
     assert result.exception is sentinel
 
 

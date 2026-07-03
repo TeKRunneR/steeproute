@@ -1,11 +1,12 @@
 # pyright: reportUnknownMemberType=false
 # Reason: `pytest.approx` is typed as returning a partially-unknown `ApproxBase`.
-"""Unit tests for `progress.py` — `ProgressEvent`, `throttle`, and the ETA helper (Story 7.1).
+"""Unit tests for `progress.py` — `ProgressEvent`, `throttle`, ETA, and `StageProgress`.
 
-The throttle is exercised with an injected fake clock so its gating is asserted
-deterministically (no wall-clock flake) — the same dependency-injection pattern
-`cli/_shared.emit_osm_age_warning(now=...)` uses. Real-wall-clock behaviour is
-covered end-to-end by `tests/integration/test_progress.py` and the e2e tests.
+The throttle and the stage seam are exercised with an injected fake clock so
+their behaviour is asserted deterministically (no wall-clock flake) — the same
+dependency-injection pattern `cli/_shared.emit_osm_age_warning(now=...)` uses.
+Real-wall-clock behaviour is covered end-to-end by
+`tests/integration/test_progress.py` and the e2e tests.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ import dataclasses
 
 import pytest
 
-from steeproute.progress import ProgressEvent, estimate_remaining, throttle
+from steeproute.progress import ProgressEvent, StageProgress, estimate_remaining, throttle
 
 
 class _FakeClock:
@@ -120,6 +121,75 @@ def test_throttle_nonpositive_interval_fires_every_call() -> None:
     for _ in range(3):
         throttled(_event())
     assert len(fired) == 3
+
+
+# --- StageProgress (Story 11.1, FR33) -----------------------------------------
+
+
+def test_stage_emits_start_and_done_lines_and_records_timing() -> None:
+    """One `with progress.stage(...)` block → start line, done line, timings entry."""
+    clock = _FakeClock(10.0)
+    lines: list[str] = []
+    progress = StageProgress(lines.append, clock=clock)
+    with progress.stage("osm-download"):
+        clock.t = 12.5
+    assert lines == ["stage: osm-download ...", "stage: osm-download: 2.50 s"]
+    assert progress.timings == {"osm-download": pytest.approx(2.5)}
+
+
+def test_stage_note_is_rendered_on_the_start_line_only() -> None:
+    """The honest "takes minutes" annotation rides the start line, not the done line."""
+    clock = _FakeClock(0.0)
+    lines: list[str] = []
+    progress = StageProgress(lines.append, clock=clock)
+    with progress.stage("osm-download", note="one Overpass request; typically takes minutes"):
+        clock.t = 1.0
+    assert lines[0] == "stage: osm-download (one Overpass request; typically takes minutes) ..."
+    assert lines[1] == "stage: osm-download: 1.00 s"
+
+
+def test_silent_seam_records_timings_without_any_output() -> None:
+    """`on_line=None` (the `--quiet` install) still times stages — timing-only no-op."""
+    clock = _FakeClock(0.0)
+    progress = StageProgress(clock=clock)
+    with progress.stage("resampling"):
+        clock.t = 0.25
+    progress.line("tile 1/4")  # must be a silent no-op, not an error
+    assert progress.timings == {"resampling": pytest.approx(0.25)}
+
+
+def test_line_is_indented_under_the_current_stage() -> None:
+    """Within-stage progress (`tile i/N`) renders indented beneath the stage lines."""
+    lines: list[str] = []
+    progress = StageProgress(lines.append, clock=_FakeClock(0.0))
+    with progress.stage("dem-resolve"):
+        progress.line("tile 1/4")
+        progress.line("tile 2/4")
+    assert lines[1:3] == ["  tile 1/4", "  tile 2/4"]
+
+
+def test_stage_exception_propagates_without_done_line_or_timing() -> None:
+    """A failing stage emits no done line and records no timing; the error propagates
+    unchanged to `run_entry_point`'s stderr path (stdout stays clean)."""
+    lines: list[str] = []
+    progress = StageProgress(lines.append, clock=_FakeClock(0.0))
+    with pytest.raises(RuntimeError, match="boom"):
+        with progress.stage("elevation-sampling"):
+            raise RuntimeError("boom")
+    assert lines == ["stage: elevation-sampling ..."]
+    assert progress.timings == {}
+
+
+def test_multiple_stages_accumulate_timings_in_execution_order() -> None:
+    """The timings dict keeps insertion order — Story 11.2 reads it as the timeline."""
+    clock = _FakeClock(0.0)
+    progress = StageProgress(clock=clock)
+    with progress.stage("osm-download"):
+        clock.t = 2.0
+    with progress.stage("trail-filter"):
+        clock.t = 2.5
+    assert list(progress.timings) == ["osm-download", "trail-filter"]
+    assert progress.timings["trail-filter"] == pytest.approx(0.5)
 
 
 # --- estimate_remaining (ETA) -----------------------------------------------

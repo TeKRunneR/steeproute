@@ -33,6 +33,7 @@ from steeproute.errors import DataSourceUnavailableError
 from steeproute.models import Area
 from steeproute.pipeline import dem_download
 from steeproute.pipeline.dem_download import graph_dem_bounds, resolve_dem
+from steeproute.progress import StageProgress
 
 _AREA = Area(center=(45.260, 5.788), radius_km=0.05)
 # `resolve_dem` is bbox-driven (the setup path derives bounds from graph geometry);
@@ -135,6 +136,36 @@ def test_multi_tile_mosaic_places_tiles_north_up(
     assert band[-1, -1] == float(n_rows * n_cols - 1)
     # Every tile landed: the distinct fill values are exactly 0..N-1.
     assert set(np.unique(band).tolist()) == {float(i) for i in range(n_rows * n_cols)}
+
+
+def test_multi_tile_fetch_emits_tile_progress_lines(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Story 11.1 (FR33): the tile loop reports `tile i/N` through the stage seam."""
+    monkeypatch.setattr(dem_download, "_MAX_TILE_PX", 16)
+    calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(dem_download, "urlopen", _make_fake_urlopen(calls))
+    lines: list[str] = []
+    progress = StageProgress(lines.append)
+
+    resolve_dem(_BOUNDS, tmp_path, progress=progress)
+
+    total = len(calls)
+    assert total > 1, "test area must span more than one tile"
+    assert lines == [f"  tile {i}/{total}" for i in range(1, total + 1)]
+
+
+def test_dem_cache_hit_emits_no_tile_lines(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cached raster short-circuits before the tile loop — no phantom progress."""
+    calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(dem_download, "urlopen", _make_fake_urlopen(calls))
+    resolve_dem(_BOUNDS, tmp_path)
+
+    lines: list[str] = []
+    resolve_dem(_BOUNDS, tmp_path, progress=StageProgress(lines.append))
+    assert lines == []
 
 
 def test_second_call_reuses_cached_raster(

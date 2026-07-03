@@ -17,6 +17,7 @@ import importlib.util
 import json
 import pathlib
 import re
+from typing import NamedTuple
 from unittest.mock import Mock, patch
 
 import networkx as nx
@@ -138,6 +139,91 @@ def test_setup_first_run_is_cache_miss_writes_entry_and_reports_summary(
 
     # The 16-hex hash printed in the summary matches the entry directory name.
     assert entry.name in result.output
+
+
+class _SharedRuns(NamedTuple):
+    """One cache-miss + one cache-hit invocation pair, shared across observability tests."""
+
+    cache_dir: pathlib.Path
+    miss: Result
+    hit: Result
+    osmnx_use_cache: bool
+    osmnx_cache_folder: pathlib.Path
+
+
+@pytest.fixture(scope="module")
+def shared_runs(tmp_path_factory: pytest.TempPathFactory) -> _SharedRuns:
+    """Run the pipeline once (miss) and once more (hit) for the Story 11.1 tests.
+
+    The stage-timeline, cache-hit-silence, and osmnx-cache assertions all read
+    the *output* of the same two invocations — sharing them avoids re-running
+    the multi-second offline pipeline once per test. osmnx settings are
+    snapshotted right after the miss run because they are process-global and
+    any later `_invoke_setup` (in other tests) repoints them.
+    """
+    # Module-scoped, so the function-scoped autouse skip hasn't run yet.
+    if not _DEM_FIXTURE_PATH.exists() or not _OSM_FIXTURE_PATH.exists():
+        pytest.skip("OSM or DEM fixture not committed; setup e2e tests skipped.")
+    cache_dir = tmp_path_factory.mktemp("shared_setup_cache")
+    miss = _invoke_setup(cache_dir)
+    use_cache = bool(osmnx.settings.use_cache)
+    cache_folder = pathlib.Path(osmnx.settings.cache_folder)
+    hit = _invoke_setup(cache_dir, patch_pipeline=False)
+    return _SharedRuns(cache_dir, miss, hit, use_cache, cache_folder)
+
+
+def test_setup_cache_miss_prints_per_stage_timeline(shared_runs: _SharedRuns) -> None:
+    """Story 11.1 AC #2 (FR33): a cache-miss run announces every stage and its elapsed time."""
+    result = shared_runs.miss
+    assert result.exit_code == 0, result.output
+    for stage in (
+        "osm-download",
+        "trail-filter",
+        "polyline-smoothing",
+        "resampling",
+        "dem-resolve",
+        "elevation-sampling",
+        "cache-write",
+    ):
+        # Start line ("stage: <name> ...", possibly with a note) and done line
+        # ("stage: <name>: X.XX s") — the done lines are the per-stage timeline.
+        assert f"stage: {stage}" in result.output, f"missing stage line for {stage}"
+        assert re.search(rf"stage: {stage}: \d+\.\d{{2}} s", result.output), (
+            f"missing elapsed line for {stage}"
+        )
+    # The blocking Overpass download carries the honest "takes minutes" annotation.
+    assert "stage: osm-download (one Overpass request; typically takes minutes)" in result.output
+
+
+def test_setup_quiet_suppresses_stage_lines_but_keeps_summary(tmp_path: pathlib.Path) -> None:
+    """Story 11.1 AC #4 (§Cat 8): `--quiet` drops all progress; the summary survives.
+
+    Can't ride `shared_runs`: suppression is only observable on a *quiet* cache
+    miss, so this is the one Story 11.1 test that pays its own pipeline run.
+    """
+    result = _invoke_setup(tmp_path, "--quiet")
+    assert result.exit_code == 0, result.output
+    assert "stage:" not in result.output
+    assert "tile " not in result.output
+    assert "cache-miss" in result.output
+    assert "elapsed:" in result.output
+
+
+def test_setup_cache_hit_prints_no_stage_lines(shared_runs: _SharedRuns) -> None:
+    """A cache hit skips the pipeline, so there is no stage timeline to print."""
+    assert shared_runs.miss.exit_code == 0, shared_runs.miss.output
+    second = shared_runs.hit
+    assert second.exit_code == 0, second.output
+    assert "cache-hit" in second.output
+    assert "stage:" not in second.output
+
+
+def test_setup_configures_persistent_osmnx_http_cache(shared_runs: _SharedRuns) -> None:
+    """Story 11.1 AC #5 (T2): osmnx's Overpass HTTP cache is enabled and rooted under
+    the steeproute cache root (honoring `--cache-dir`), not the CWD-relative default."""
+    assert shared_runs.miss.exit_code == 0, shared_runs.miss.output
+    assert shared_runs.osmnx_use_cache is True
+    assert shared_runs.osmnx_cache_folder == shared_runs.cache_dir / "steeproute" / "osmnx"
 
 
 def test_setup_first_run_writes_manifest_with_complete_provenance(

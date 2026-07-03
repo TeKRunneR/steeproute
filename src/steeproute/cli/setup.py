@@ -2,19 +2,25 @@
 # Reason: `run_setup_stages` and `write_entry` return `MultiDiGraph[Unknown]`; the
 # networkx generic parameter is unspecified upstream, same external-boundary pattern
 # the `pipeline/` modules use.
-"""steeproute-setup data-preparation CLI: parses flags, runs stages 1-7 (or cache-hit), persists.
+"""steeproute-setup data-preparation CLI: parses flags, runs stages 1-5 (or cache-hit), persists.
 
 Wires Epic 2 pieces end-to-end (Story 2.8):
 
     parse flags
-      → resolve cache root + resolve `dem_version` (--dem-version or the default
-        IGN-layer tag)
+      → resolve cache root + point osmnx's HTTP cache under it (Story 11.1, T2)
+        + resolve `dem_version` (--dem-version or the default IGN-layer tag)
       → compute_cache_key(area, untagged_policy, dem_version, pipeline_content_hash)
       → read_entry(cache_root, cache_key)
           - hit + not --force-refresh:    skip the pipeline, summary reports "cache-hit"
-          - miss or --force-refresh:      resolve_dem (auto-download + cache) →
-                                          run_setup_stages → Manifest → write_entry
+          - miss or --force-refresh:      build_graph_geometry → resolve_dem
+                                          (auto-download + cache) → attach_elevation
+                                          → Manifest → write_entry
       → print summary on stdout (always, even with --quiet, per Architecture §Cat 8)
+
+Every cache-miss stage runs inside the `StageProgress` seam (Story 11.1, FR33):
+stage-start / stage-elapsed lines on stdout (suppressed by `--quiet`), `tile i/N`
+within the DEM fetch, and a machine-readable per-stage `timings` dict for the
+profiling story (11.2).
 
 The DEM raster is fetched automatically for the area from the IGN Géoplateforme
 WMS (`pipeline.dem_download.resolve_dem`) — there is no `--dem-path` flag. Only
@@ -36,12 +42,14 @@ import time
 from typing import NoReturn
 
 import click
+import osmnx
 
 from steeproute.cache import (
     Manifest,
     compute_cache_key,
     compute_pipeline_content_hash,
     entry_dir_for,
+    osmnx_cache_dir_for,
     read_entry,
     resolve_cache_root,
     write_entry,
@@ -72,6 +80,7 @@ from steeproute.pipeline.dem_download import (
     graph_dem_bounds,
     resolve_dem,
 )
+from steeproute.progress import StageProgress
 from steeproute.provenance import get_commit_short, iso8601_utc_now
 
 _logger = logging.getLogger(__name__)
@@ -111,6 +120,7 @@ def cli(
 
     area = Area(center=center, radius_km=radius)
     cache_root = resolve_cache_root(cache_dir)
+    _configure_osmnx_cache(cache_root)
 
     # The DEM is auto-downloaded for the area on a cache miss; `dem_version` is a
     # stable IGN-layer tag (or the user's `--dem-version` override), so it's
@@ -158,6 +168,11 @@ def cli(
             )
 
     if not cache_hit:
+        # Stage-timing seam (Story 11.1, FR33): every stage announces itself and
+        # reports elapsed time on stdout; `--quiet` installs no sink so the seam
+        # only times. `progress.timings` keeps the machine-readable per-stage
+        # breakdown for profiling attribution (Story 11.2).
+        progress = StageProgress(on_line=None if quiet else print)
         # Build the graph geometry first (stages 1-4, DEM-independent), then size
         # the DEM from its *actual* extent so the raster covers every vertex
         # `sample_elevation` probes. osmnx `simplify=True` can push simplified edge
@@ -165,14 +180,16 @@ def cli(
         # so a fixed radius+padding ring is not safe (it failed at radius 10 km in
         # the Alps). `--force-refresh` re-fetches the raster so a forced rebuild gets
         # fresh elevation data, not a stale cached one.
-        graph = build_graph_geometry(area, untagged_trails)
-        dem_path = resolve_dem(
-            graph_dem_bounds(graph),
-            cache_root,
-            dem_version=resolved_dem_version,
-            force_refresh=force_refresh,
-        )
-        graph = attach_elevation(graph, dem_path)
+        graph = build_graph_geometry(area, untagged_trails, progress=progress)
+        with progress.stage("dem-resolve"):
+            dem_path = resolve_dem(
+                graph_dem_bounds(graph),
+                cache_root,
+                dem_version=resolved_dem_version,
+                force_refresh=force_refresh,
+                progress=progress,
+            )
+        graph = attach_elevation(graph, dem_path, progress=progress)
         now = iso8601_utc_now()
         manifest = Manifest(
             area=area,
@@ -185,7 +202,8 @@ def cli(
             steeproute_commit=get_commit_short(),
             created_at=now,
         )
-        entry_dir = write_entry(cache_root, manifest, graph)
+        with progress.stage("cache-write"):
+            entry_dir = write_entry(cache_root, manifest, graph)
 
     elapsed_s = time.perf_counter() - start
     assert entry_dir is not None  # both branches assign it; tells basedpyright
@@ -194,7 +212,6 @@ def cli(
         cache_key=cache_key,
         entry_dir=entry_dir,
         elapsed_s=elapsed_s,
-        quiet=quiet,
     )
     return 0
 
@@ -215,16 +232,28 @@ def _resolve_package_version() -> str:
         return "unknown"
 
 
+def _configure_osmnx_cache(cache_root: pathlib.Path) -> None:
+    """Point osmnx's Overpass HTTP cache at a persistent dir under the cache root.
+
+    Story 11.1 (T2): osmnx 2.x ships `settings.use_cache = True` but
+    `settings.cache_folder = "./cache"` — CWD-relative, so responses were cached
+    into stray `cache/` folders wherever setup happened to run. Rooting it under
+    `resolve_cache_root(...)` makes the cache genuinely persistent and
+    `--cache-dir`-aware. `use_cache` is (re)asserted on rather than trusted, so
+    a future osmnx default flip can't silently disable it.
+    """
+    osmnx.settings.use_cache = True
+    osmnx.settings.cache_folder = str(osmnx_cache_dir_for(cache_root))
+
+
 def _print_summary(
     *,
     cache_hit: bool,
     cache_key: str,
     entry_dir: pathlib.Path,
     elapsed_s: float,
-    quiet: bool,
 ) -> None:
-    """Emit the run summary to stdout. Always emitted — `--quiet` only suppresses progress."""
-    _ = quiet  # Setup has no progress lines to suppress; the summary is the only stdout output.
+    """Emit the run summary to stdout. Always emitted — `--quiet` only suppresses the stage lines."""
     status = "cache-hit" if cache_hit else "cache-miss"
     print(f"steeproute-setup: {status}")
     print(f"  cache_key_hash: {cache_key}")

@@ -1,26 +1,40 @@
-"""ProgressEvent dataclass and throttled-callback helper (Story 7.1, FR13).
+"""Progress primitives: query-side solver events and setup-side stage timing.
 
 Architecture §Cat 8 splits the output streams: progress lines and the final run
 summary go to **stdout** via plain `print(...)`; `logging` is reserved for
-diagnostics and warnings on **stderr**. The solver (`solver/grasp.py`) emits a
-`ProgressEvent` once per iteration through an injected callback; the CLI installs
-a rendering callback wrapped by `throttle(...)` so a long run prints at most one
-line per `--progress-interval` seconds. Tests inject a collecting callback (and,
-for the throttle, a fake clock) instead.
+diagnostics and warnings on **stderr**. Two consumers share this module:
 
-The throttle is a pure side-effect on top of the solver loop: it reads a
-monotonic wall-clock to decide *whether* to forward an event, and never feeds the
-solver's RNG or alters iteration count. FR29 byte-identical edge-sets are
-therefore unaffected by whether, or how often, progress fires.
+- **Query side (Story 7.1, FR13):** the solver (`solver/grasp.py`) emits a
+  `ProgressEvent` once per iteration through an injected callback; the CLI
+  installs a rendering callback wrapped by `throttle(...)` so a long run prints
+  at most one line per `--progress-interval` seconds.
+- **Setup side (Story 11.1, FR33):** `StageProgress` is the stage-timing seam —
+  `cli/setup.py` creates one (rendering through `print`, or silent under
+  `--quiet`) and threads it through the setup orchestrator so every pipeline
+  stage announces itself, reports elapsed time, and records machine-readable
+  per-stage timings for profiling attribution (Story 11.2).
+
+Tests inject a collecting callback (and a fake clock) instead. Both mechanisms
+are pure side-effects on the loops they observe: they read a monotonic
+wall-clock for display/attribution only, and never feed the solver's RNG or
+alter control flow. FR29 byte-identical edge-sets are therefore unaffected by
+whether, or how often, progress fires.
 """
 
 from __future__ import annotations
 
+import contextlib
 import time
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Generator
+from dataclasses import dataclass, field
 
-__all__ = ["ProgressCallback", "ProgressEvent", "estimate_remaining", "throttle"]
+__all__ = [
+    "ProgressCallback",
+    "ProgressEvent",
+    "StageProgress",
+    "estimate_remaining",
+    "throttle",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +80,56 @@ def estimate_remaining(iteration: int, iter_budget: int, elapsed_s: float) -> fl
         return None
     rate = elapsed_s / iteration
     return max(0.0, (iter_budget - iteration) * rate)
+
+
+@dataclass
+class StageProgress:
+    """Stage-timing seam for the setup pipeline (Story 11.1, FR33 / T1).
+
+    One object serves both FR33 goals: a `with progress.stage(name):` block
+    emits a stage-start line and a stage-complete line with elapsed time through
+    `on_line`, and records the elapsed seconds into `timings` (stage name →
+    seconds, insertion-ordered) for machine-readable profiling attribution
+    (Story 11.2 reads it instead of re-instrumenting).
+
+    - `on_line`: rendering sink for formatted lines. `cli/setup.py` installs
+      `print` (stdout, §Cat 8), or `None` under `--quiet` — with `None` the seam
+      still times stages but emits nothing (timing-only no-op).
+    - `clock`: injectable monotonic clock, testing-only (mirrors `throttle`).
+    - `line(text)`: within-stage progress (e.g. the DEM `tile i/N` loop),
+      rendered indented beneath the stage lines; silent no-op without a sink.
+
+    A stage body that raises emits no done line and records no timing — the
+    exception propagates unchanged so `run_entry_point` reports it on stderr
+    while stdout keeps only the stages that actually completed.
+    """
+
+    on_line: Callable[[str], None] | None = None
+    clock: Callable[[], float] = time.monotonic
+    timings: dict[str, float] = field(default_factory=dict)
+
+    @contextlib.contextmanager
+    def stage(self, name: str, *, note: str | None = None) -> Generator[None]:
+        """Time the enclosed stage, announcing start and completion via `on_line`.
+
+        `note` is an honesty annotation for the start line only (e.g. the
+        blocking Overpass download's "typically takes minutes").
+        """
+        suffix = f" ({note})" if note else ""
+        self._emit(f"stage: {name}{suffix} ...")
+        started = self.clock()
+        yield
+        elapsed = self.clock() - started
+        self.timings[name] = elapsed
+        self._emit(f"stage: {name}: {elapsed:.2f} s")
+
+    def line(self, text: str) -> None:
+        """Emit a within-stage progress line, indented under the stage lines."""
+        self._emit(f"  {text}")
+
+    def _emit(self, text: str) -> None:
+        if self.on_line is not None:
+            self.on_line(text)
 
 
 def throttle(
