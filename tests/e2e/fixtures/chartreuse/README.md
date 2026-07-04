@@ -29,7 +29,9 @@ uv run update-regression --fixture chartreuse       # refresh the golden
 Unlike `grenoble_small`, this cache is prepared from **real** OSM (Overpass) + DEM (IGN
 WMS) downloads — there is no committed offline source, so regeneration needs network.
 The `dem/` cache dir setup writes under the root is intentionally **not** committed (the
-query reads elevation from `graph.pkl`). `graph.pkl` is a pickled networkx graph, so it
-is also sensitive to networkx/Python upgrades — the regression test surfaces any
-incompatibility. Any golden change must be committed with an explicit rationale (see the
-README "Development notes" section).
+query reads elevation from `graph.pkl`). `graph.pkl` holds the schema-v2 pickled payload
+(graph minus geometry + ragged coordinate arrays, Story 13.2; converted in place from the
+original v1 raw-graph pickle — graph content unchanged), so it is still sensitive to
+networkx/Python upgrades — the regression test surfaces any incompatibility. Any golden
+change must be committed with an explicit rationale (see the README "Development notes"
+section).

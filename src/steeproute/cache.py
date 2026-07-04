@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import networkx as nx
+import numpy as np
 import platformdirs
 import shapely
 
@@ -88,11 +89,23 @@ _INDEX_FILENAME: str = "index.json"
 _TMP_DIR_SUFFIX: str = ".tmp"
 _OLD_DIR_SUFFIX: str = ".old"
 
-# `manifest.json` and `index.json` versions advance independently. v1 is the
-# initial released schema; bumping is a coordinated change across both CLIs
-# per Architecture §Versioned-contract-surfaces.
-_MANIFEST_SCHEMA_VERSION: int = 1
+# `manifest.json` and `index.json` versions advance independently. Manifest v1
+# was the initial released schema (raw pickled graph); v2 switched `graph.pkl`
+# to the ragged-array payload (Story 13.2) — the manifest version is the sole
+# format signal, since `cache.py` is deliberately excluded from the pipeline
+# content hash and a format change must not shift cache keys. Bumping is a
+# coordinated change across both CLIs per Architecture
+# §Versioned-contract-surfaces; v1 entries re-prepare once via the existing
+# recovery paths (no compat shim).
+_MANIFEST_SCHEMA_VERSION: int = 2
 _INDEX_SCHEMA_VERSION: int = 1
+
+# Marker key + version stamped into the `graph.pkl` payload dict so a
+# hand-assembled or half-converted entry (v2 manifest over an old-format
+# pickle) surfaces as `CacheCorruptedError` instead of leaking a raw graph.
+# Advances with `_MANIFEST_SCHEMA_VERSION` — the two describe one format.
+_GRAPH_PAYLOAD_MARKER: str = "steeproute_graph_payload"
+_GRAPH_PAYLOAD_VERSION: int = 2
 
 
 def sha256_canonical(obj: object) -> str:
@@ -413,6 +426,105 @@ def write_json_atomic(path: pathlib.Path, obj: object) -> None:
     write_text_atomic(path, json.dumps(obj, sort_keys=True, indent=2) + "\n")
 
 
+def _graph_to_payload(graph: nx.MultiDiGraph) -> dict[str, Any]:
+    """Build the schema-v2 `graph.pkl` payload: graph-minus-geometry + ragged coord arrays.
+
+    Story 13.2: unpickling shapely geometries reconstructs each LineString
+    through a per-object WKB parse — ~60% of `read_entry` time on a large entry
+    — while `shapely.from_ragged_array` rebuilds the same geometries in bulk
+    ~20× faster. Everything *else* (the networkx skeleton, the
+    `vertices_resampled` list-of-tuples) measured **faster** through pickle
+    than through any array reconstruction, so only `geometry` moves out of the
+    graph: the payload pickles the stripped graph alongside one flat coords
+    array + per-edge offsets, in `graph.edges()` iteration order.
+
+    Pure — operates on `graph.copy()` (fresh attribute dicts, shared values),
+    so the caller's graph keeps its `geometry` attributes. The copy costs a
+    few seconds on a large graph, which is acceptable on the rarely-run
+    setup/write path; the payoff is on the every-query read path.
+
+    Raises:
+        ValueError: an edge is missing `geometry` or it is not a LineString —
+            the post-stage-5 contract every cached graph must satisfy.
+    """
+    stripped = graph.copy()
+    geometries: list[shapely.LineString] = []
+    for u, v, key, data in stripped.edges(keys=True, data=True):
+        geometry = data.pop("geometry", None)
+        if not isinstance(geometry, shapely.LineString):
+            raise ValueError(
+                f"write_entry requires a shapely LineString `geometry` attribute on "
+                f"every edge; edge ({u!r}, {v!r}, {key!r}) has {type(geometry).__name__}."
+            )
+        geometries.append(geometry)
+    if geometries:
+        _, coords, (offsets,) = shapely.to_ragged_array(geometries)
+    else:
+        # Zero-edge graphs occur in tests; `from_ragged_array` needs the
+        # one-element offsets array even for an empty geometry set.
+        coords = np.empty((0, 2), dtype=np.float64)
+        offsets = np.zeros(1, dtype=np.int64)
+    return {
+        _GRAPH_PAYLOAD_MARKER: _GRAPH_PAYLOAD_VERSION,
+        "graph": stripped,
+        "geometry_coords": coords,
+        "geometry_offsets": offsets,
+    }
+
+
+def _graph_from_payload(payload: object, cache_key: str) -> nx.MultiDiGraph:
+    """Rebuild the full graph from a schema-v2 payload (inverse of `_graph_to_payload`).
+
+    Reattachment is positional: the i-th bulk-rebuilt LineString belongs to the
+    i-th edge of `graph.edges()`. That pairing is sound because the payload is
+    built and consumed around one pickle round-trip, and pickle preserves dict
+    insertion order — the edge iteration order at load time is exactly the
+    order `_graph_to_payload` saw. The `strict=True` zip plus the offsets
+    length check turn any mismatch into `CacheCorruptedError` rather than a
+    silent geometry swap.
+
+    Raises:
+        CacheCorruptedError: payload is not a v2 payload dict (e.g. an
+            old-format raw pickled graph under a v2 manifest) or its parts are
+            inconsistent.
+    """
+
+    def _corrupt(what: str) -> CacheCorruptedError:
+        return CacheCorruptedError(
+            user_message=f"Cache entry {cache_key!r} has an incompatible graph payload.",
+            detail=(
+                f"{what} Expected the schema-v{_GRAPH_PAYLOAD_VERSION} ragged-array "
+                f"payload. Re-prepare with `steeproute-setup --force-refresh`."
+            ),
+        )
+
+    if not isinstance(payload, dict):
+        raise _corrupt(f"`graph.pkl` unpickled to {type(payload).__name__}, not a payload dict.")
+    if payload.get(_GRAPH_PAYLOAD_MARKER) != _GRAPH_PAYLOAD_VERSION:
+        raise _corrupt(
+            f"Payload marker is {payload.get(_GRAPH_PAYLOAD_MARKER)!r}, "
+            f"not {_GRAPH_PAYLOAD_VERSION}."
+        )
+    graph = payload.get("graph")
+    coords = payload.get("geometry_coords")
+    offsets = payload.get("geometry_offsets")
+    if (
+        not isinstance(graph, nx.MultiDiGraph)
+        or not isinstance(coords, np.ndarray)
+        or not isinstance(offsets, np.ndarray)
+    ):
+        raise _corrupt("Payload parts have unexpected types.")
+    if len(offsets) != graph.number_of_edges() + 1:
+        raise _corrupt(
+            f"Offsets length {len(offsets)} does not match {graph.number_of_edges()} edges + 1."
+        )
+    if graph.number_of_edges():
+        geometries = shapely.from_ragged_array(shapely.GeometryType.LINESTRING, coords, (offsets,))
+        for (_, _, data), geometry in zip(graph.edges(data=True), geometries, strict=True):
+            data["geometry"] = geometry
+    return graph
+
+
 def write_entry(
     cache_root: pathlib.Path,
     manifest: Manifest,
@@ -448,9 +560,10 @@ def write_entry(
         shutil.rmtree(backup_dir)
 
     staging_dir.mkdir()
-    # Step 1: graph.pkl + bounds.geojson into the staging directory.
+    # Step 1: graph.pkl + bounds.geojson into the staging directory. The graph
+    # is stored as the schema-v2 ragged-array payload (see `_graph_to_payload`).
     with (staging_dir / _GRAPH_FILENAME).open("wb") as graph_fp:
-        pickle.dump(graph, graph_fp, protocol=pickle.HIGHEST_PROTOCOL)
+        pickle.dump(_graph_to_payload(graph), graph_fp, protocol=pickle.HIGHEST_PROTOCOL)
     write_json_atomic(staging_dir / _BOUNDS_FILENAME, _bounds_geojson(manifest.area))
 
     # Step 2-3: swap staging → final via `<hash>.old/` shuffle (Windows-safe).
@@ -547,8 +660,11 @@ def read_entry(cache_root: pathlib.Path, cache_key: str) -> PreparedData:
             the entry doesn't exist, or a prior write was interrupted before
             the manifest commit signal landed.
         CacheCorruptedError: the manifest exists but `graph.pkl` is unreadable
-            (`pickle.UnpicklingError` / `EOFError`), or the manifest itself
-            fails schema validation (`Manifest.from_dict` raises).
+            (`pickle.UnpicklingError` / `EOFError`), the unpickled object is
+            not a valid schema-v2 payload (`_graph_from_payload` raises), or
+            the manifest itself fails schema validation (`Manifest.from_dict`
+            raises — including the v1 pickled-graph format, which re-prepares
+            once per Architecture §Cat 4b invalidation semantics).
     """
     entry_dir = _areas_dir(cache_root) / cache_key
     manifest_path = entry_dir / _MANIFEST_FILENAME
@@ -575,7 +691,7 @@ def read_entry(cache_root: pathlib.Path, cache_key: str) -> PreparedData:
 
     try:
         with graph_path.open("rb") as graph_fp:
-            graph: nx.MultiDiGraph = pickle.load(graph_fp)
+            payload: object = pickle.load(graph_fp)
     except (
         pickle.UnpicklingError,
         EOFError,
@@ -594,7 +710,7 @@ def read_entry(cache_root: pathlib.Path, cache_key: str) -> PreparedData:
             detail=f"`pickle.load` failed on {graph_path}: {exc}.",
         ) from exc
 
-    return PreparedData(graph=graph, manifest=manifest)
+    return PreparedData(graph=_graph_from_payload(payload, cache_key), manifest=manifest)
 
 
 def rebuild_index(cache_root: pathlib.Path) -> None:

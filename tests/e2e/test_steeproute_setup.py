@@ -237,7 +237,7 @@ def test_setup_first_run_writes_manifest_with_complete_provenance(
     payload = json.loads((entry / "manifest.json").read_text(encoding="utf-8"))
 
     # Schema + the four key-inducing fields the CLI populated.
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
     assert payload["untagged_policy"] == "include"
     # With no `--dem-version` flag, `dem_version` is the stable IGN-layer default
     # tag (the DEM is auto-downloaded, not user-supplied).
@@ -263,12 +263,13 @@ def test_setup_first_run_writes_manifest_with_complete_provenance(
 
 def test_setup_graph_edge_count_within_story_2_5_baseline(tmp_path: pathlib.Path) -> None:
     """AC #4: the pipeline actually ran (edge count matches Story 2.5's `_BASELINE_EDGES ± 10%`)."""
-    import pickle
+    from steeproute.cache import read_entry
 
     _invoke_setup(tmp_path)
     entry = next((tmp_path / "steeproute" / "areas").iterdir())
-    with (entry / "graph.pkl").open("rb") as fp:
-        graph: nx.MultiDiGraph = pickle.load(fp)
+    # `read_entry`, not a raw `pickle.load` — since Story 13.2 `graph.pkl` holds
+    # the ragged-array payload, and the cache module owns its deserialization.
+    graph: nx.MultiDiGraph = read_entry(tmp_path, entry.name).graph
 
     edge_count = graph.number_of_edges()
     drift = abs(edge_count - _BASELINE_EDGES) / _BASELINE_EDGES
@@ -295,6 +296,30 @@ def test_setup_second_run_same_flags_is_cache_hit(tmp_path: pathlib.Path) -> Non
     assert second.exit_code == 0, second.output
     assert "cache-hit" in second.output
     assert "cache-miss" not in second.output
+
+
+def test_setup_re_prepares_legacy_schema_v1_entry_once(tmp_path: pathlib.Path) -> None:
+    """Story 13.2: a pre-v2 entry at the same key re-prepares as recovery, not a hard error.
+
+    The v2 format bump invalidates v1 entries via the manifest schema version
+    (the cache key deliberately does not shift — `cache.py` is excluded from
+    the pipeline content hash). Setup's `CacheCorruptedError` branch treats the
+    stale entry as a miss and rebuilds it in place; the second run leaves a
+    valid v2 entry behind.
+    """
+    _invoke_setup(tmp_path)  # seed a valid entry at the key
+    entry = next((tmp_path / "steeproute" / "areas").iterdir())
+    manifest_path = entry / "manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["schema_version"] = 1  # simulate a pre-13.2 entry
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = _invoke_setup(tmp_path)
+
+    assert result.exit_code == 0, result.output
+    assert "cache-miss" in result.output  # re-prepared; not treated as a hit
+    rewritten = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert rewritten["schema_version"] == 2
 
 
 def test_setup_force_refresh_rebuilds_entry_on_existing_key(tmp_path: pathlib.Path) -> None:

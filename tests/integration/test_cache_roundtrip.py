@@ -80,27 +80,19 @@ def prepared_graph() -> nx.MultiDiGraph:
         return run_setup_stages(area, config)
 
 
-def _expected_edge_attributes(data: dict[str, object]) -> dict[str, object]:
-    """Pull the raw post-stage-5 setup-pipeline contract off an edge dict.
-
-    Story 6.3 moved the per-edge metrics (`length_m`, `d_plus_m`, ...) query-side,
-    so the cached graph carries geometry + raw `vertices_resampled` + source attrs
-    only. The roundtrip's job is pickle-integrity of whatever the cache stores.
-    """
-    return {
-        "geometry": data["geometry"],
-        "vertices_resampled": data["vertices_resampled"],
-        "sac_scale": data["sac_scale"],
-        "highway": data["highway"],
-        "osm_way_id": data["osm_way_id"],
-    }
-
-
 def test_write_and_read_entry_round_trips_real_fixture_graph(
     prepared_graph: nx.MultiDiGraph,
     tmp_path: pathlib.Path,
 ) -> None:
-    """AC #10: round-trip preserves node count, edge count, and the 9-attribute edge contract."""
+    """AC #10 + Story 13.2 AC #1: round-trip is content-identical across the whole graph.
+
+    Exhaustive on purpose: since Story 13.2 the entry payload strips `geometry`
+    at write time and reattaches bulk-rebuilt LineStrings *positionally* at read
+    time, so per-edge integrity is no longer implied by "pickle isn't selective"
+    — a mis-zipped reattachment would swap geometries between edges while every
+    count-based assertion still passed. Every node, every edge (u, v, key), every
+    attribute value, and the graph-level attrs are compared.
+    """
     area = Area(center=(_CENTER_LAT, _CENTER_LON), radius_km=_DIST_M / 1000.0)
     cache_key = "0123456789abcdef"
     manifest = _build_manifest(area, cache_key)
@@ -115,15 +107,20 @@ def test_write_and_read_entry_round_trips_real_fixture_graph(
     loaded = read_entry(tmp_path, cache_key)
 
     assert isinstance(loaded, PreparedData)
-    assert loaded.graph.number_of_nodes() == prepared_graph.number_of_nodes()
+    # Graph-level attributes (osmnx crs / provenance) survive intact.
+    assert loaded.graph.graph == prepared_graph.graph
+    # Node set + every node attribute.
+    assert dict(loaded.graph.nodes(data=True)) == dict(prepared_graph.nodes(data=True))
+    # Edge set + every edge attribute. shapely `==` is structural equality
+    # (same type, exactly equal coordinates), so `geometry` compares exactly;
+    # `vertices_resampled` compares as list-of-tuples with exact floats.
     assert loaded.graph.number_of_edges() == prepared_graph.number_of_edges()
-    # Sample the first edge's full attribute contract — pickle roundtrip integrity
-    # for any edge implies it for the rest (pickle isn't selective).
     for u, v, k, data in prepared_graph.edges(data=True, keys=True):
         loaded_data = loaded.graph.get_edge_data(u, v, k)
-        assert loaded_data is not None
-        assert _expected_edge_attributes(loaded_data) == _expected_edge_attributes(data)
-        break  # one sample is enough
+        assert loaded_data is not None, f"edge ({u}, {v}, {k}) missing after roundtrip"
+        assert loaded_data == data, f"edge ({u}, {v}, {k}) attributes differ after roundtrip"
+        loaded_vr = loaded_data["vertices_resampled"]
+        assert isinstance(loaded_vr, list) and all(isinstance(t, tuple) for t in loaded_vr)
 
 
 def test_write_entry_manifest_matches_schema(

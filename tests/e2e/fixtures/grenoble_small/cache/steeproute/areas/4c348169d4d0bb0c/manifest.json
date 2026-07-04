@@ -12,7 +12,7 @@
   "dem_version": "ign-rgealti-highres",
   "osm_extract_date": "2026-06-10T14:04:19Z",
   "pipeline_content_hash": "df917f359cfc4bfcec10ec185a342141c8014eb50f57cb4ab9f7501cf8f21b4c",
-  "schema_version": 1,
+  "schema_version": 2,
   "steeproute_commit": "e8cff49-dirty",
   "steeproute_version": "0.0.1.dev57+c8a47a6",
   "untagged_policy": "include"

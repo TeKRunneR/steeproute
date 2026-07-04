@@ -127,7 +127,7 @@ def test_manifest_to_dict_emits_full_schema_with_nested_area_shape() -> None:
     manifest = _build_manifest()
     d = manifest.to_dict()
 
-    assert d["schema_version"] == 1
+    assert d["schema_version"] == 2
     assert d["area"] == {
         "mode": "center_radius",
         "center": [45.0716, 6.1079],

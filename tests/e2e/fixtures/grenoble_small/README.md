@@ -25,6 +25,7 @@ uv run update-regression --fixture grenoble_small                     # refresh 
 ```
 
 Regenerate after the setup-side pipeline or the OSM/DEM source fixtures change. `graph.pkl`
-is a pickled networkx graph, so it is also sensitive to networkx/Python upgrades — the
-regression test (and `update-regression`) will surface any incompatibility. Any golden change
-must be committed with an explicit rationale (see the README "Development notes" section).
+holds the schema-v2 pickled payload (graph minus geometry + ragged coordinate arrays,
+Story 13.2), so it is still sensitive to networkx/Python upgrades — the regression test
+(and `update-regression`) will surface any incompatibility. Any golden change must be
+committed with an explicit rationale (see the README "Development notes" section).

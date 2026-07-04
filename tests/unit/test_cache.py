@@ -213,7 +213,7 @@ def test_rebuild_index_bootstraps_missing_areas_directory(tmp_path: pathlib.Path
 
 def _manifest_payload(**overrides: object) -> dict[str, object]:
     base: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "area": {"mode": "center_radius", "center": [45.0716, 6.1079], "radius_km": 2.0},
         "untagged_policy": "include",
         "dem_version": "ign_rge_alti_5m_2024-12",
@@ -241,7 +241,23 @@ def test_manifest_from_dict_raises_on_unknown_schema_version() -> None:
     with pytest.raises(CacheCorruptedError) as exc_info:
         Manifest.from_dict(payload)
     assert "schema version" in exc_info.value.user_message
-    assert exc_info.value.detail is not None and "schema_version=1" in exc_info.value.detail
+    assert exc_info.value.detail is not None and "schema_version=2" in exc_info.value.detail
+
+
+def test_manifest_from_dict_raises_on_legacy_v1_schema_version() -> None:
+    """Story 13.2: v1 entries (pickled-graph format) are rejected with the re-prepare hint.
+
+    The graph payload format changed in schema v2; there is deliberately no
+    compat shim (Architecture §Versioned-contract-surfaces) — a v1 entry
+    re-prepares once via the existing recovery paths (query: exit 2 with the
+    actionable message; setup: re-prepare-as-recovery).
+    """
+    payload = _manifest_payload(schema_version=1)
+
+    with pytest.raises(CacheCorruptedError) as exc_info:
+        Manifest.from_dict(payload)
+    assert "schema version" in exc_info.value.user_message
+    assert exc_info.value.detail is not None and "--force-refresh" in exc_info.value.detail
 
 
 def test_manifest_from_dict_raises_on_missing_schema_version() -> None:
@@ -304,6 +320,32 @@ def test_read_entry_raises_cache_corrupted_on_missing_graph_pkl(tmp_path: pathli
     write_json_atomic(entry_dir / "manifest.json", _manifest_payload())
 
     with pytest.raises(CacheCorruptedError, match="unreadable graph"):
+        _ = read_entry(tmp_path, "0123456789abcdef")
+
+
+def test_read_entry_raises_cache_corrupted_on_legacy_graph_payload(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Story 13.2: a v2 manifest over an old-format `graph.pkl` (raw pickled graph) is corrupt.
+
+    Unreachable through normal writes (the manifest version and the payload
+    format move together), but a hand-assembled or half-converted entry must
+    surface as `CacheCorruptedError`, not leak a raw graph or crash on a dict
+    lookup.
+    """
+    import pickle
+
+    import networkx as nx
+
+    entry_dir = tmp_path / "steeproute" / "areas" / "0123456789abcdef"
+    entry_dir.mkdir(parents=True)
+    write_json_atomic(entry_dir / "manifest.json", _manifest_payload())
+    legacy_graph = nx.MultiDiGraph()  # pyright: ignore[reportMissingTypeArgument, reportUnknownVariableType]
+    (entry_dir / "graph.pkl").write_bytes(
+        pickle.dumps(legacy_graph, protocol=pickle.HIGHEST_PROTOCOL)
+    )
+
+    with pytest.raises(CacheCorruptedError, match="graph payload"):
         _ = read_entry(tmp_path, "0123456789abcdef")
 
 

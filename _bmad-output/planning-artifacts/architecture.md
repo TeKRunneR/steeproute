@@ -273,7 +273,7 @@ Structured stage inputs/outputs (beyond simple tuples) use dataclasses declared 
 
 - **4a**: One directory per prepared area; `index.json` as a coverage-lookup convenience file.
 - **4b**: Single cache key over (area bounds, untagged-trails-policy, DEM version, pipeline source content hash). OSM extract date is recorded as metadata but not part of the key. Freshness is user-triggered via `--force-refresh` (or manual entry deletion).
-- **4c**: `pickle` for the graph, JSON manifest, geojson bounds sidecar.
+- **4c**: pickled ragged-array payload for the graph (graph-minus-geometry + bulk coordinate arrays; schema v2, Story 13.2), JSON manifest, geojson bounds sidecar.
 - **4d**: `manifest.json` written last as the atomic commit signal; `.tmp/` directories for in-progress writes.
 - **4e**: Strict containment check against prepared bounds; miss → exit 2 with actionable message.
 - **4f (added):** OSM-age warning when cache entry's OSM extract date exceeds threshold (default 90 days, `--osm-age-warn-days` override), non-blocking.
@@ -311,13 +311,13 @@ One SHA256 over canonical JSON of the above → the entry's `<cache-key-hash>`.
 
 **Provenance in reports (separate from cache key):** HTML + JSON carry `steeproute_version`, `git_commit_short`, and a `-dirty` flag if the working tree is modified at run time. Human-readable string for future-reference, not a hash.
 
-**On-disk format (4c):** `pickle` for `graph.pkl` — networkx 3.x's recommended serialization; preserves MultiDiGraph + edge attributes + embedded geometry objects exactly. Tradeoffs accepted: Python-version-sensitive (we pin 3.13, cross-version reads fail loudly at `pickle.load`), not human-inspectable (hence `bounds.geojson` + `manifest.json` for diagnostics). Parquet decomposition considered and rejected for v1 as premature.
+**On-disk format (4c):** `graph.pkl` is a pickled payload dict — the MultiDiGraph with per-edge `geometry` stripped, alongside one flat coordinate array + per-edge offsets in edge-iteration order (schema v2, Story 13.2; manifest `schema_version` is the format signal). Rationale: unpickling shapely geometries reconstructs each LineString via a per-object WKB parse (~60% of `read_entry` on a large entry), while `shapely.from_ragged_array` rebuilds them in bulk ~20× faster; everything else (networkx skeleton, `vertices_resampled` list-of-tuples) measured *faster* through pickle than through any array reconstruction, so only geometry moved out (measured 2.5 s → 1.1 s on the 60k-node/152k-edge Chartreuse r10 entry). Tradeoffs accepted, unchanged from v1: Python-version-sensitive (we pin 3.13, cross-version reads fail loudly at `pickle.load`), not human-inspectable (hence `bounds.geojson` + `manifest.json` for diagnostics). v1 (raw pickled graph) entries re-prepare once — `cache.py` is excluded from the pipeline content hash, so the format change does not shift cache keys; the manifest version bump alone invalidates. Full columnar decomposition (Parquet) remains rejected as premature.
 
 **`manifest.json` schema:**
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "area": {"mode": "center_radius", "center": [45.07, 6.11], "radius_km": 50},
   "untagged_policy": "include",
   "dem_version": "ign_rge_alti_5m_2024-12",

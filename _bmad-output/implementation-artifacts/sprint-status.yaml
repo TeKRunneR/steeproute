@@ -141,7 +141,7 @@ development_status:
 
   epic-13: in-progress        # Query-Side Performance — whole-execution wall-clock (correct-course 2026-07-04)
   13-1-vectorize-query-side-elevation-smoothing: done
-  13-2-faster-cache-entry-deserialization: backlog
+  13-2-faster-cache-entry-deserialization: done
   13-3-query-side-recompute-avoidance-second-tier-cache-decision: backlog
   13-4-lazy-imports-on-the-query-path: backlog
   13-5-re-measure-and-epic-close-out: backlog
