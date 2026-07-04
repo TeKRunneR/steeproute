@@ -132,9 +132,9 @@ development_status:
   11-3-dedicated-benchmark-suite-pinning-pre-optimization-baselines: done
   epic-11-retrospective: optional
 
-  epic-12: in-progress        # Solver Performance Optimization — Phase 3 cheap wins (correct-course 2026-07-03)
+  epic-12: done        # Solver Performance Optimization — Phase 3 cheap wins (correct-course 2026-07-03)
   12-1-precompute-static-per-node-adjacency-for-rcl-construction: done
   12-2-incremental-theta-prefix-metrics-and-cached-distinctness-sets: done
   12-3-batched-rng-draws-with-documented-golden-rebake: done
-  12-4-re-profile-benchmark-reconciliation-and-phase-4-decision: backlog
+  12-4-re-profile-benchmark-reconciliation-and-phase-4-decision: done
   epic-12-retrospective: optional

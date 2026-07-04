@@ -1230,5 +1230,5 @@ So that the Phase-4 decision (PyO3 kernel or stop) is made on measurements, not 
 **Given** Stories 12.1–12.3 have landed with per-story benchmark records
 **When** I capture a fresh py-spy profile of the same quality-params workload, plus one confirming capture on a larger area (the analysis's single-area caveat), and consolidate cumulative speedup vs the Story 11.3 baselines
 **Then** a findings update in `_bmad-output/planning-artifacts/research/` records the new profile shape, the cumulative speedup, and whether the measured result lands inside the predicted 2.5–4× band
-**And** the document closes with an explicit Phase-4 go/no-go recommendation (extract-interface-first → PyO3 `steeproute-core` kernel is the designated branch; rustworkx and numpy batching remain not indicated) — Phase-4 stories are not planned in this epic
+**And** the document closes with an explicit what-next recommendation covering the whole execution — ranked levers (solver residue, query-side stages 6–9, cache read, imports) each assessed Rust vs pure-Python vs leave-it, with the solver's extract-interface-first → PyO3 branch judged as one candidate under its end-to-end ceiling — follow-on stories are not planned in this epic *(broadened 2026-07-04: goal is whole-execution wall-clock, not solver throughput)*
 **And** no production code changes in this story
