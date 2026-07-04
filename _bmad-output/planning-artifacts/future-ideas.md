@@ -34,6 +34,11 @@ Make searching large areas tractable within a reasonable time budget. Fuzzy/wide
 
 **Decided 2026-07-04 (Epic 12 close, Story 12.4):** solver 5.6× vs baseline — Phase-3 band exceeded; PyO3 solver kernel **no-go on performance need** (Amdahl-capped ~1.4× end-to-end on large areas; stays the one Rust-shaped option on learning value). The phase split flipped: query-side stages 6–9 + cache read + imports now dominate large-area runs — next levers (all pure-Python/numpy-shaped, headlined by smoothing vectorization) ranked in `research/steeproute-phase3-results-and-phase4-decision-2026-07-04.md`; any follow-on arrives via correct-course.
 
+**Promoted 2026-07-04:** the query-side levers promoted to Epic 13 via correct-course 2026-07-04
+(`sprint-change-proposal-2026-07-04-query-side-performance.md`). The PyO3 solver kernel stays here as the one
+Rust-shaped option on learning value only — not planned; precondition unchanged (time-boxed
+cargo-behind-corporate-proxy spike before any commitment).
+
 ## App
 Make an actual web app with a UI to:
 - Pick a center point on a map + radius
