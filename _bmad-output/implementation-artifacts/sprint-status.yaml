@@ -139,8 +139,8 @@ development_status:
   12-4-re-profile-benchmark-reconciliation-and-phase-4-decision: done
   epic-12-retrospective: optional
 
-  epic-13: backlog        # Query-Side Performance — whole-execution wall-clock (correct-course 2026-07-04)
-  13-1-vectorize-query-side-elevation-smoothing: backlog
+  epic-13: in-progress        # Query-Side Performance — whole-execution wall-clock (correct-course 2026-07-04)
+  13-1-vectorize-query-side-elevation-smoothing: in-progress
   13-2-faster-cache-entry-deserialization: backlog
   13-3-query-side-recompute-avoidance-second-tier-cache-decision: backlog
   13-4-lazy-imports-on-the-query-path: backlog
