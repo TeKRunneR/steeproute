@@ -31,3 +31,10 @@ Make searching large areas tractable within a reasonable time budget. Fuzzy/wide
 **Researched 2026-07-02:** see `research/technical-steeproute-performance-tuning-research-2026-07-02.md` — phased roadmap (instrument → profile → benchmark → cheap wins → conditional native kernel), Rust scoped to PyO3 hot-loop extraction, rustworkx identified as a no-Rust-authorship alternative.
 
 **Promoted 2026-07-03:** Phases 0–2 shipped as Epic 11; profiling verdict in `research/steeproute-bottleneck-analysis-2026-07-03.md` (loop skeleton dominates; rustworkx not indicated). Phase 3 promoted to Epic 12 via correct-course 2026-07-03. Phase 4 (extract-interface-first → PyO3 kernel) remains conditional on Epic 12's closing go/no-go.
+
+## App
+Make an actual web app with a UI to:
+- Pick a center point on a map + radius
+- Run the setup + solver
+- View result routes
+- View results of old runs
