@@ -201,5 +201,9 @@ def test_admission_with_unchanged_total_still_advances_convergence_iteration() -
     # event's total equals the previous iteration's. A delta-based signal could
     # never set `convergence_iteration` here — only `consider()`'s bool can.
     assert events[ci - 1].best_objective == events[ci - 2].best_objective == 13.0
-    # Pinned for this seed/graph: the equal-total evict-many lands on iteration 11.
-    assert ci == 11
+    # Pinned for this seed/graph: the equal-total evict-many lands on iteration 14
+    # under the Story 12.3 batched-draw sequence (was 11 with per-step scalar
+    # draws). Re-derive by printing `solver.convergence_iteration` if the draw
+    # scheme ever changes again; the two assertions above are the test's substance
+    # and must keep passing as-is.
+    assert ci == 14

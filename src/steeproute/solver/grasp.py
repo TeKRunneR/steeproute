@@ -19,7 +19,8 @@ Each GRASP iteration builds **one** candidate route from a randomly-chosen
 start node by greedy-randomized walk extension:
 
 1. Sample a start node uniformly at random over the contracted graph's nodes
-   (via the injected `numpy.random.Generator`).
+   (from the injected `numpy.random.Generator`, via the chunked draw buffer —
+   see "Determinism" below).
 2. At each step, build the restricted candidate list (RCL): the outgoing edges
    from the current node that pass the feasibility filters (directed-edge-simple
    + no non-exempt base segment already used + SAC cap + the opt-in FR32 descent
@@ -76,6 +77,22 @@ Determinism (FR29)
 
 All randomness flows through the injected `numpy.random.Generator`. No
 ambient `numpy.random.seed`, no `random` stdlib usage, no time-derived seeds.
+
+Draws are **batched** (Story 12.3): instead of one scalar `Generator` call per
+walk step — measured at ~13% of query wall-clock, all numpy per-call boundary
+overhead — `_next_uniform` consumes uniform `[0, 1)` values from a buffer
+refilled by one native `rng.random(_RNG_CHUNK)` call per `_RNG_CHUNK` draws. A
+bounded index in `0..n-1` is derived as `int(u * n)` — uniform up to float64
+granularity, which is exact for every `n` this solver sees (`n ≤` node count
+`< 2^53`, so `int(u * n) < n` always holds and no bounds clamp is needed).
+Determinism is unchanged: the value sequence is a pure function of the seed,
+and consumption order is a pure function of the walks. The buffer refills only
+on exhaustion — never on a clock, callback, or termination condition — so a
+fixed seed still yields a byte-identical iteration sequence. NOTE: the draw
+*sequence* differs from the pre-12.3 scalar scheme (`Generator.integers` and
+chunked `Generator.random` advance the bit stream differently), which is why
+Story 12.3 carries the epic's one documented golden rebake.
+
 The `time.monotonic()` reads in `run()` feed only the `ProgressEvent`'s
 `elapsed_s` / ETA — a pure reporting side-effect that never touches the RNG or
 the iteration count, so progress timing cannot perturb the route output.
@@ -145,6 +162,19 @@ Pinned module-scope for FR29 determinism — Epic 4 may surface this as a CLI
 flag once the Story 3.7 quality gate establishes a baseline. Five is the
 classic "small but not greedy" default; smaller values starve diversity,
 larger values approach uniform-random construction.
+"""
+
+
+_RNG_CHUNK: int = 1024
+"""Draws per native `Generator.random` call in the batched scheme (Story 12.3).
+
+Large enough to amortize the numpy call boundary to noise (one native call per
+1024 draws), small enough that the refill itself is microseconds and the
+never-consumed tail of the final chunk is a trivial overdraw. Not a tuning
+knob: changing it does NOT change solver output — the consumed value sequence
+is the generator's `random()` stream in order, independent of how it is
+chunked (`Generator.random` produces one float64 per stream step regardless of
+the requested size).
 """
 
 
@@ -254,6 +284,13 @@ class GraspSolver:
         # single-run, and building it inside `run()` keeps the (one-off) cost
         # inside the benchmark suite's measured region.
         self._adjacency: dict[int, tuple[_CandidateRecord, ...]] = {}
+        # Batched-draw buffer (Story 12.3): uniform [0, 1) values, refilled by
+        # `_next_uniform` in `_RNG_CHUNK`-sized native calls and held as a plain
+        # list (one exact `.tolist()` per refill) so per-draw consumption is a
+        # native list index yielding a Python float, not an ndarray scalar.
+        # Starts empty (`index == len`) so the first draw triggers a refill.
+        self._draw_buffer: list[float] = []
+        self._draw_index: int = 0
 
     @property
     def best_so_far(self) -> list[Solution]:
@@ -417,6 +454,27 @@ class GraspSolver:
                 return Solution(edges=prefix, objective=cum_climb[end])
         return None
 
+    def _next_uniform(self) -> float:
+        """Next uniform `[0, 1)` draw from the chunked buffer (Story 12.3).
+
+        Semantically `float(self._rng.random())` — same stream, same values, in
+        the same order — but the native `Generator` boundary is crossed once per
+        `_RNG_CHUNK` draws instead of once per draw (the 11.2 profile's item 2:
+        ~13% of the run, all per-call overhead). Refills happen only here, only
+        on exhaustion — never conditioned on wall-clock, callbacks, or
+        termination state — so the consumed sequence stays a pure function of
+        the seed (FR29). Callers derive a bounded index as `int(u * n)`; see the
+        module docstring's Determinism section for the exactness argument.
+        """
+        i = self._draw_index
+        buf = self._draw_buffer
+        if i == len(buf):
+            buf = self._rng.random(_RNG_CHUNK).tolist()
+            self._draw_buffer = buf
+            i = 0
+        self._draw_index = i + 1
+        return buf[i]
+
     def _construct_one(self) -> Solution:
         """Build one GRASP candidate via greedy-randomized walk extension.
 
@@ -441,7 +499,7 @@ class GraspSolver:
         (`edges == ()`, `objective == 0.0`); `run()` discards those before they
         reach the tracker.
         """
-        start_idx = int(self._rng.integers(0, len(self._nodes)))
+        start_idx = int(self._next_uniform() * len(self._nodes))
         current: int = self._nodes[start_idx]
         path_edges: list[Edge] = []
         used_directed: set[tuple[int, int, int]] = set()
@@ -450,7 +508,7 @@ class GraspSolver:
             rcl = self._build_rcl(current, used_directed, used_segments)
             if not rcl:
                 break
-            choice_idx = int(self._rng.integers(0, len(rcl)))
+            choice_idx = int(self._next_uniform() * len(rcl))
             chosen, chosen_blocking = rcl[choice_idx]
             path_edges.append(chosen)
             used_directed.add((chosen.node_u, chosen.node_v, chosen.key))

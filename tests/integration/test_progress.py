@@ -54,11 +54,15 @@ _N = 5
 _SEED = 42
 # Enough iterations that the tracker fills early and later iterations stagnate
 # (so the counter both resets and climbs), while the solve stays well under a
-# second on this small fixture. Per-iter ~0.7 ms (measured).
-_ITER_BUDGET = 600
-# Small relative to the solve duration so the throttled stream reliably yields
-# several spaced fires regardless of host speed.
-_PROGRESS_INTERVAL_S = 0.02
+# second on this small fixture. Per-iter ~0.02 ms after the Epic 12 solver
+# optimizations (was ~0.7 ms when this suite was written — the budget and the
+# interval below were rescaled in Story 12.3 so the solve still spans several
+# throttle intervals).
+_ITER_BUDGET = 5000
+# Small relative to the solve duration (~0.1 s at the measured per-iter cost) so
+# the throttled stream reliably yields several spaced fires regardless of host
+# speed.
+_PROGRESS_INTERVAL_S = 0.01
 
 
 def _load_fixture_constants() -> tuple[float, float, int]:
