@@ -1,6 +1,6 @@
 # Story 12.3: Batched RNG draws with documented golden rebake
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
