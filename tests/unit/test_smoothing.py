@@ -576,6 +576,152 @@ def test_graph_smooth_elevation_preserves_attribute_contract() -> None:
     assert len(data["vertices_resampled"]) == len(verts)
 
 
+def _scalar_reference_smooth(
+    graph: nx.MultiDiGraph, strength_m: float
+) -> dict[tuple[int, int, int], list[float]]:
+    """Scalar (dict-and-loop) Jacobi reference for `graph_smooth_elevation`.
+
+    Reimplements the pre-13.1 per-node Python formulation verbatim — one shared
+    variable per node, private interior vertices, `(1-λ)·old + λ·mean(neighbours)`
+    with λ=0.5 and iters = round(window²/6) — so the vectorized production code
+    can be asserted BIT-IDENTICAL to it (same operation order, same IEEE-754
+    results). Returns {edge_key: full elevation list} for comparison.
+    """
+    window = strength_m / RESAMPLE_SPACING_M
+    assert window > 1.0, "reference expects a non-no-op strength"
+    iters = max(1, round(window * window / 6.0))
+    lam = 0.5
+    node_val: dict[int, float] = {}
+    interior: dict[tuple[int, int, int], list[float]] = {}
+    edge_keys: list[tuple[int, int, int]] = []
+    for u, v, k, data in graph.edges(data=True, keys=True):
+        elevs = [vert[2] for vert in data["vertices_resampled"]]
+        node_val.setdefault(u, elevs[0])
+        node_val.setdefault(v, elevs[-1])
+        interior[(u, v, k)] = elevs[1:-1]
+        edge_keys.append((u, v, k))
+    node_adj: dict[int, list[tuple[tuple[int, int, int], bool]]] = {}
+    for ek in edge_keys:
+        node_adj.setdefault(ek[0], []).append((ek, True))
+        node_adj.setdefault(ek[1], []).append((ek, False))
+
+    def adjacent_to_node(ek: tuple[int, int, int], is_u: bool) -> float:
+        ints = interior[ek]
+        if is_u:
+            return ints[0] if ints else node_val[ek[1]]
+        return ints[-1] if ints else node_val[ek[0]]
+
+    for _ in range(iters):
+        new_node = {
+            n: (1 - lam) * node_val[n]
+            + lam * (sum(adjacent_to_node(ek, is_u) for ek, is_u in adj) / len(adj))
+            for n, adj in node_adj.items()
+        }
+        new_interior: dict[tuple[int, int, int], list[float]] = {}
+        for ek in edge_keys:
+            u, v, _k = ek
+            ints = interior[ek]
+            m = len(ints)
+            new_interior[ek] = [
+                (1 - lam) * ints[j]
+                + lam
+                * (
+                    (
+                        (node_val[u] if j == 0 else ints[j - 1])
+                        + (node_val[v] if j == m - 1 else ints[j + 1])
+                    )
+                    / 2
+                )
+                for j in range(m)
+            ]
+        node_val = new_node
+        interior = new_interior
+    return {(u, v, k): [node_val[u], *interior[(u, v, k)], node_val[v]] for u, v, k in edge_keys}
+
+
+def test_graph_smooth_elevation_bit_identical_to_scalar_reference() -> None:
+    """Story 13.1: the vectorized diffusion is BIT-IDENTICAL to the scalar formulation.
+
+    Exercises every structural case at once: a degree-3 junction node (variable-
+    degree neighbour averaging), interior chains of different lengths, and a
+    2-vertex edge with no interior (node-adjacent-to-node fallback). Exact `==`
+    on every elevation — the operation-order-preservation argument that keeps
+    the regression goldens byte-identical rests on this test.
+    """
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    # Y-junction at node 1: three edges (0->1 long, 1->2 short, 1->3 two-vertex).
+    edge_a = [
+        (45.0, 5.0, 1000.0),
+        (45.0001, 5.0, 1041.5),
+        (45.0002, 5.0, 1033.25),
+        (45.0003, 5.0, 1090.0),
+    ]
+    edge_b = [(45.0003, 5.0, 1090.0), (45.0004, 5.0, 1055.125), (45.0005, 5.0, 1010.0)]
+    edge_c = [(45.0003, 5.0, 1090.0), (45.0004, 5.001, 1200.0)]  # no interior
+    for n, (lat, lon) in enumerate([(45.0, 5.0), (45.0003, 5.0), (45.0005, 5.0), (45.0004, 5.001)]):
+        g.add_node(n, x=lon, y=lat)
+    for (u, v), verts in (((0, 1), edge_a), ((1, 2), edge_b), ((1, 3), edge_c)):
+        g.add_edge(
+            u,
+            v,
+            key=0,
+            geometry=shapely.LineString([(lon, lat) for lat, lon, _ in verts]),
+            vertices_resampled=verts,
+            sac_scale="hiking",
+            highway="path",
+            osm_way_id=u,
+        )
+    strength = 50.0
+    expected = _scalar_reference_smooth(g, strength)
+    out = graph_smooth_elevation(g, strength_m=strength)
+    for (u, v, k), exp_elevs in expected.items():
+        got = [vert[2] for vert in out.edges[u, v, k]["vertices_resampled"]]
+        assert got == exp_elevs, f"edge ({u},{v},{k}) diverged from scalar reference"
+
+
+def test_graph_smooth_elevation_replicates_compensated_neighbour_sum() -> None:
+    """Story 13.1: the neighbour sum must replicate CPython's compensated `sum()`.
+
+    Since Python 3.12, builtin `sum()` over floats uses Neumaier compensated
+    summation — so the scalar formulation's per-node `sum(neigh)/len(neigh)` is
+    NOT reproducible by a naive sequential/scatter add (they differ in the last
+    ULP for value patterns like this one, lifted verbatim from a degree-6 node
+    of the grenoble_small fixture where a naive `np.bincount` port drifted the
+    pinned goldens). A degree-6 star of 2-vertex edges makes the centre node's
+    first-iteration neighbour sum exactly `sum()` over these six values.
+    """
+    spoke_elevs = [
+        535.0315399169922,
+        536.9515279134114,
+        538.3678588867188,
+        535.0315399169922,
+        538.3678588867188,
+        536.9515279134114,
+    ]
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    g.add_node(0, x=5.0, y=45.0)
+    for i, elev in enumerate(spoke_elevs, start=1):
+        lat, lon = 45.0 + i * 1e-4, 5.0 + i * 1e-4
+        g.add_node(i, x=lon, y=lat)
+        verts = [(45.0, 5.0, 536.0), (lat, lon, elev)]  # no interior vertices
+        g.add_edge(
+            0,
+            i,
+            key=0,
+            geometry=shapely.LineString([(lon2, lat2) for lat2, lon2, _ in verts]),
+            vertices_resampled=verts,
+            sac_scale="hiking",
+            highway="path",
+            osm_way_id=i,
+        )
+    strength = 50.0
+    expected = _scalar_reference_smooth(g, strength)
+    out = graph_smooth_elevation(g, strength_m=strength)
+    for (u, v, k), exp_elevs in expected.items():
+        got = [vert[2] for vert in out.edges[u, v, k]["vertices_resampled"]]
+        assert got == exp_elevs, f"edge ({u},{v},{k}) diverged from scalar reference"
+
+
 # === Stage 6b: graph_deadband_elevation (profile transform) =====================
 
 

@@ -36,6 +36,7 @@ from __future__ import annotations
 import math
 
 import networkx as nx
+import numpy as np
 import shapely
 
 # Symmetric moving-average window for stage 3, in vertices. Window = 3 means each
@@ -169,6 +170,20 @@ def graph_smooth_elevation(
     `strength_m` at or below the resample spacing (window ≤ 1) is a no-op and the
     input graph is returned unchanged.
 
+    Vectorization (Story 13.1): the whole field lives in ONE flat float64 array —
+    node values first, then each edge's interior vertices in edge-iteration
+    order — and every Jacobi sweep is a few numpy array passes instead of
+    per-vertex Python loops (~417 whole-graph sweeps at the 50 m default made
+    the loop form the dominant query-side cost on large areas). Results are
+    BIT-IDENTICAL to the scalar formulation, not merely close (pinned by the
+    scalar-reference tests in `tests/unit/test_smoothing.py`), so regression
+    goldens don't move. Two details make that exact: the interior rule keeps
+    the literal `(left + right) / 2` shape, and the per-node neighbour sum
+    replicates CPython's builtin `sum()` — which since Python 3.12 is Neumaier
+    COMPENSATED summation, not naive sequential adds — via round-by-round
+    compensated accumulation (round r adds every node's r-th adjacency entry
+    in per-node adjacency order; max-degree rounds total, each a pure array op).
+
     Only the elevation component of each `(lat, lon, elev)` triple is touched;
     `(lat, lon)` pass through unchanged. Returns a new MultiDiGraph; the input is
     never mutated.
@@ -183,52 +198,103 @@ def graph_smooth_elevation(
     # One shared elevation variable per node; per-edge interior vertices are
     # private. Raw node elevations are already consistent across incident edges
     # (same DEM sample at the shared coordinate), so seeding from any incident
-    # endpoint is well-defined.
-    node_val: dict[int, float] = {}
-    interior: dict[tuple[int, int, int], list[float]] = {}
+    # endpoint is well-defined. Field layout: x[0:n_nodes] = node values,
+    # x[n_nodes:] = interior vertices, edge blocks in edge-iteration order.
+    node_index: dict[int, int] = {}
+    node_seed: list[float] = []
     edge_keys: list[tuple[int, int, int]] = []
+    interiors: list[list[float]] = []
     for u, v, k, data in out.edges(data=True, keys=True):
         elevs = [vert[2] for vert in data["vertices_resampled"]]
-        node_val.setdefault(u, elevs[0])
-        node_val.setdefault(v, elevs[-1])
-        interior[(u, v, k)] = elevs[1:-1]
+        if u not in node_index:
+            node_index[u] = len(node_seed)
+            node_seed.append(elevs[0])
+        if v not in node_index:
+            node_index[v] = len(node_seed)
+            node_seed.append(elevs[-1])
         edge_keys.append((u, v, k))
+        interiors.append(elevs[1:-1])
 
-    # node -> the incident edges and which end touches the node, so the field
-    # value adjacent to the node can be fetched each iteration.
-    node_adj: dict[int, list[tuple[tuple[int, int, int], bool]]] = {}
-    for ek in edge_keys:
-        node_adj.setdefault(ek[0], []).append((ek, True))  # node is u
-        node_adj.setdefault(ek[1], []).append((ek, False))  # node is v
+    n_nodes = len(node_seed)
+    starts: list[int] = []
+    pos = n_nodes
+    for ints in interiors:
+        starts.append(pos)
+        pos += len(ints)
+    x = np.array(node_seed + [e for ints in interiors for e in ints], dtype=np.float64)
 
-    def adjacent_to_node(ek: tuple[int, int, int], is_u: bool) -> float:
-        ints = interior[ek]
-        if is_u:
-            return ints[0] if ints else node_val[ek[1]]
-        return ints[-1] if ints else node_val[ek[0]]
+    # Node adjacency as flat index arrays: entry i says "node adj_node[i]'s
+    # neighbour sum includes field value x[adj_src[i]]". The adjacent value is
+    # the edge-end interior vertex, or the opposite node when the edge has no
+    # interior. Entries are appended u-then-v per edge, matching the scalar
+    # version's per-node adjacency order.
+    adj_node: list[int] = []
+    adj_src: list[int] = []
+    left_src: list[int] = []
+    right_src: list[int] = []
+    for (u, v, _k), ints, s in zip(edge_keys, interiors, starts, strict=True):
+        ui, vi = node_index[u], node_index[v]
+        m = len(ints)
+        adj_node.append(ui)
+        adj_src.append(s if m else vi)
+        adj_node.append(vi)
+        adj_src.append(s + m - 1 if m else ui)
+        for j in range(m):
+            left_src.append(ui if j == 0 else s + j - 1)
+            right_src.append(vi if j == m - 1 else s + j + 1)
+
+    degree = np.bincount(np.asarray(adj_node, dtype=np.intp), minlength=n_nodes).astype(np.float64)
+    left = np.asarray(left_src, dtype=np.intp)
+    right = np.asarray(right_src, dtype=np.intp)
+
+    # Regroup adjacency entries into ROUNDS: round r holds every node's r-th
+    # entry (in per-node adjacency order), so a node appears at most once per
+    # round and rounds can be applied as conflict-free vector ops. There are
+    # max-degree rounds. This is what lets the per-node neighbour sum replicate
+    # CPython's compensated `sum()` exactly (see docstring): each round performs
+    # one Neumaier step for all nodes at once, in each node's original order.
+    occurrence: dict[int, int] = {}
+    round_nodes_l: list[list[int]] = []
+    round_src_l: list[list[int]] = []
+    for node_slot, src_slot in zip(adj_node, adj_src, strict=True):
+        r = occurrence.get(node_slot, 0)
+        occurrence[node_slot] = r + 1
+        if r == len(round_nodes_l):
+            round_nodes_l.append([])
+            round_src_l.append([])
+        round_nodes_l[r].append(node_slot)
+        round_src_l[r].append(src_slot)
+    round_nodes = [np.asarray(a, dtype=np.intp) for a in round_nodes_l]
+    round_src = [np.asarray(a, dtype=np.intp) for a in round_src_l]
 
     for _ in range(iters):
-        new_node: dict[int, float] = {}
-        for n, adj in node_adj.items():
-            neigh = [adjacent_to_node(ek, is_u) for ek, is_u in adj]
-            new_node[n] = (1 - lam) * node_val[n] + lam * (sum(neigh) / len(neigh))
-        new_interior: dict[tuple[int, int, int], list[float]] = {}
-        for ek in edge_keys:
-            u, v, _k = ek
-            ints = interior[ek]
-            m = len(ints)
-            relaxed: list[float] = []
-            for j in range(m):
-                left = node_val[u] if j == 0 else ints[j - 1]
-                right = node_val[v] if j == m - 1 else ints[j + 1]
-                relaxed.append((1 - lam) * ints[j] + lam * ((left + right) / 2))
-            new_interior[ek] = relaxed
-        node_val = new_node
-        interior = new_interior
+        x_new = np.empty_like(x)
+        # Per-node Neumaier compensated sum, one round per adjacency rank.
+        # Mirrors CPython's float `sum()` fast path: t = s + val; comp gains
+        # the rounding residue of whichever operand dominates; result s + comp.
+        sums = np.zeros(n_nodes, dtype=np.float64)
+        comp = np.zeros(n_nodes, dtype=np.float64)
+        for r_nodes, r_src in zip(round_nodes, round_src, strict=True):
+            val = x[r_src]
+            s_old = sums[r_nodes]
+            t = s_old + val
+            comp[r_nodes] += np.where(
+                np.abs(s_old) >= np.abs(val), (s_old - t) + val, (val - t) + s_old
+            )
+            sums[r_nodes] = t
+        sums += comp
+        x_new[:n_nodes] = (1 - lam) * x[:n_nodes] + lam * (sums / degree)
+        x_new[n_nodes:] = (1 - lam) * x[n_nodes:] + lam * ((x[left] + x[right]) / 2)
+        x = x_new
 
-    for u, v, k, data in out.edges(data=True, keys=True):
+    for (u, v, k), ints, s in zip(edge_keys, interiors, starts, strict=True):
+        data = out.edges[u, v, k]
         verts: list[tuple[float, float, float]] = data["vertices_resampled"]
-        elevs = [node_val[u], *interior[(u, v, k)], node_val[v]]
+        elevs = [
+            float(x[node_index[u]]),
+            *(x[s : s + len(ints)].tolist()),
+            float(x[node_index[v]]),
+        ]
         data["vertices_resampled"] = [
             (lat, lon, e) for (lat, lon, _orig), e in zip(verts, elevs, strict=True)
         ]

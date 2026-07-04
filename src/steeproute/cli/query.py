@@ -19,6 +19,14 @@ exit code (FR28). Story 7.1 wires the progress UI: a throttled `ProgressEvent`
 renderer is installed on the solver (suppressed by `--quiet`). Story 7.3 adds
 Ctrl-C interrupt handling (best-so-far flush → exit 130); Story 7.5 prints the
 end-of-run summary to stdout (FR22).
+
+The non-solver query phases run inside the same `StageProgress` seam the setup
+CLI uses (Story 11.1 mechanism): cache load, elevation reshaping (stages 6-7),
+trail-filter redux, climb detection/contraction, and validate+render each
+announce start and elapsed time on stdout, so on large areas — where these
+phases dominate wall-clock (Epic 13) — the run is never silent outside the
+solve. `--quiet` installs no sink, suppressing stage lines like it does
+progress lines (§Cat 8: summary always prints).
 """
 
 from __future__ import annotations
@@ -79,7 +87,7 @@ from steeproute.pipeline import operationalize_graph
 from steeproute.pipeline.climbs import detect_climbs
 from steeproute.pipeline.graph import contract_climbs
 from steeproute.pipeline.osm import filter_trails
-from steeproute.progress import ProgressCallback, ProgressEvent, throttle
+from steeproute.progress import ProgressCallback, ProgressEvent, StageProgress, throttle
 from steeproute.solver.grasp import STAGNATION_ITERS_DEFAULT_PLACEHOLDER, GraspSolver
 from steeproute.validator import validate
 
@@ -186,11 +194,20 @@ def cli(
     area = Area(center=center, radius_km=radius)
     cache_root = resolve_cache_root(cache_dir)
 
+    # Stage-timing seam for the non-solver query phases (Story 11.1 mechanism,
+    # reused query-side): on large areas these phases dominate wall-clock
+    # (Epic 13), so each announces itself and its elapsed time on stdout. Same
+    # `--quiet` contract as the setup CLI — no sink, timing-only no-op. The
+    # solver's own iteration progress (Story 7.1) is separate and untouched.
+    stage_progress = StageProgress(on_line=None if quiet else print)
+
     # FR24 coverage check. Raises `CacheNotFoundError` (→ exit 2 via
     # `run_entry_point`) when no prepared cache strictly contains the query
     # area; opportunistically rebuilds `index.json` if a prior `write_entry`
-    # was interrupted before its final rebuild call.
-    prepared = check_coverage(cache_root, area)
+    # was interrupted before its final rebuild call. The stage line covers the
+    # index walk plus the entry deserialization (`read_entry` graph rebuild).
+    with stage_progress.stage("load-prepared-area"):
+        prepared = check_coverage(cache_root, area)
 
     # OSM-age warning on cache-hit (Architecture §Cat 4f). The query CLI has no
     # `--force-refresh` flag of its own — the helper's shared message tells the
@@ -240,11 +257,12 @@ def cli(
     # metrics) ONCE over the whole graph. The same reshaped graph feeds both the
     # metric/solver path and `output.render`, so the metric box, the solver
     # objective, and the plotted curve all read one canonical profile (box==curve).
-    operational_graph = operationalize_graph(
-        prepared.graph,
-        elevation_smoothing_m=elevation_smoothing,
-        elevation_deadband_m=elevation_deadband,
-    )
+    with stage_progress.stage("elevation-reshape", note="stages 6-7"):
+        operational_graph = operationalize_graph(
+            prepared.graph,
+            elevation_smoothing_m=elevation_smoothing,
+            elevation_deadband_m=elevation_deadband,
+        )
 
     # SAC cap-aware contraction (Story 6.1, FR4/FR10): drop above-cap edges
     # *before* climb detection so a single over-cap pitch can no longer weld
@@ -258,7 +276,8 @@ def cli(
     # `output.render` keeps the full `operational_graph` for geometry lookups
     # (read-only, strictly a superset — so FR28 failed-route rendering can never
     # lose a route edge's geometry, and the rendered curve matches the box).
-    routable_graph = filter_trails(operational_graph, untagged_trails, difficulty_cap)
+    with stage_progress.stage("trail-filter", note="difficulty-cap redux"):
+        routable_graph = filter_trails(operational_graph, untagged_trails, difficulty_cap)
 
     # Progress UI (Story 7.1, FR13): install a throttled stdout renderer unless
     # `--quiet`. The throttle is a pure reporting side-effect — `seed` threads
@@ -289,22 +308,23 @@ def cli(
         explained by `convergence_status` instead, so the message is suppressed
         there (a short run isn't a sparse area).
         """
-        validated_set = validate(route_set, contracted_graph, params)
-        degradation = (
-            None if status == "interrupted" else _degradation_message(validated_set, params)
-        )
-        output.render(
-            validated_set,
-            operational_graph,
-            area,
-            contracted_graph,
-            params,
-            provenance,
-            status,
-            convergence_iteration,
-            output_dir,
-            degradation=degradation,
-        )
+        with stage_progress.stage("validate-render"):
+            validated_set = validate(route_set, contracted_graph, params)
+            degradation = (
+                None if status == "interrupted" else _degradation_message(validated_set, params)
+            )
+            output.render(
+                validated_set,
+                operational_graph,
+                area,
+                contracted_graph,
+                params,
+                provenance,
+                status,
+                convergence_iteration,
+                output_dir,
+                degradation=degradation,
+            )
         return validated_set, degradation
 
     # Interrupt handling (Story 7.3, FR14 / NFR3 / §Cat 5b): Ctrl-C anywhere in the
@@ -319,17 +339,19 @@ def cli(
     contracted: ContractedGraph | None = None
     solver: GraspSolver | None = None
     try:
-        climbs = detect_climbs(
-            routable_graph,
-            min_climb_slope=min_climb_slope,
-            min_climb_ground_length=min_climb_ground_length,
-        )
-        contracted = contract_climbs(
-            routable_graph,
-            climbs,
-            l_connector=l_connector,
-            annotate_junctions=params.start_at_junction,
-        )
+        with stage_progress.stage("climb-detection"):
+            climbs = detect_climbs(
+                routable_graph,
+                min_climb_slope=min_climb_slope,
+                min_climb_ground_length=min_climb_ground_length,
+            )
+        with stage_progress.stage("climb-contraction"):
+            contracted = contract_climbs(
+                routable_graph,
+                climbs,
+                l_connector=l_connector,
+                annotate_junctions=params.start_at_junction,
+            )
         solver = GraspSolver(
             contracted, params, np.random.default_rng(seed), progress_callback=progress_callback
         )

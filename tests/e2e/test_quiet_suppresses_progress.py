@@ -32,6 +32,9 @@ def test_quiet_suppresses_progress_lines(
     assert result.exit_code == 0, result.output
     progress_lines = [ln for ln in result.output.splitlines() if ln.startswith("progress:")]
     assert not progress_lines, f"--quiet must suppress progress lines, got:\n{progress_lines}"
+    # `--quiet` also suppresses the non-solver stage lines (same seam contract as
+    # the setup CLI — see test_query_stage_progress.py for the non-quiet side).
+    assert "stage:" not in result.output
     # The solve still ran end-to-end: the cache-hit cue is emitted before it, and
     # reports were written after it.
     assert "cache-hit" in result.output
