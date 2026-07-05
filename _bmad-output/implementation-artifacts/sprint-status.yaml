@@ -28,7 +28,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-07-04
+last_updated: 2026-07-05
 
 project: bmad-test
 project_key: NOKEY
@@ -139,10 +139,10 @@ development_status:
   12-4-re-profile-benchmark-reconciliation-and-phase-4-decision: done
   epic-12-retrospective: optional
 
-  epic-13: in-progress        # Query-Side Performance — whole-execution wall-clock (correct-course 2026-07-04)
+  epic-13: done        # Query-Side Performance — whole-execution wall-clock (correct-course 2026-07-04); 13-4/13-5 deferred below
   13-1-vectorize-query-side-elevation-smoothing: done
   13-2-faster-cache-entry-deserialization: done
-  13-3-query-side-recompute-avoidance-second-tier-cache-decision: backlog
-  13-4-lazy-imports-on-the-query-path: backlog
-  13-5-re-measure-and-epic-close-out: backlog
+  13-3-query-side-recompute-avoidance-second-tier-cache-decision: done
+  13-4-lazy-imports-on-the-query-path: deferred   # 2026-07-05: superseded, see research/steeproute-next-optimization-pass-handoff-2026-07-05.md
+  13-5-re-measure-and-epic-close-out: deferred    # 2026-07-05: folds into the follow-on epic per same doc
   epic-13-retrospective: optional
