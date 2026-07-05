@@ -1,0 +1,88 @@
+stage: osm-download (one Overpass request; typically takes minutes) ...
+stage: osm-download: 26.62 s
+stage: trail-filter ...
+stage: trail-filter: 0.86 s
+stage: polyline-smoothing ...
+stage: polyline-smoothing: 1.91 s
+stage: resampling ...
+stage: resampling: 4.31 s
+stage: dem-resolve ...
+stage: dem-resolve: 0.21 s
+stage: elevation-sampling ...
+stage: elevation-sampling: 17.21 s
+stage: cache-write ...
+stage: cache-write: 0.65 s
+steeproute-setup: cache-miss
+  cache_key_hash: fc274206a014720f
+  entry: C:\Users\yfontana\Code\bmad-test\.trial-cache\steeproute\areas\fc274206a014720f
+  elapsed: 51.92 s
+Sun Jul  5 21:57:52 2026    C:\Users\yfontana\AppData\Local\Temp\claude\C--Users-yfontana-Code-bmad-test\1dda77af-01bb-4d2e-87bb-da508a53fa55\scratchpad\setup-r5.prof
+
+         73521591 function calls (72928893 primitive calls) in 51.854 seconds
+
+   Ordered by: cumulative time
+   List reduced from 1716 to 60 due to restriction <60>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+     11/1    0.000    0.000   51.930   51.930 {built-in method builtins.exec}
+        1    0.000    0.000   51.930   51.930 <string>:1(<module>)
+        1    0.000    0.000   51.930   51.930 C:\Users\yfontana\Code\bmad-test\src\steeproute\cli\setup.py:264(_invoke_command)
+        1    0.000    0.000   51.930   51.930 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\click\core.py:1367(main)
+        1    0.000    0.000   51.928   51.928 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\click\core.py:1284(invoke)
+        1    0.000    0.000   51.928   51.928 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\click\core.py:797(invoke)
+        1    0.000    0.000   51.928   51.928 C:\Users\yfontana\Code\bmad-test\src\steeproute\cli\setup.py:89(cli)
+        1    0.000    0.000   33.697   33.697 C:\Users\yfontana\Code\bmad-test\src\steeproute\pipeline\__init__.py:158(build_graph_geometry)
+        1    0.000    0.000   26.618   26.618 C:\Users\yfontana\Code\bmad-test\src\steeproute\pipeline\osm.py:53(osm_load)
+        1    0.000    0.000   26.476   26.476 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\osmnx\graph.py:120(graph_from_point)
+        1    0.000    0.000   26.452   26.452 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\osmnx\graph.py:40(graph_from_bbox)
+        1    0.131    0.131   26.440   26.440 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\osmnx\graph.py:410(graph_from_polygon)
+        1    0.000    0.000   17.209   17.209 C:\Users\yfontana\Code\bmad-test\src\steeproute\pipeline\__init__.py:201(attach_elevation)
+        1    0.803    0.803   17.140   17.140 C:\Users\yfontana\Code\bmad-test\src\steeproute\pipeline\dem.py:46(sample_elevation)
+   217606    4.542    0.000   14.126    0.000 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\rasterio\sample.py:43(sample_gen)
+    18954    2.048    0.000   13.100    0.001 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\networkx\classes\multigraph.py:538(add_edges_from)
+        1    0.964    0.964   11.411   11.411 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\osmnx\simplification.py:277(simplify_graph)
+       11    0.001    0.000    6.580    0.598 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\networkx\classes\multigraph.py:1034(copy)
+        2    0.001    0.001    6.546    3.273 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\osmnx\truncate.py:164(largest_component)
+    31/26    0.000    0.000    6.148    0.236 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\networkx\utils\backends.py:541(_call_if_no_backends_installed)
+       16    0.000    0.000    6.122    0.383 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\networkx\classes\multidigraph.py:312(__init__)
+       16    0.000    0.000    6.122    0.383 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\networkx\classes\digraph.py:344(__init__)
+        2    0.036    0.018    6.122    3.061 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\networkx\convert.py:34(to_networkx_graph)
+        2    0.000    0.000    5.893    2.946 <class 'networkx.utils.decorators.argmap'> compilation 22:1(argmap_from_dict_of_dicts_19)
+        2    0.000    0.000    5.893    2.946 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\networkx\convert.py:373(from_dict_of_dicts)
+   859195    1.940    0.000    5.606    0.000 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\shapely\decorators.py:73(wrapped)
+      9/6    0.000    0.000    5.517    0.919 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\networkx\utils\decorators.py:783(func)
+   261597    0.462    0.000    4.510    0.000 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\shapely\geometry\base.py:219(coords)
+576901/576876    0.515    0.000    4.488    0.000 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\shapely\decorators.py:171(wrapper)
+    65167    0.274    0.000    4.324    0.000 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\shapely\geometry\linestring.py:40(__new__)
+        2    0.003    0.001    4.215    2.107 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\osmnx\truncate.py:99(truncate_graph_polygon)
+   168671    0.322    0.000    4.197    0.000 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\networkx\convert.py:408(<genexpr>)
+   835405    0.513    0.000    4.040    0.000 <frozen _collections_abc>:897(__iter__)
+   250047    0.669    0.000    4.032    0.000 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\shapely\geometry\point.py:54(__new__)
+        1    0.001    0.001    3.691    3.691 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\osmnx\graph.py:594(_create_graph)
+   507113    0.316    0.000    3.149    0.000 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\shapely\geometry\linestring.py:63(_coords)
+   996662    1.703    0.000    3.066    0.000 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\networkx\classes\coreviews.py:81(__getitem__)
+        1    0.076    0.076    2.578    2.578 C:\Users\yfontana\Code\bmad-test\src\steeproute\pipeline\smoothing.py:103(resample_edges)
+   847407    1.864    0.000    2.511    0.000 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\networkx\classes\multidigraph.py:428(add_edge)
+        1    0.056    0.056    1.906    1.906 C:\Users\yfontana\Code\bmad-test\src\steeproute\pipeline\smoothing.py:72(smooth_polylines)
+        1    0.060    0.060    1.813    1.813 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\osmnx\graph.py:811(_add_paths)
+   217606    0.292    0.000    1.796    0.000 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\rasterio\sample.py:11(_transform_xy)
+        1    0.143    0.143    1.684    1.684 C:\Users\yfontana\Code\bmad-test\src\steeproute\pipeline\__init__.py:292(_drop_short_edges)
+   197294    1.102    0.000    1.534    0.000 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\rasterio\windows.py:708(round_lengths)
+    19165    0.060    0.000    1.490    0.000 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\osmnx\simplification.py:195(_get_paths_to_simplify)
+   261597    0.171    0.000    1.486    0.000 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\shapely\geometry\base.py:711(has_z)
+    20314    0.079    0.000    1.451    0.000 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\rasterio\transform.py:255(rowcol)
+   197294    0.095    0.000    1.443    0.000 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\rasterio\windows.py:768(crop)
+        2    0.047    0.024    1.433    0.717 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\osmnx\convert.py:168(graph_to_gdfs)
+613976/580212    0.578    0.000    1.416    0.000 {built-in method builtins.sum}
+       16    1.024    0.064    1.410    0.088 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\networkx\classes\digraph.py:500(add_nodes_from)
+   197294    0.582    0.000    1.348    0.000 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\rasterio\windows.py:392(crop)
+   250047    1.182    0.000    1.256    0.000 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\shapely\creation.py:52(points)
+   261597    0.154    0.000    1.250    0.000 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\shapely\geometry\base.py:716(has_m)
+    90026    0.067    0.000    1.245    0.000 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\osmnx\convert.py:212(<genexpr>)
+   168419    0.840    0.000    1.234    0.000 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\networkx\classes\coreviews.py:399(__getitem__)
+    20314    0.130    0.000    1.216    0.000 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\rasterio\transform.py:363(rowcol)
+   197298    0.418    0.000    1.213    0.000 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\numpy\_core\_dtype.py:342(_name_get)
+   447348    0.481    0.000    1.145    0.000 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\numpy\_core\numerictypes.py:475(issubdtype)
+    72459    0.245    0.000    1.112    0.000 C:\Users\yfontana\Code\bmad-test\.venv\Lib\site-packages\osmnx\simplification.py:26(_is_endpoint)
+
+
