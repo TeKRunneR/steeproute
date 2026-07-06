@@ -143,6 +143,15 @@ development_status:
   13-1-vectorize-query-side-elevation-smoothing: done
   13-2-faster-cache-entry-deserialization: done
   13-3-query-side-recompute-avoidance-second-tier-cache-decision: done
-  13-4-lazy-imports-on-the-query-path: deferred   # 2026-07-05: superseded, see research/steeproute-next-optimization-pass-handoff-2026-07-05.md
-  13-5-re-measure-and-epic-close-out: deferred    # 2026-07-05: folds into the follow-on epic per same doc
+  13-4-lazy-imports-on-the-query-path: deferred   # parked: small-area interactive, orthogonal to r50 (Epic 14)
+  13-5-re-measure-and-epic-close-out: deferred    # subsumed by 14-6
   epic-13-retrospective: optional
+
+  epic-14: backlog        # Setup + Solver Scaling toward r50 (correct-course 2026-07-06)
+  14-1-vectorize-elevation-sampling: backlog
+  14-2-vectorize-and-de-churn-pipeline-loops: backlog
+  14-3-parallelize-dem-tile-fetch: backlog
+  14-4-parallel-grasp-restarts: backlog
+  14-5-reduce-osmnx-ingestion-cpu-cheap-levers: backlog
+  14-6-r50-probe-re-measure-and-what-next: backlog
+  epic-14-retrospective: optional

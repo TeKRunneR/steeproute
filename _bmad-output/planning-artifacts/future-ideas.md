@@ -39,6 +39,16 @@ Make searching large areas tractable within a reasonable time budget. Fuzzy/wide
 Rust-shaped option on learning value only — not planned; precondition unchanged (time-boxed
 cargo-behind-corporate-proxy spike before any commitment).
 
+**Promoted 2026-07-06:** the setup-CPU + solver-parallelism levers from
+`research/steeproute-next-optimization-pass-handoff-2026-07-05.md` promoted to Epic 14 via
+correct-course 2026-07-06 (`sprint-change-proposal-2026-07-06-setup-solver-scaling.md`).
+
+**Deferred to post-probe correct-course (2026-07-06):** three deep levers from that same handoff are
+intentionally NOT in Epic 14 — the custom Overpass-JSON→graph parser (S5-deep), the schema-v3
+numpy-array edge contract (Q4), and per-stage multiprocess parallelization (§7 step 6). Each is gated
+on the Epic 14 r50 probe (Story 14.6) supplying the residual costs that justify it; pickup routes
+through its own correct-course.
+
 ## App
 Make an actual web app with a UI to:
 - Pick a center point on a map + radius
