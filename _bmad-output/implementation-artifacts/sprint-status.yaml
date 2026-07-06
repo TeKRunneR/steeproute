@@ -148,7 +148,7 @@ development_status:
   epic-13-retrospective: optional
 
   epic-14: in-progress        # Setup + Solver Scaling toward r50 (correct-course 2026-07-06)
-  14-1-vectorize-elevation-sampling: review
+  14-1-vectorize-elevation-sampling: done
   14-2-vectorize-and-de-churn-pipeline-loops: backlog
   14-3-parallelize-dem-tile-fetch: backlog
   14-4-parallel-grasp-restarts: backlog
