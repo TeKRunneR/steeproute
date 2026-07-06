@@ -28,7 +28,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-07-05
+last_updated: 2026-07-06
 
 project: bmad-test
 project_key: NOKEY
@@ -147,8 +147,8 @@ development_status:
   13-5-re-measure-and-epic-close-out: deferred    # subsumed by 14-6
   epic-13-retrospective: optional
 
-  epic-14: backlog        # Setup + Solver Scaling toward r50 (correct-course 2026-07-06)
-  14-1-vectorize-elevation-sampling: backlog
+  epic-14: in-progress        # Setup + Solver Scaling toward r50 (correct-course 2026-07-06)
+  14-1-vectorize-elevation-sampling: review
   14-2-vectorize-and-de-churn-pipeline-loops: backlog
   14-3-parallelize-dem-tile-fetch: backlog
   14-4-parallel-grasp-restarts: backlog

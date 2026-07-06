@@ -387,6 +387,88 @@ def fixture_pipeline_through_stage5() -> nx.MultiDiGraph:
     return sample_elevation(graph, _DEM_FIXTURE_PATH)
 
 
+def _scalar_reference_sample_elevation(
+    graph: nx.MultiDiGraph,
+    dem_path: pathlib.Path,
+) -> nx.MultiDiGraph:
+    """Verbatim pre-14.1 per-point scalar `sample_elevation`, kept as the bit-equality oracle.
+
+    This is the exact loop-based algorithm the vectorized `sample_elevation` replaced
+    (per-edge `transformer.transform`, per-vertex bounds check, per-point
+    `dataset.sample`). Story 14.1's contract is that the vectorized path produces
+    **bit-identical** `vertices_resampled` to this reference over every fixture vertex.
+    If this ever drifts from production behavior it is only used to prove equality on
+    the success path, so a divergence surfaces as a test failure, not a silent skew.
+    """
+    from steeproute.pipeline.dem import WGS84_EPSG
+
+    out: nx.MultiDiGraph = graph.copy()
+    with rasterio.open(dem_path) as dataset:
+        dem_crs = dataset.crs
+        bounds = dataset.bounds
+        nodata = dataset.nodata
+        nodata_finite: float | None = (
+            float(nodata) if nodata is not None and math.isfinite(float(nodata)) else None
+        )
+        transformer = pyproj.Transformer.from_crs(WGS84_EPSG, dem_crs, always_xy=True)
+        for _u, _v, _k, data in out.edges(data=True, keys=True):
+            geom = data["geometry"]
+            lons = [float(c[0]) for c in geom.coords]
+            lats = [float(c[1]) for c in geom.coords]
+            xs, ys = transformer.transform(lons, lats)
+            xs_list = [float(x) for x in xs]
+            ys_list = [float(y) for y in ys]
+            for x, y in zip(xs_list, ys_list, strict=True):
+                assert bounds.left <= x < bounds.right and bounds.bottom < y <= bounds.top
+            samples = dataset.sample(zip(xs_list, ys_list, strict=True), indexes=1)
+            vertices_resampled: list[tuple[float, float, float]] = []
+            for lon, lat, sample_arr in zip(lons, lats, samples, strict=True):
+                elev = float(sample_arr[0])
+                assert math.isfinite(elev) and (nodata_finite is None or elev != nodata_finite)
+                vertices_resampled.append((lat, lon, elev))
+            data["vertices_resampled"] = vertices_resampled
+    return out
+
+
+def test_fixture_pipeline_bit_identical_to_scalar_reference(
+    fixture_pipeline_through_stage5: nx.MultiDiGraph,
+) -> None:
+    """AC #1: vectorized `sample_elevation` is bit-equal to the old per-point path.
+
+    Runs the same stages-1→4 fixture graph through the scalar reference (the pre-14.1
+    algorithm) and asserts every edge's `vertices_resampled` tuple is `==` (exact, not
+    `approx`) to the production vectorized output — over every vertex of the real
+    Grenoble fixture. This is the "verify before deleting the old code" gate.
+    """
+    if not _DEM_FIXTURE_PATH.exists():
+        pytest.skip("dem.tif fixture not yet committed.")
+    import osmnx
+
+    from steeproute.pipeline.osm import normalize_edges
+    from steeproute.pipeline.smoothing import resample_edges, smooth_polylines
+
+    graph = normalize_edges(osmnx.load_graphml(_FIXTURE_DIR / "osm_graph.graphml"))
+    graph = smooth_polylines(graph)
+    graph = resample_edges(graph)
+    reference = _scalar_reference_sample_elevation(graph, _DEM_FIXTURE_PATH)
+
+    produced = fixture_pipeline_through_stage5
+    ref_edges = {
+        (u, v, k): d["vertices_resampled"] for u, v, k, d in reference.edges(keys=True, data=True)
+    }
+    prod_edges = {
+        (u, v, k): d["vertices_resampled"] for u, v, k, d in produced.edges(keys=True, data=True)
+    }
+    assert prod_edges.keys() == ref_edges.keys(), "edge set diverged from the scalar reference"
+    total_vertices = 0
+    for edge_key, ref_verts in ref_edges.items():
+        prod_verts = prod_edges[edge_key]
+        assert prod_verts == ref_verts, f"vertices_resampled diverged on edge {edge_key}"
+        total_vertices += len(ref_verts)
+    # Guard against a vacuous pass: the fixture must actually carry vertices.
+    assert total_vertices > 1000, f"expected a substantial fixture, sampled only {total_vertices}"
+
+
 def test_committed_dem_fixture_under_size_cap() -> None:
     """AC #4: committed dem.tif must stay under 5 MB to keep the repo lean."""
     if not _DEM_FIXTURE_PATH.exists():

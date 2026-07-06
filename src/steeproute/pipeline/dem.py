@@ -32,9 +32,11 @@ import math
 import pathlib
 
 import networkx as nx
+import numpy as np
 import pyproj
 import rasterio
 import rasterio.errors
+import rasterio.transform
 import shapely
 
 from steeproute.errors import DataSourceUnavailableError, DEMCoverageError
@@ -131,6 +133,21 @@ def sample_elevation(
             always_xy=True,
         )
 
+        # --- Vectorized sampling (Story 14.1) --------------------------------
+        # Formerly a per-edge `transformer.transform` + per-point `dataset.sample`
+        # loop (~65 µs/point over millions of points — the biggest setup CPU
+        # stage). Reformulated as flat-array numpy work: gather every edge's
+        # coords once, project the whole graph in one `pyproj` call, resolve
+        # pixel indices with rasterio's own `rowcol` (guaranteeing the same
+        # nearest-pixel selection `dataset.sample` used), and read them by fancy
+        # index off a single band read. The per-vertex bounds/nodata guards
+        # become vectorized masks that still fail fast on the first offending
+        # edge with the identical message shape. Output is bit-identical to the
+        # old path (proven over the grenoble_small fixture in tests/unit/test_dem.py).
+        edge_refs: list[tuple[object, object, object, dict[str, object]]] = []
+        lon_chunks: list[np.ndarray] = []
+        lat_chunks: list[np.ndarray] = []
+        offsets: list[int] = [0]
         for u, v, k, data in out.edges(data=True, keys=True):
             geom = data.get("geometry")
             if not isinstance(geom, shapely.LineString):
@@ -138,41 +155,71 @@ def sample_elevation(
                     "pipeline.dem: edge geometry must be a shapely.LineString, "
                     f"got {type(geom).__name__}"
                 )
-            lons = [float(c[0]) for c in geom.coords]
-            lats = [float(c[1]) for c in geom.coords]
-            xs, ys = transformer.transform(lons, lats)
-            xs_list = [float(x) for x in xs]
-            ys_list = [float(y) for y in ys]
+            coords = np.asarray(geom.coords, dtype=np.float64)  # (n, 2) as (lon, lat)
+            lon_chunks.append(coords[:, 0])
+            lat_chunks.append(coords[:, 1])
+            offsets.append(offsets[-1] + coords.shape[0])
+            edge_refs.append((u, v, k, data))
 
-            for x, y in zip(xs_list, ys_list, strict=True):
-                # Half-open on the east/north edges to match rasterio's pixel
-                # convention: a point at exactly `bounds.right` (or `bounds.top`)
-                # maps to a pixel index of `width` (or `height`), which is outside
-                # the array. Inclusive on the west/south edges (pixel index 0).
-                if not (bounds.left <= x < bounds.right and bounds.bottom < y <= bounds.top):
-                    raise DEMCoverageError(
-                        f"Edge ({u}, {v}, {k}) has a vertex at projected "
-                        f"({x:.3f}, {y:.3f}) outside DEM bounds "
-                        f"(left={bounds.left:.3f}, bottom={bounds.bottom:.3f}, "
-                        f"right={bounds.right:.3f}, top={bounds.top:.3f}).",
-                        detail=f"DEM CRS: {dem_crs}; DEM path: {dem_path}",
-                    )
+        if not edge_refs:
+            # Empty graph: nothing to sample (defensive — matches the old no-op).
+            return out
 
-            samples = dataset.sample(zip(xs_list, ys_list, strict=True), indexes=1)
-            vertices_resampled: list[tuple[float, float, float]] = []
-            for lon, lat, sample_arr in zip(lons, lats, samples, strict=True):
-                elev = float(sample_arr[0])
-                # `not math.isfinite(elev)` catches NaN (including NaN-nodata
-                # rasters where the sample reads back as NaN) and ±Inf.
-                # `elev == nodata_finite` catches finite sentinels like -9999.
-                if not math.isfinite(elev) or (nodata_finite is not None and elev == nodata_finite):
-                    raise DEMCoverageError(
-                        f"Edge ({u}, {v}, {k}) has a vertex at (lat={lat:.6f}, "
-                        f"lon={lon:.6f}) sampling a nodata or non-finite DEM "
-                        f"value (raster nodata={nodata}). Treat as outside coverage.",
-                        detail=f"DEM CRS: {dem_crs}; DEM path: {dem_path}",
-                    )
-                vertices_resampled.append((lat, lon, elev))
-            data["vertices_resampled"] = vertices_resampled
+        lons = np.concatenate(lon_chunks)
+        lats = np.concatenate(lat_chunks)
+        offset_arr = np.asarray(offsets, dtype=np.int64)
+
+        xs, ys = transformer.transform(lons, lats)
+        xs = np.asarray(xs, dtype=np.float64)
+        ys = np.asarray(ys, dtype=np.float64)
+
+        # Half-open on the east/north edges to match rasterio's pixel convention:
+        # a point at exactly `bounds.right` (or `bounds.top`) maps to a pixel index
+        # of `width` (or `height`), which is outside the array. Inclusive on the
+        # west/south edges (pixel index 0). Fail fast on the first offending vertex
+        # (in edge-iteration order), matching the old per-edge loop's first raise.
+        in_bounds = (
+            (bounds.left <= xs) & (xs < bounds.right) & (bounds.bottom < ys) & (ys <= bounds.top)
+        )
+        if not bool(in_bounds.all()):
+            idx = int(np.argmax(~in_bounds))
+            u, v, k, _ = edge_refs[int(np.searchsorted(offset_arr, idx, side="right")) - 1]
+            raise DEMCoverageError(
+                f"Edge ({u}, {v}, {k}) has a vertex at projected "
+                f"({float(xs[idx]):.3f}, {float(ys[idx]):.3f}) outside DEM bounds "
+                f"(left={bounds.left:.3f}, bottom={bounds.bottom:.3f}, "
+                f"right={bounds.right:.3f}, top={bounds.top:.3f}).",
+                detail=f"DEM CRS: {dem_crs}; DEM path: {dem_path}",
+            )
+
+        # `rasterio.transform.rowcol` is the exact call `dataset.sample` uses to map
+        # coordinates to pixels (default op = `numpy.floor` → int), so the resolved
+        # rows/cols — and therefore the sampled values off a full-band read — are
+        # bit-identical to the old per-point `dataset.sample`. Every vertex is
+        # in-bounds here, so all indices are valid array positions.
+        rows, cols = rasterio.transform.rowcol(dataset.transform, xs, ys)
+        band = dataset.read(1)
+        elevs = np.asarray(band[rows, cols], dtype=np.float64)
+
+        # `~np.isfinite` catches NaN (including NaN-nodata rasters that read back as
+        # NaN) and ±Inf; `elevs == nodata_finite` catches finite sentinels like -9999.
+        bad = ~np.isfinite(elevs)
+        if nodata_finite is not None:
+            bad |= elevs == nodata_finite
+        if bool(bad.any()):
+            idx = int(np.argmax(bad))
+            u, v, k, _ = edge_refs[int(np.searchsorted(offset_arr, idx, side="right")) - 1]
+            raise DEMCoverageError(
+                f"Edge ({u}, {v}, {k}) has a vertex at (lat={float(lats[idx]):.6f}, "
+                f"lon={float(lons[idx]):.6f}) sampling a nodata or non-finite DEM "
+                f"value (raster nodata={nodata}). Treat as outside coverage.",
+                detail=f"DEM CRS: {dem_crs}; DEM path: {dem_path}",
+            )
+
+        for i, (_u, _v, _k, data) in enumerate(edge_refs):
+            start, end = offsets[i], offsets[i + 1]
+            data["vertices_resampled"] = [
+                (float(lats[j]), float(lons[j]), float(elevs[j])) for j in range(start, end)
+            ]
 
     return out
