@@ -35,9 +35,12 @@ import logging
 import math
 import os
 import pathlib
+import random
+import time
 import urllib.error
 import urllib.parse
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.request import Request, urlopen
 
 import networkx as nx
@@ -54,6 +57,37 @@ from steeproute.progress import StageProgress
 
 _logger = logging.getLogger(__name__)
 
+
+def _env_int(name: str, default: int) -> int:
+    """Read an int tuning knob from the environment, falling back to `default`.
+
+    A missing var uses `default`; a malformed one logs a warning and uses
+    `default` rather than crashing at import — this runs before the CLI's
+    `BadCLIArgError` tier exists, so a raw `ValueError` here would surface as an
+    ugly exit-1 traceback instead of a clean error.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        _logger.warning("ignoring invalid %s=%r; using %d", name, raw, default)
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    """Float sibling of `_env_int` — same missing/malformed fallback semantics."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        _logger.warning("ignoring invalid %s=%r; using %s", name, raw, default)
+        return default
+
+
 # IGN Géoplateforme WMS — public RGE ALTI HIGHRES (5 m native). Endpoint, layer,
 # and BIL format are kept identical to the committed fixture's `regenerate_dem.py`.
 _WMS_URL: str = "https://data.geopf.fr/wms-r/wms"
@@ -64,7 +98,11 @@ _WMS_VERSION: str = "1.3.0"
 _BIL_FORMAT: str = "image/x-bil;bits=32"
 _BIL_DTYPE: str = "<f4"  # little-endian float32
 _USER_AGENT: str = "steeproute/0.1 (DEM auto-download)"
-_HTTP_TIMEOUT_S: int = 120
+# Per-request WMS socket timeout. Kept modest because transient failures are now
+# retried (`_TILE_MAX_ATTEMPTS`), so a single heroic wait is no longer needed;
+# 3 attempts × 30 s + backoff bounds a dead tile at ~100 s instead of minutes.
+# Override with `STEEPROUTE_DEM_HTTP_TIMEOUT_S` for unusually slow links.
+_HTTP_TIMEOUT_S: int = _env_int("STEEPROUTE_DEM_HTTP_TIMEOUT_S", 30)
 
 # Stable cache-key tag for the IGN RGE ALTI HIGHRES dataset, recorded as the
 # manifest `dem_version` when the user doesn't pass `--dem-version`. The source
@@ -95,6 +133,26 @@ _GRAPH_BOUNDS_MARGIN_M: float = 100.0
 # split into a grid of tiles and mosaicked, preserving native 5 m.
 _MAX_TILE_PX: int = 2048
 
+# Default concurrent DEM tile fetches. Tile download is network-wait-bound (the
+# GIL is released during `urlopen`), so plain threads give the full speedup with
+# no process/pickle cost — this is I/O, not the CPU-bound GRASP parallelism.
+# Story 14.3 validated IGN Géoplateforme's behavior under this concurrency at r20
+# with no 429s/errors, so 4 is the default; `--dem-fetch-workers` (Story 14.3
+# scope revision) lets a user raise or lower it without a code change if IGN's
+# tolerance differs from what was observed (Architecture §Cat 3).
+DEFAULT_DEM_FETCH_WORKERS: int = 4
+
+# Per-tile transient-failure retry policy. A tile fetch that fails with a transient
+# error (timeout, connection reset, HTTP 429/5xx, truncated read) is retried up to
+# `_TILE_MAX_ATTEMPTS` times *total* with exponential backoff and full jitter — the
+# jitter keeps N concurrent workers that hit the same server hiccup from retrying in
+# lockstep and re-thundering it (the same etiquette concern as `--dem-fetch-workers`).
+# Deterministic failures (wrong content-type / byte count) are NOT retried; they raise
+# `DataSourceUnavailableError` immediately. Override with `STEEPROUTE_DEM_FETCH_RETRIES`
+# / `STEEPROUTE_DEM_FETCH_BACKOFF_S`.
+_TILE_MAX_ATTEMPTS: int = _env_int("STEEPROUTE_DEM_FETCH_RETRIES", 3)
+_TILE_BACKOFF_BASE_S: float = _env_float("STEEPROUTE_DEM_FETCH_BACKOFF_S", 0.5)
+
 # Mean-earth meters-per-degree-latitude. Deliberately matches osmnx's spherical
 # earth model (`EARTH_RADIUS_M = 6_371_009` → 2π·R/360 ≈ 111_194.93 m/deg) rather
 # than the WGS84-equatorial 111_320, so the DEM bbox is computed on the SAME model
@@ -113,6 +171,17 @@ _DEM_KEY_HEX_LEN: int = 16
 _BBOX_DECIMALS: int = 6
 
 
+class _TransientDEMError(Exception):
+    """Internal: a retryable WMS tile failure (timeout, reset, HTTP 429/5xx, truncated read).
+
+    Raised by `_wms_get_bil` for the failure modes worth retrying and caught by
+    `_fetch_tile`'s retry loop. Deterministic failures (wrong content-type, wrong
+    byte count) raise `DataSourceUnavailableError` directly and are not retried.
+    Never escapes the module: `_fetch_tile` converts a retry-exhausted transient
+    into the user-facing `DataSourceUnavailableError` tier.
+    """
+
+
 def resolve_dem(
     bounds: tuple[float, float, float, float],
     cache_root: pathlib.Path,
@@ -120,6 +189,7 @@ def resolve_dem(
     dem_version: str = DEFAULT_DEM_VERSION,
     force_refresh: bool = False,
     progress: StageProgress | None = None,
+    fetch_workers: int | None = None,
 ) -> pathlib.Path:
     """Return a local DEM GeoTIFF covering `bounds`, downloading + caching if absent.
 
@@ -135,6 +205,8 @@ def resolve_dem(
         force_refresh: re-download even when a cached raster exists.
         progress: optional stage seam (Story 11.1, FR33) — the tile-fetch loop
             reports `tile i/N` through it. `None` (the default) is silent.
+        fetch_workers: max concurrent tile fetches (`--dem-fetch-workers`).
+            `None` (the default) uses `DEFAULT_DEM_FETCH_WORKERS`.
 
     Returns:
         Path to a single-band float32 WGS84 GeoTIFF readable by `sample_elevation`.
@@ -159,7 +231,9 @@ def resolve_dem(
         width,
         height,
     )
-    arr = _fetch_mosaic(west, south, east, north, width, height, progress=progress)
+    arr = _fetch_mosaic(
+        west, south, east, north, width, height, progress=progress, max_workers=fetch_workers
+    )
     _write_geotiff_atomic(path, arr, west, south, east, north)
     return path
 
@@ -273,6 +347,60 @@ def _tile_ranges(n: int) -> Iterator[tuple[int, int]]:
         i = j
 
 
+def _fetch_tile(
+    y0: int,
+    y1: int,
+    x0: int,
+    x1: int,
+    west: float,
+    south: float,
+    east: float,
+    north: float,
+    width: int,
+    height: int,
+) -> tuple[int, int, int, int, bytes]:
+    """Fetch one tile's BIL bytes; returns `(y0, y1, x0, x1, body)` for the parent.
+
+    Runs on a worker thread. Computes the tile's sub-bbox with the exact same linear
+    interpolation the sequential path used (so the assembled mosaic is byte-identical)
+    and issues the blocking WMS request, retrying transient failures up to
+    `_TILE_MAX_ATTEMPTS` times with jittered exponential backoff. Validation, reshape,
+    and array placement stay in the parent thread (`_fetch_mosaic`) — the worker only
+    does the network wait. A retry-exhausted transient (or any deterministic failure)
+    surfaces as `DataSourceUnavailableError` and is re-raised unchanged when the parent
+    calls `future.result()`.
+    """
+    tile_w = x1 - x0
+    tile_h = y1 - y0
+    # Linearly interpolate this tile's sub-bbox over the full bbox.
+    # x grows west→east; y (row index) grows north→south.
+    t_west = west + (east - west) * (x0 / width)
+    t_east = west + (east - west) * (x1 / width)
+    t_north = north - (north - south) * (y0 / height)
+    t_south = north - (north - south) * (y1 / height)
+    last_exc: _TransientDEMError | None = None
+    for attempt in range(_TILE_MAX_ATTEMPTS):
+        try:
+            body = _wms_get_bil(t_west, t_south, t_east, t_north, tile_w, tile_h)
+            return y0, y1, x0, x1, body
+        except _TransientDEMError as exc:
+            last_exc = exc
+            if attempt + 1 < _TILE_MAX_ATTEMPTS:
+                # Exponential backoff with full jitter: sleep in [0, base·2^attempt).
+                delay = _TILE_BACKOFF_BASE_S * (2**attempt)
+                _logger.warning(
+                    "DEM tile fetch attempt %d/%d failed (%s); retrying",
+                    attempt + 1,
+                    _TILE_MAX_ATTEMPTS,
+                    last_exc,
+                )
+                time.sleep(random.uniform(0, delay))
+    raise DataSourceUnavailableError(
+        "DEM source unreachable.",
+        detail=f"IGN WMS tile failed after {_TILE_MAX_ATTEMPTS} attempts: {last_exc!r}",
+    ) from last_exc
+
+
 def _fetch_mosaic(
     west: float,
     south: float,
@@ -282,46 +410,70 @@ def _fetch_mosaic(
     height: int,
     *,
     progress: StageProgress | None = None,
+    max_workers: int | None = None,
 ) -> np.ndarray:
     """Fetch the DEM as one or more WMS tiles and stitch into a single float32 array.
 
-    Row 0 of the returned array is the north edge (WMS GetMap origin), matching
-    rasterio's top-left raster origin so the later `from_bounds` transform is correct.
-    When `progress` is set, each tile announces itself as `tile i/N` before its
-    blocking WMS request (FR33 within-stage progress — "working", not "stuck").
+    Tiles are fetched concurrently on a `ThreadPoolExecutor` (`max_workers`, or
+    `DEFAULT_DEM_FETCH_WORKERS` when `None`); each worker returns its raw BIL bytes
+    and the parent thread validates the byte count, reshapes, and writes into the
+    tile's disjoint `arr[y0:y1, x0:x1]` slice. Because every tile covers a distinct
+    slice and each sub-bbox is computed identically to the old sequential path, the
+    assembled mosaic is byte-identical regardless of the order workers complete in
+    and regardless of `max_workers`. Row 0 of the returned array is the north edge
+    (WMS GetMap origin), matching rasterio's top-left raster origin so the later
+    `from_bounds` transform is correct.
+
+    When `progress` is set, a `tile 0/N` line is emitted before any request so the
+    seam isn't silent during the first (or only) tile's network wait, then each tile
+    reports `tile i/N` as it completes (a monotonic completion counter emitted from
+    the parent thread — `StageProgress` is not thread-safe — so the sequence stays
+    `tile 0/N … tile N/N`; FR33 within-stage progress, "working" not "stuck").
+
+    On a terminal failure (a tile exhausting its retries, or a byte-count mismatch)
+    the executor is shut down with `cancel_futures=True` so tiles not yet started are
+    dropped rather than fired at an already-failing server; the ≤ `max_workers` tiles
+    genuinely in flight still finish as the context exits.
     """
     truststore.inject_into_ssl()
+    workers = max_workers if max_workers is not None else DEFAULT_DEM_FETCH_WORKERS
     arr = np.empty((height, width), dtype=_BIL_DTYPE)
-    row_ranges = list(_tile_ranges(height))
-    col_ranges = list(_tile_ranges(width))
-    total_tiles = len(row_ranges) * len(col_ranges)
-    tile_index = 0
-    for y0, y1 in row_ranges:
-        for x0, x1 in col_ranges:
-            tile_index += 1
-            if progress is not None:
-                progress.line(f"tile {tile_index}/{total_tiles}")
-            tile_w = x1 - x0
-            tile_h = y1 - y0
-            # Linearly interpolate this tile's sub-bbox over the full bbox.
-            # x grows west→east; y (row index) grows north→south.
-            t_west = west + (east - west) * (x0 / width)
-            t_east = west + (east - west) * (x1 / width)
-            t_north = north - (north - south) * (y0 / height)
-            t_south = north - (north - south) * (y1 / height)
-            body = _wms_get_bil(t_west, t_south, t_east, t_north, tile_w, tile_h)
-            expected = tile_w * tile_h * 4
-            if len(body) != expected:
-                raise DataSourceUnavailableError(
-                    "DEM source unreachable.",
-                    detail=(
-                        f"IGN WMS returned {len(body)} bytes for a {tile_w}x{tile_h} "
-                        f"float32 tile (expected {expected}). The endpoint may be "
-                        f"returning an error document instead of BIL data."
-                    ),
-                )
-            tile = np.frombuffer(body, dtype=_BIL_DTYPE).reshape((tile_h, tile_w))
-            arr[y0:y1, x0:x1] = tile
+    tiles = [(y0, y1, x0, x1) for y0, y1 in _tile_ranges(height) for x0, x1 in _tile_ranges(width)]
+    total_tiles = len(tiles)
+    completed = 0
+    if progress is not None:
+        progress.line(f"tile {completed}/{total_tiles}")
+    with ThreadPoolExecutor(max_workers=min(workers, total_tiles)) as pool:
+        futures = [
+            pool.submit(_fetch_tile, y0, y1, x0, x1, west, south, east, north, width, height)
+            for y0, y1, x0, x1 in tiles
+        ]
+        try:
+            for future in as_completed(futures):
+                # Re-raises a worker's DataSourceUnavailableError unchanged.
+                y0, y1, x0, x1, body = future.result()
+                tile_w = x1 - x0
+                tile_h = y1 - y0
+                expected = tile_w * tile_h * 4
+                if len(body) != expected:
+                    raise DataSourceUnavailableError(
+                        "DEM source unreachable.",
+                        detail=(
+                            f"IGN WMS returned {len(body)} bytes for a {tile_w}x{tile_h} "
+                            f"float32 tile (expected {expected}). The endpoint may be "
+                            f"returning an error document instead of BIL data."
+                        ),
+                    )
+                arr[y0:y1, x0:x1] = np.frombuffer(body, dtype=_BIL_DTYPE).reshape((tile_h, tile_w))
+                completed += 1
+                if progress is not None:
+                    progress.line(f"tile {completed}/{total_tiles}")
+        except BaseException:
+            # Drop tiles not yet started so a failing (or interrupted) run doesn't fire
+            # the rest of the batch at the server; in-flight tiles finish on context exit.
+            # BaseException so Ctrl-C (KeyboardInterrupt) also cancels rather than drains.
+            pool.shutdown(cancel_futures=True)
+            raise
     return arr
 
 
@@ -358,18 +510,14 @@ def _wms_get_bil(
             content_type = resp.headers.get_content_type()
             body = resp.read()
     except http.client.IncompleteRead as exc:
-        raise DataSourceUnavailableError(
-            "DEM source unreachable.",
-            detail=f"IGN WMS GetMap returned a truncated response: {exc!r}",
-        ) from exc
+        # Truncated read is transient (dropped connection mid-transfer) — retryable.
+        raise _TransientDEMError(f"IGN WMS GetMap returned a truncated response: {exc!r}") from exc
     except (urllib.error.URLError, OSError) as exc:
-        # `URLError` is the base of urllib's network failures (`HTTPError`,
-        # connection refused, DNS, TLS); `OSError` covers low-level socket /
-        # timeout cases. Both map to the source-unavailable tier per Cat 10.
-        raise DataSourceUnavailableError(
-            "DEM source unreachable.",
-            detail=f"IGN WMS GetMap failed: {exc!r}",
-        ) from exc
+        # `URLError` is the base of urllib's network failures (`HTTPError` for
+        # 429/5xx, connection refused, DNS, TLS); `OSError` covers low-level socket /
+        # timeout cases. All are transient and retryable; a retry-exhausted failure is
+        # mapped to the source-unavailable tier (Cat 10) by `_fetch_tile`.
+        raise _TransientDEMError(f"IGN WMS GetMap failed: {exc!r}") from exc
     # WMS reports failures as a 200-OK `ServiceExceptionReport` (XML), and proxies
     # can interpose HTML/text error pages — any of which could coincidentally match
     # the expected BIL byte count and be decoded as garbage elevations. Reject any

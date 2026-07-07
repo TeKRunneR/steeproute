@@ -12,6 +12,7 @@ import click
 
 from steeproute.cache import Manifest
 from steeproute.errors import BadCLIArgError, PreExecutionError
+from steeproute.pipeline.dem_download import DEFAULT_DEM_FETCH_WORKERS
 from steeproute.pipeline.smoothing import (
     ELEVATION_DEADBAND_DEFAULT_M,
     ELEVATION_SMOOTHING_DEFAULT_M,
@@ -163,6 +164,18 @@ def validate_setup_radius(radius_km: float) -> None:
                 "area into smaller prepared regions instead."
             ),
         )
+
+
+def validate_dem_fetch_workers(dem_fetch_workers: int) -> None:
+    """Setup-side --dem-fetch-workers sanity check. Rejects non-positive values.
+
+    Mirrors the `--iter-budget`/`--n` `>= 1` guard (§Cat 10 → exit 2):
+    `ThreadPoolExecutor` requires `max_workers >= 1`; a `0`/negative value would
+    otherwise surface as a raw `ValueError` (exit 1) deep inside `_fetch_mosaic`
+    instead of the documented `BadCLIArgError` tier.
+    """
+    if dem_fetch_workers < 1:
+        raise BadCLIArgError(f"--dem-fetch-workers {dem_fetch_workers} must be >= 1.")
 
 
 def validate_solver_options(
@@ -548,6 +561,18 @@ dem_version_option = click.option(
     type=click.STRING,
     default=None,
     help="Explicit DEM version tag for cache keying (default: the IGN RGE ALTI layer tag).",
+)
+
+dem_fetch_workers_option = click.option(
+    "--dem-fetch-workers",
+    type=click.INT,
+    default=DEFAULT_DEM_FETCH_WORKERS,
+    show_default=True,
+    help=(
+        "Max concurrent DEM tile fetches against the IGN Géoplateforme WMS. This "
+        "is an etiquette ceiling against a public server, not a local performance "
+        "knob — raise cautiously, and back off if fetches start erroring."
+    ),
 )
 
 osm_age_warn_days_option = click.option(

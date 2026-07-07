@@ -52,6 +52,7 @@ SETUP_FLAGS = [
     "--cache-dir",
     "--force-refresh",
     "--dem-version",
+    "--dem-fetch-workers",
     "--osm-age-warn-days",
     "--version",
     "--help",
@@ -212,3 +213,19 @@ def test_setup_radius_above_ceiling_exits_2() -> None:
     assert result.returncode == 2, result.stderr
     assert result.stderr.startswith("error:")
     assert "ceiling" in result.stderr
+
+
+def test_setup_zero_dem_fetch_workers_exits_2() -> None:
+    """Story 14.3 scope revision: `--dem-fetch-workers 0` → BadCLIArgError → exit 2 (§Cat 10)."""
+    result = _run_cli(
+        "steeproute-setup",
+        "--center",
+        "45.0716,6.1079",
+        "--radius",
+        "10",
+        "--dem-fetch-workers",
+        "0",
+    )
+    assert result.returncode == 2, result.stderr
+    assert result.stderr.startswith("error:")
+    assert "--dem-fetch-workers" in result.stderr

@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import math
 import pathlib
+import threading
+import time
 import urllib.error
 import urllib.parse
 from typing import Any
@@ -69,19 +71,75 @@ class _FakeResp:
 
 
 def _make_fake_urlopen(call_log: list[tuple[int, int]]) -> Any:
-    """Return a fake `urlopen` that fills each tile with its 0-based call index.
+    """Return a fake `urlopen` recording `(width, height)` per call, thread-safe.
 
-    Recording `(width, height)` per call lets tests assert the tiling decomposition;
-    the per-tile constant fill lets them verify mosaic placement and orientation.
+    Records `(width, height)` per call under a lock so tests can assert the tiling
+    decomposition and total request count even when `_fetch_mosaic` fetches tiles
+    across a `ThreadPoolExecutor` (Story 14.3). The fill value is not meaningful
+    here — tests that verify mosaic placement use `_make_positional_fake_urlopen`,
+    whose per-tile value is derived from the tile's grid position (order-independent),
+    not from a shared call counter.
     """
+    lock = threading.Lock()
 
     def fake(req: Any, timeout: float | None = None) -> _FakeResp:  # noqa: ARG001  # pyright: ignore[reportUnusedParameter]
         qs = urllib.parse.parse_qs(urllib.parse.urlparse(req.full_url).query)
         width = int(qs["width"][0])
         height = int(qs["height"][0])
-        value = len(call_log)
-        call_log.append((width, height))
-        arr = np.full((height, width), float(value), dtype="<f4")
+        with lock:
+            call_log.append((width, height))
+        arr = np.zeros((height, width), dtype="<f4")
+        return _FakeResp(arr.tobytes())
+
+    return fake
+
+
+def _make_positional_fake_urlopen(
+    west: float,
+    south: float,
+    east: float,
+    north: float,
+    width: int,
+    height: int,
+    *,
+    delay_by_value: bool = False,
+    fail_on_value: int | None = None,
+) -> Any:
+    """Return a fake `urlopen` filling each tile with its grid-position call-index.
+
+    Thread-safe and completion-order-independent: each tile's fill value is derived
+    purely from its requested sub-bbox (inverting `_fetch_mosaic`'s linear tile
+    interpolation to recover the tile's `(row, col)` in the grid), so the assembled
+    mosaic is identical no matter what order the parallel workers complete in. The
+    value `row_idx * n_cols + col_idx` reproduces the old sequential call index, so
+    the NW tile is 0 and the SE tile is N-1 — keeping placement assertions crisp.
+
+    - `delay_by_value`: sleep proportionally so the NW tile (value 0) returns *last*,
+      forcing completion order to reverse submission order (exercises AC #1's
+      order-independence for real, not just by construction).
+    - `fail_on_value`: raise `URLError` for the tile with this value (mid-batch
+      failure path — the worker exception must surface as `DataSourceUnavailableError`).
+    """
+    col_starts = [x0 for x0, _x1 in dem_download._tile_ranges(width)]
+    row_starts = [y0 for y0, _y1 in dem_download._tile_ranges(height)]
+    n_cols = len(col_starts)
+    n_tiles = n_cols * len(row_starts)
+
+    def fake(req: Any, timeout: float | None = None) -> _FakeResp:  # noqa: ARG001  # pyright: ignore[reportUnusedParameter]
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(req.full_url).query)
+        tile_w = int(qs["width"][0])
+        tile_h = int(qs["height"][0])
+        t_west, _t_south, _t_east, t_north = (float(v) for v in qs["bbox"][0].split(","))
+        # Invert the tile interpolation in `_fetch_mosaic` to recover the tile origin.
+        x0 = round((t_west - west) / (east - west) * width)
+        y0 = round((north - t_north) / (north - south) * height)
+        value = row_starts.index(y0) * n_cols + col_starts.index(x0)
+        if fail_on_value is not None and value == fail_on_value:
+            raise urllib.error.URLError("simulated mid-batch tile failure")
+        if delay_by_value:
+            # NW (value 0) sleeps longest → completes last, reversing submission order.
+            time.sleep((n_tiles - value) * 0.003)
+        arr = np.full((tile_h, tile_w), float(value), dtype="<f4")
         return _FakeResp(arr.tobytes())
 
     return fake
@@ -115,8 +173,6 @@ def test_multi_tile_mosaic_places_tiles_north_up(
 ) -> None:
     """A grid larger than one tile is fetched as multiple tiles and stitched, north-up."""
     monkeypatch.setattr(dem_download, "_MAX_TILE_PX", 16)
-    calls: list[tuple[int, int]] = []
-    monkeypatch.setattr(dem_download, "urlopen", _make_fake_urlopen(calls))
 
     # Compute the expected tile count from the same helpers the implementation uses.
     west, south, east, north = dem_download._padded_bbox(_AREA)
@@ -125,16 +181,56 @@ def test_multi_tile_mosaic_places_tiles_north_up(
     n_rows = len(list(dem_download._tile_ranges(height)))
     assert n_cols > 1 and n_rows > 1, "test area must span more than one tile"
 
+    # Position-derived fills make placement assertions order-independent under the
+    # parallel fetch (each tile's value is its grid call-index, not a call counter).
+    monkeypatch.setattr(
+        dem_download,
+        "urlopen",
+        _make_positional_fake_urlopen(west, south, east, north, width, height),
+    )
+
     path = resolve_dem(_BOUNDS, tmp_path)
 
-    assert len(calls) == n_rows * n_cols
     band = _read_band(path)
     assert band.shape == (height, width)
-    # Iteration is row-major (north→south outer, west→east inner) with fill =
-    # call index, so the NW pixel carries call 0 and the SE pixel the last call.
+    # Value = row-major grid index (north→south outer, west→east inner), so the NW
+    # pixel carries tile 0 and the SE pixel the last tile — regardless of the order
+    # the parallel workers completed in.
     assert band[0, 0] == 0.0
     assert band[-1, -1] == float(n_rows * n_cols - 1)
-    # Every tile landed: the distinct fill values are exactly 0..N-1.
+    # Every tile landed exactly once: the distinct fill values are exactly 0..N-1.
+    assert set(np.unique(band).tolist()) == {float(i) for i in range(n_rows * n_cols)}
+
+
+def test_multi_tile_mosaic_byte_identical_under_out_of_order_completion(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC #1: completion order must not change the assembled mosaic.
+
+    `delay_by_value` makes the NW tile (submitted first) return *last*, so the
+    parallel workers complete in reverse submission order. The mosaic must still be
+    byte-identical to the positionally-defined expectation — proving the disjoint
+    `arr[y0:y1, x0:x1]` writes are completion-order-independent.
+    """
+    monkeypatch.setattr(dem_download, "_MAX_TILE_PX", 16)
+    west, south, east, north = dem_download._padded_bbox(_AREA)
+    width, height = dem_download._grid_dims(west, south, east, north, _AREA.center[0])
+    n_cols = len(list(dem_download._tile_ranges(width)))
+    n_rows = len(list(dem_download._tile_ranges(height)))
+    assert n_cols > 1 and n_rows > 1, "test area must span more than one tile"
+
+    monkeypatch.setattr(
+        dem_download,
+        "urlopen",
+        _make_positional_fake_urlopen(west, south, east, north, width, height, delay_by_value=True),
+    )
+
+    band = _read_band(resolve_dem(_BOUNDS, tmp_path))
+
+    # Same NW=0 / SE=N-1 / full-coverage invariant as the in-order case: reversing
+    # completion order changed nothing.
+    assert band[0, 0] == 0.0
+    assert band[-1, -1] == float(n_rows * n_cols - 1)
     assert set(np.unique(band).tolist()) == {float(i) for i in range(n_rows * n_cols)}
 
 
@@ -152,7 +248,9 @@ def test_multi_tile_fetch_emits_tile_progress_lines(
 
     total = len(calls)
     assert total > 1, "test area must span more than one tile"
-    assert lines == [f"  tile {i}/{total}" for i in range(1, total + 1)]
+    # A leading `tile 0/N` is emitted before any request (so the seam isn't silent
+    # during the first tile's wait), then one line per completed tile.
+    assert lines == [f"  tile {i}/{total}" for i in range(0, total + 1)]
 
 
 def test_dem_cache_hit_emits_no_tile_lines(
@@ -196,12 +294,13 @@ def test_force_refresh_redownloads(tmp_path: pathlib.Path, monkeypatch: pytest.M
 def test_network_failure_maps_to_data_source_unavailable(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A urllib failure surfaces as `DataSourceUnavailableError` (exit-2 tier, NFR6)."""
+    """A persistent urllib failure surfaces as `DataSourceUnavailableError` (exit-2 tier, NFR6)."""
 
     def boom(req: Any, timeout: float | None = None) -> _FakeResp:  # noqa: ARG001  # pyright: ignore[reportUnusedParameter]
         raise urllib.error.URLError("connection refused")
 
     monkeypatch.setattr(dem_download, "urlopen", boom)
+    monkeypatch.setattr(dem_download, "_TILE_BACKOFF_BASE_S", 0.0)  # no real sleeps in tests
 
     with pytest.raises(DataSourceUnavailableError) as exc:
         resolve_dem(_BOUNDS, tmp_path)
@@ -244,6 +343,199 @@ def test_right_size_xml_error_document_rejected(
     with pytest.raises(DataSourceUnavailableError) as exc:
         resolve_dem(_BOUNDS, tmp_path)
     assert exc.value.user_message == "DEM source unreachable."
+
+
+def test_mid_batch_tile_failure_maps_to_data_source_unavailable(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC #2: one failing tile among many surfaces as `DataSourceUnavailableError`.
+
+    Under the parallel fetch the worker's exception propagates through
+    `future.result()` unchanged — it must not leak as a raw `URLError` or a
+    `concurrent.futures` wrapper, and no partial raster is written.
+    """
+    monkeypatch.setattr(dem_download, "_MAX_TILE_PX", 16)
+    monkeypatch.setattr(dem_download, "_TILE_BACKOFF_BASE_S", 0.0)  # no real sleeps in tests
+    west, south, east, north = dem_download._padded_bbox(_AREA)
+    width, height = dem_download._grid_dims(west, south, east, north, _AREA.center[0])
+    assert len(list(dem_download._tile_ranges(width))) > 1, "test area must span >1 tile"
+
+    monkeypatch.setattr(
+        dem_download,
+        "urlopen",
+        _make_positional_fake_urlopen(west, south, east, north, width, height, fail_on_value=2),
+    )
+
+    with pytest.raises(DataSourceUnavailableError) as exc:
+        resolve_dem(_BOUNDS, tmp_path)
+    assert exc.value.user_message == "DEM source unreachable."
+    # No partial raster left behind.
+    assert not (tmp_path / "steeproute" / "dem").exists() or not list(
+        (tmp_path / "steeproute" / "dem").glob("*.tif")
+    )
+
+
+def test_transient_tile_failure_is_retried_then_succeeds(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tile that fails transiently then recovers yields a complete mosaic, no error.
+
+    Forces a single tile so the retry count is unambiguous: the first
+    `_TILE_MAX_ATTEMPTS - 1` calls raise a transient `URLError`, the last succeeds.
+    Proves transient network blips don't fail the whole fetch.
+    """
+    monkeypatch.setattr(dem_download, "_MAX_TILE_PX", 100_000)  # whole grid = one tile
+    monkeypatch.setattr(dem_download, "_TILE_BACKOFF_BASE_S", 0.0)  # no real sleeps
+    attempts = {"n": 0}
+
+    def flaky(req: Any, timeout: float | None = None) -> _FakeResp:  # noqa: ARG001  # pyright: ignore[reportUnusedParameter]
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(req.full_url).query)
+        width = int(qs["width"][0])
+        height = int(qs["height"][0])
+        attempts["n"] += 1
+        if attempts["n"] < dem_download._TILE_MAX_ATTEMPTS:
+            raise urllib.error.URLError("transient blip")
+        return _FakeResp(np.zeros((height, width), dtype="<f4").tobytes())
+
+    monkeypatch.setattr(dem_download, "urlopen", flaky)
+
+    path = resolve_dem(_BOUNDS, tmp_path)
+    assert path.exists()
+    assert attempts["n"] == dem_download._TILE_MAX_ATTEMPTS
+
+
+def test_tile_failure_gives_up_after_exactly_max_attempts(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A persistently-failing tile is retried exactly `_TILE_MAX_ATTEMPTS` times — no more."""
+    monkeypatch.setattr(dem_download, "_MAX_TILE_PX", 100_000)  # whole grid = one tile
+    monkeypatch.setattr(dem_download, "_TILE_BACKOFF_BASE_S", 0.0)  # no real sleeps
+    attempts = {"n": 0}
+
+    def always_fail(req: Any, timeout: float | None = None) -> _FakeResp:  # noqa: ARG001  # pyright: ignore[reportUnusedParameter]
+        attempts["n"] += 1
+        raise urllib.error.URLError("down")
+
+    monkeypatch.setattr(dem_download, "urlopen", always_fail)
+
+    with pytest.raises(DataSourceUnavailableError):
+        resolve_dem(_BOUNDS, tmp_path)
+    assert attempts["n"] == dem_download._TILE_MAX_ATTEMPTS
+
+
+def test_terminal_tile_failure_cancels_pending_tiles(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A terminal tile failure drops not-yet-started tiles instead of fetching the whole batch.
+
+    With a single worker the first tile (value 0) fails terminally after its retries;
+    the next tile the worker picks up blocks briefly, giving the parent time to shut the
+    executor down with `cancel_futures=True`. All remaining queued tiles are then dropped
+    rather than fetched — the failure path must not keep hammering an already-failing
+    server. `cancel_futures` can't stop the ≤ max_workers tiles already in flight, so with
+    one worker the ceiling is the failing tile's attempts plus that single in-flight tile.
+    """
+    monkeypatch.setattr(dem_download, "_MAX_TILE_PX", 16)
+    monkeypatch.setattr(dem_download, "_TILE_BACKOFF_BASE_S", 0.0)  # no real sleeps on retry
+    west, south, east, north = dem_download._padded_bbox(_AREA)
+    width, height = dem_download._grid_dims(west, south, east, north, _AREA.center[0])
+    n_cols = len(list(dem_download._tile_ranges(width)))
+    n_rows = len(list(dem_download._tile_ranges(height)))
+    total_tiles = n_cols * n_rows
+    assert total_tiles > 3, "test needs several tiles so pending ones can be cancelled"
+
+    calls = 0
+    lock = threading.Lock()
+    positional = _make_positional_fake_urlopen(
+        west, south, east, north, width, height, fail_on_value=0
+    )
+
+    def counting(req: Any, timeout: float | None = None) -> _FakeResp:  # noqa: ARG001  # pyright: ignore[reportUnusedParameter]
+        nonlocal calls
+        with lock:
+            calls += 1
+        resp = positional(req, timeout)  # raises immediately for the value-0 tile
+        # Reached only by a non-failing tile: hold the worker so the parent thread
+        # observes the failure and cancels the queue before more tiles are dequeued.
+        time.sleep(0.05)
+        return resp
+
+    monkeypatch.setattr(dem_download, "urlopen", counting)
+
+    with pytest.raises(DataSourceUnavailableError):
+        resolve_dem(_BOUNDS, tmp_path, fetch_workers=1)
+    # The failing tile's attempts + at most one in-flight tile — far fewer than the
+    # full batch, proving the remaining tiles were cancelled, not fetched.
+    assert calls == dem_download._TILE_MAX_ATTEMPTS + 1
+    assert calls < total_tiles
+
+
+def test_fetch_workers_override_yields_identical_mosaic(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`fetch_workers` (`--dem-fetch-workers`) overrides `DEFAULT_DEM_FETCH_WORKERS`.
+
+    Story 14.3 scope revision: DEM-fetch concurrency is user-tunable. The mosaic
+    must stay byte-identical regardless of the worker count (1, the module
+    default, or an oversized value) — concurrency only changes wall-clock, never
+    the assembled output.
+    """
+    monkeypatch.setattr(dem_download, "_MAX_TILE_PX", 16)
+    west, south, east, north = dem_download._padded_bbox(_AREA)
+    width, height = dem_download._grid_dims(west, south, east, north, _AREA.center[0])
+    n_cols = len(list(dem_download._tile_ranges(width)))
+    n_rows = len(list(dem_download._tile_ranges(height)))
+    assert n_cols > 1 and n_rows > 1, "test area must span more than one tile"
+
+    monkeypatch.setattr(
+        dem_download,
+        "urlopen",
+        _make_positional_fake_urlopen(west, south, east, north, width, height),
+    )
+
+    band_default = _read_band(resolve_dem(_BOUNDS, tmp_path / "default"))
+    band_serial = _read_band(resolve_dem(_BOUNDS, tmp_path / "serial", fetch_workers=1))
+    band_wide = _read_band(resolve_dem(_BOUNDS, tmp_path / "wide", fetch_workers=64))
+
+    assert np.array_equal(band_default, band_serial)
+    assert np.array_equal(band_default, band_wide)
+
+
+def test_fetch_workers_caps_concurrent_requests(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`fetch_workers=1` genuinely serializes tile fetches (not a cosmetic no-op).
+
+    A lock-guarded counter in the fake `urlopen` measures actual peak concurrent
+    in-flight requests; with `fetch_workers=1` the peak must never exceed 1.
+    """
+    monkeypatch.setattr(dem_download, "_MAX_TILE_PX", 16)
+    west, south, east, north = dem_download._padded_bbox(_AREA)
+    width, height = dem_download._grid_dims(west, south, east, north, _AREA.center[0])
+    n_cols = len(list(dem_download._tile_ranges(width)))
+    n_rows = len(list(dem_download._tile_ranges(height)))
+    assert n_cols * n_rows >= 4, "test needs multiple tiles to exercise concurrency"
+
+    lock = threading.Lock()
+    state = {"current": 0, "peak": 0}
+
+    def fake(req: Any, timeout: float | None = None) -> _FakeResp:  # noqa: ARG001  # pyright: ignore[reportUnusedParameter]
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(req.full_url).query)
+        tile_w = int(qs["width"][0])
+        tile_h = int(qs["height"][0])
+        with lock:
+            state["current"] += 1
+            state["peak"] = max(state["peak"], state["current"])
+        time.sleep(0.02)
+        with lock:
+            state["current"] -= 1
+        arr = np.zeros((tile_h, tile_w), dtype="<f4")
+        return _FakeResp(arr.tobytes())
+
+    monkeypatch.setattr(dem_download, "urlopen", fake)
+
+    resolve_dem(_BOUNDS, tmp_path, fetch_workers=1)
+    assert state["peak"] == 1
 
 
 def _geom_edge_graph(coords_per_edge: list[list[tuple[float, float]]]) -> nx.MultiDiGraph:

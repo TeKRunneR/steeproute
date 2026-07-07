@@ -11,6 +11,7 @@ from steeproute.cli._shared import (
     area_cap_option,
     cache_dir_option,
     center_option,
+    dem_fetch_workers_option,
     dem_version_option,
     difficulty_cap_option,
     force_refresh_option,
@@ -86,6 +87,7 @@ ALL_DECORATORS = [
     cache_dir_option,
     force_refresh_option,
     dem_version_option,
+    dem_fetch_workers_option,
     osm_age_warn_days_option,
 ]
 

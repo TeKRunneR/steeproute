@@ -355,6 +355,25 @@ def test_setup_cli_rejects_nan_radius() -> None:
         assert "--radius" in result.exception.user_message
 
 
+def test_setup_cli_rejects_non_positive_dem_fetch_workers() -> None:
+    """validate_dem_fetch_workers rejects 0 and negative values (Story 14.3 scope revision).
+
+    `ThreadPoolExecutor(max_workers=...)` requires >= 1; without this guard a
+    `0`/negative `--dem-fetch-workers` would surface as a raw ValueError (exit 1)
+    deep inside `_fetch_mosaic` instead of the documented BadCLIArgError tier.
+    """
+    runner = CliRunner()
+    for bad in (0, -1):
+        result = runner.invoke(
+            setup_cli,
+            ["--center", "45.0716,6.1079", "--radius", "1", "--dem-fetch-workers", str(bad)],
+        )
+        assert isinstance(result.exception, BadCLIArgError), (
+            f"--dem-fetch-workers {bad} should raise BadCLIArgError; got {result.exception!r}"
+        )
+        assert "--dem-fetch-workers" in result.exception.user_message
+
+
 def test_setup_cli_does_not_enforce_area_cap(tmp_path: pathlib.Path) -> None:
     """Setup CLI has no --area-cap flag and does not call validate_area_size.
 
@@ -381,6 +400,45 @@ def test_setup_cli_does_not_enforce_area_cap(tmp_path: pathlib.Path) -> None:
     # The run got past `validate_setup_radius` and any would-be area-cap check,
     # reaching stage 1 (the sentinel) — confirming no area-cap rejection.
     assert result.exception is sentinel
+
+
+def test_setup_cli_threads_dem_fetch_workers_to_resolve_dem(tmp_path: pathlib.Path) -> None:
+    """`--dem-fetch-workers` reaches `resolve_dem`'s `fetch_workers` kwarg (Story 14.3 scope revision).
+
+    Patches `resolve_dem` at its `cli.setup` import site and inspects the captured
+    kwargs rather than performing any real network/pipeline work.
+    """
+    captured: dict[str, object] = {}
+
+    def fake_resolve_dem(*_args: object, **kwargs: object) -> pathlib.Path:
+        captured.update(kwargs)
+        raise RuntimeError("stop after resolve_dem call")
+
+    runner = CliRunner()
+    with (
+        mock.patch("steeproute.cli.setup.build_graph_geometry", return_value=mock.MagicMock()),
+        mock.patch(
+            "steeproute.cli.setup.graph_dem_bounds",
+            return_value=(6.10, 45.06, 6.12, 45.08),
+        ),
+        mock.patch("steeproute.cli.setup.resolve_dem", side_effect=fake_resolve_dem),
+    ):
+        result = runner.invoke(
+            setup_cli,
+            [
+                "--center",
+                "45.0716,6.1079",
+                "--radius",
+                "1",
+                "--cache-dir",
+                str(tmp_path),
+                "--dem-fetch-workers",
+                "2",
+            ],
+            catch_exceptions=True,
+        )
+    assert isinstance(result.exception, RuntimeError)
+    assert captured["fetch_workers"] == 2
 
 
 # --- --verbose ordering with BadCLIArgError from convert (AC #4) ---

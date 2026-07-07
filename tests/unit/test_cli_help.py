@@ -42,6 +42,7 @@ SETUP_FLAGS = [
     "--cache-dir",
     "--force-refresh",
     "--dem-version",
+    "--dem-fetch-workers",
     "--osm-age-warn-days",
     "--version",
     "--help",

@@ -58,6 +58,7 @@ from steeproute.cli._shared import (
     cache_dir_option,
     center_option,
     configure_cli_logging,
+    dem_fetch_workers_option,
     dem_version_option,
     emit_osm_age_warning,
     force_refresh_option,
@@ -66,6 +67,7 @@ from steeproute.cli._shared import (
     radius_option,
     run_entry_point,
     untagged_trails_option,
+    validate_dem_fetch_workers,
     validate_setup_radius,
     verbose_option,
 )
@@ -99,6 +101,7 @@ _logger = logging.getLogger(__name__)
 @cache_dir_option
 @force_refresh_option
 @dem_version_option
+@dem_fetch_workers_option
 @osm_age_warn_days_option
 def cli(
     *,
@@ -110,6 +113,7 @@ def cli(
     cache_dir: pathlib.Path | None,
     force_refresh: bool,
     dem_version: str | None,
+    dem_fetch_workers: int,
     osm_age_warn_days: int,
 ) -> int:
     configure_cli_logging(verbose=verbose)
@@ -117,6 +121,7 @@ def cli(
     # Numeric radius check first (pure arithmetic, no I/O) so a typo like
     # `--radius 5000` is rejected before any cache or network work.
     validate_setup_radius(radius)
+    validate_dem_fetch_workers(dem_fetch_workers)
 
     area = Area(center=center, radius_km=radius)
     cache_root = resolve_cache_root(cache_dir)
@@ -188,6 +193,7 @@ def cli(
                 dem_version=resolved_dem_version,
                 force_refresh=force_refresh,
                 progress=progress,
+                fetch_workers=dem_fetch_workers,
             )
         graph = attach_elevation(graph, dem_path, progress=progress)
         now = iso8601_utc_now()
