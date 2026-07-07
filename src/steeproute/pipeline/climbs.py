@@ -46,13 +46,19 @@ from collections import deque
 from typing import Any
 
 import networkx as nx
+import numpy as np
 
+from steeproute.errors import PipelineContractError
 from steeproute.models import Climb, Edge
+from steeproute.pipeline._common import per_edge_searchsorted
 
 # WGS84 equatorial radius for the local equirectangular projection. Same value
 # and rationale as `pipeline.smoothing._EARTH_RADIUS_M` — duplicated rather than
 # imported so each pipeline module is self-contained against a physical constant.
 _EARTH_RADIUS_M: float = 6_378_137.0
+
+# Meters per degree of latitude (the equirectangular projection's lat scale).
+_DEG_TO_M_LAT: float = _EARTH_RADIUS_M * math.radians(1.0)
 
 # Minimum 2D ground length (m) for a polyline to count as a valid metrics input.
 # A real stage-4 edge is metres long; this 1 µm floor is purely a numeric guard
@@ -84,26 +90,114 @@ def compute_edge_metrics(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
         A new MultiDiGraph; the input is never mutated. Upstream attributes
         (`geometry`, `vertices_resampled`, `sac_scale`, `highway`, `osm_way_id`)
         are carried through unchanged.
+
+    Vectorization (Story 14.2): every edge's `vertices_resampled` is gathered
+    into ONE flat `(V, 3)` array and all four metrics are computed with flat numpy
+    array ops over the whole graph at once — a per-edge-reset `np.cumsum` arc
+    length (`np.hypot` segments), `np.diff`-based gain/loss reduced per edge, and
+    a single `np.searchsorted` windowed-descent scan (a per-edge monotone offset
+    keeps each search inside its own edge). Numerically equivalent to the
+    pre-14.2 per-vertex loops to within floating-point reordering (measured max
+    ~1.7e-10 on the fixture; `d_plus_m`/`d_minus_m` were exactly bit-identical) —
+    small enough that the regression goldens stay byte-identical, no rebake needed.
     """
     out: nx.MultiDiGraph = graph.copy()
-    for _u, _v, _k, data in out.edges(data=True, keys=True):
-        verts: list[tuple[float, float, float]] = data["vertices_resampled"]
-        # One projected-distance pass per edge: `length_m` is the last cumulative
-        # value, and the windowed-descent scan reuses the same array (the two used
-        # to recompute the identical equirectangular projection independently).
-        cum_dist = _cumulative_2d_distances(verts)
-        length_m = cum_dist[-1] if cum_dist else 0.0
-        d_plus_m, d_minus_m = _elevation_gain_loss(verts)
-        # length_m > 0 is guaranteed by stage 4's degenerate-edge drop; we
-        # express the contract as a postcondition rather than as defensive
-        # guards inside the loop.
-        avg_gradient = (d_plus_m + d_minus_m) / length_m
-        data["length_m"] = length_m
-        data["d_plus_m"] = d_plus_m
-        data["d_minus_m"] = d_minus_m
-        data["avg_gradient"] = avg_gradient
-        data["max_windowed_descent_grad"] = _max_windowed_descent_grad(verts, cum_dist)
+    keys: list[tuple[int, int, int]] = []
+    arrays: list[np.ndarray] = []
+    for u, v, k, data in out.edges(data=True, keys=True):
+        keys.append((u, v, k))
+        arrays.append(np.asarray(data["vertices_resampled"], dtype=np.float64))  # (n, 3)
+    if not keys:
+        return out
+    ne = len(keys)
+    counts = np.array([len(a) for a in arrays], dtype=np.intp)
+    offs = np.zeros(ne + 1, dtype=np.intp)
+    np.cumsum(counts, out=offs[1:])
+    flat = np.concatenate(arrays)  # (V, 3): lat, lon, elev
+    # Fail fast on non-finite input. Stage-4's degenerate-edge drop and the
+    # orchestrator's finite-elevation guard should have removed these upstream;
+    # the vectorized reductions below share one `np.cumsum` and one `.max()`
+    # across the whole graph, so a single NaN would silently corrupt other edges'
+    # metrics (not just its own, as the old per-edge loop did). Cheap O(V) guard.
+    if not np.isfinite(flat).all():
+        raise PipelineContractError(
+            "compute_edge_metrics: non-finite coordinate in vertices_resampled "
+            "(upstream stage-4 / finite-elevation guards should have dropped it)"
+        )
+    lats = flat[:, 0]
+    lons = flat[:, 1]
+    elevs = flat[:, 2]
+    idx = np.repeat(np.arange(ne, dtype=np.intp), counts)  # per-vertex edge id
+    v_count = len(flat)
+    within = np.zeros(v_count, dtype=bool)  # vertex i and i-1 in the same edge
+    within[1:] = idx[1:] == idx[:-1]
+
+    # Per-edge equirectangular projection, per-edge-reset cumulative arc length.
+    mean_lat = np.add.reduceat(lats, offs[:-1]) / counts
+    deg_to_m_lon = _DEG_TO_M_LAT * np.cos(np.radians(mean_lat))  # (ne,)
+    dlat = np.zeros(v_count, dtype=np.float64)
+    dlon = np.zeros(v_count, dtype=np.float64)
+    dlat[1:] = np.diff(lats) * _DEG_TO_M_LAT
+    dlon[1:] = np.diff(lons) * deg_to_m_lon[idx[1:]]
+    seg = np.where(within, np.hypot(dlat, dlon), 0.0)
+    gcum = np.cumsum(seg)
+    cum = gcum - gcum[offs[:-1]][idx]  # per-edge-local
+    length_m = cum[offs[1:] - 1]  # (ne,)
+
+    # Gain/loss: per-vertex signed delta (cross-edge zeroed), reduced per edge.
+    delev = np.zeros(v_count, dtype=np.float64)
+    delev[1:] = np.diff(elevs)
+    delev = np.where(within, delev, 0.0)
+    d_plus_m = np.add.reduceat(np.where(delev > 0.0, delev, 0.0), offs[:-1])
+    d_minus_m = np.add.reduceat(np.where(delev < 0.0, -delev, 0.0), offs[:-1])
+    avg_gradient = (d_plus_m + d_minus_m) / length_m
+    wdg = _windowed_descent_all(cum, elevs, idx, offs, length_m)
+
+    for e, (u, v, k) in enumerate(keys):
+        data = out.edges[u, v, k]
+        data["length_m"] = float(length_m[e])
+        data["d_plus_m"] = float(d_plus_m[e])
+        data["d_minus_m"] = float(d_minus_m[e])
+        data["avg_gradient"] = float(avg_gradient[e])
+        data["max_windowed_descent_grad"] = float(wdg[e])
     return out
+
+
+def _windowed_descent_all(
+    cum: np.ndarray,
+    elevs: np.ndarray,
+    idx: np.ndarray,
+    offs: np.ndarray,
+    length_m: np.ndarray,
+) -> np.ndarray:
+    """Per-edge `max_windowed_descent_grad` for the whole graph in flat numpy (Story 14.2).
+
+    For every vertex `i`, `_common.per_edge_searchsorted` finds the first vertex
+    `j` (within the same edge) with `cum[j] - cum[i] >= _DESCENT_WINDOW_M` — its
+    per-edge monotone offset keeps each search inside its own edge. Windows are
+    gated on `run >= window` and
+    `drop > 0`, the per-edge max is a `np.maximum.reduceat`, and edges with no full
+    window fall back to their end-to-end descent grade — matching the scalar
+    two-pointer descent-scan semantics.
+    """
+    v_count = len(cum)
+    edge_last = offs[1:] - 1  # last vertex index per edge
+    # First vertex `j` (within the same edge) at least `_DESCENT_WINDOW_M` ahead;
+    # the shared helper's per-edge offset keeps this global searchsorted in-edge.
+    j = per_edge_searchsorted(cum, idx, cum + _DESCENT_WINDOW_M, idx, side="left")
+    j = np.minimum(j, edge_last[idx])  # cap at the owning edge's last vertex
+    run = cum[j] - cum
+    full = run >= _DESCENT_WINDOW_M
+    drop = elevs - elevs[j]
+    grad = np.where(
+        full & (drop > 0.0), np.divide(drop, run, where=run > 0.0, out=np.zeros(v_count)), 0.0
+    )
+    best = np.maximum.reduceat(grad, offs[:-1])  # per edge (0.0 where no positive window)
+    edge_has_full = np.logical_or.reduceat(full, offs[:-1])
+    # Fallback for edges with no full window: end-to-end descent grade.
+    end_drop = elevs[offs[:-1]] - elevs[edge_last]
+    fallback = np.where((length_m > 0.0) & (end_drop > 0.0), end_drop / length_m, 0.0)
+    return np.where(edge_has_full, best, fallback)
 
 
 def is_valid_for_metrics(verts: list[tuple[float, float, float]]) -> bool:
@@ -132,87 +226,41 @@ def is_valid_for_metrics(verts: list[tuple[float, float, float]]) -> bool:
     return _cumulative_2d_distance_m(verts) >= _MIN_METRIC_LENGTH_M
 
 
-def _cumulative_2d_distances(verts: list[tuple[float, float, float]]) -> list[float]:
-    """Prefix-sum of ground-distance in meters: `out[i]` = distance from `verts[0]` to `verts[i]`.
+def _projected_cumulative(verts: list[tuple[float, float, float]]) -> np.ndarray:
+    """Prefix-sum of ground-distance in meters as a numpy array (Story 14.2 internal form).
 
     Local equirectangular projection at the polyline's mean latitude — the same
     pattern as `pipeline.smoothing._resample_meters`. Accurate to ~0.1% over
     edge-scale distances; no external projection dependency. The single source of
     projected distance for stage 7: both whole-edge `length_m` (the last element)
-    and `_max_windowed_descent_grad` read this one array, so the projection is
+    and `_windowed_descent_all` read this one array, so the projection is
     computed once per edge and the two cannot drift.
+
+    Vectorization (Story 14.2): `mean_lat` stays a builtin `sum()` (compensated
+    since 3.12 — kept in Python so it's bit-identical, one scalar per edge), the
+    coordinate deltas are `np.diff`, and per-segment `math.hypot` is kept per
+    segment (numpy's `hypot` diverges by up to a ULP on ~17% of inputs). The
+    `np.cumsum` left-fold is bit-identical to the old `cum[i] = cum[i-1] + …` loop.
     """
     n = len(verts)
-    cum: list[float] = [0.0] * n
+    cum = np.zeros(n, dtype=np.float64)
     if n < 2:
         return cum
+    arr = np.asarray(verts, dtype=np.float64)  # (n, 3): lat, lon, elev
     mean_lat = sum(lat for lat, _lon, _elev in verts) / n
     deg_to_m_lat = _EARTH_RADIUS_M * math.radians(1.0)
     deg_to_m_lon = deg_to_m_lat * math.cos(math.radians(mean_lat))
-    for i in range(1, n):
-        dlat = (verts[i][0] - verts[i - 1][0]) * deg_to_m_lat
-        dlon = (verts[i][1] - verts[i - 1][1]) * deg_to_m_lon
-        cum[i] = cum[i - 1] + math.hypot(dlat, dlon)
+    dlat = np.diff(arr[:, 0]) * deg_to_m_lat
+    dlon = np.diff(arr[:, 1]) * deg_to_m_lon
+    seg = [math.hypot(float(a), float(b)) for a, b in zip(dlat, dlon, strict=True)]
+    np.cumsum(seg, out=cum[1:])
     return cum
 
 
 def _cumulative_2d_distance_m(verts: list[tuple[float, float, float]]) -> float:
     """Total ground-distance in meters along the `(lat, lon)` polyline (the prefix sum's last term)."""
-    cum = _cumulative_2d_distances(verts)
-    return cum[-1] if cum else 0.0
-
-
-def _max_windowed_descent_grad(
-    verts: list[tuple[float, float, float]], cum_dist: list[float]
-) -> float:
-    """Steepest sustained *descending* grade over a `_DESCENT_WINDOW_M` window — the FR32 metric.
-
-    Directional property of this directed edge (Story 10.2): the maximum, over every
-    sliding window of ≥ `_DESCENT_WINDOW_M` ground-meters, of the net elevation
-    *drop* / horizontal_run between the window endpoints, walking `verts` in stored
-    order. A window that nets a *climb* contributes nothing (`drop <= 0` → grade
-    `0.0`): we never want to forbid a traversal because a sub-section *ascends*
-    steeply — only because it *descends* steeply. The reciprocal edge carries
-    reversed `vertices_resampled`, so it records the descent grade for the opposite
-    direction (`d_plus_m`/`d_minus_m` are oriented the same way). The window catches
-    a short steep descent a whole-edge `avg_gradient` would average away; a window
-    that drops then climbs back nets a gentle grade *by design* — the cap targets
-    *sustained* descents, not transient pitches.
-
-    Windows shorter than `_DESCENT_WINDOW_M` are ignored to suppress single-vertex
-    noise; an edge whose *entire* polyline is shorter than the window falls back to
-    its end-to-end descent grade so a short steep descending connector is still
-    measured. Returns `0.0` for a degenerate (< 2 vertex) or zero-length polyline,
-    or one that never descends. `cum_dist` is the prefix-sum from
-    `_cumulative_2d_distances` (same projection, computed once per edge); no RNG.
-    """
-    n = len(verts)
-    if n < 2:
-        return 0.0
-
-    best = 0.0
-    saw_full_window = False
-    j = 0
-    for i in range(n):
-        if j < i:
-            j = i
-        while j < n - 1 and cum_dist[j] - cum_dist[i] < _DESCENT_WINDOW_M:
-            j += 1
-        run = cum_dist[j] - cum_dist[i]
-        if run >= _DESCENT_WINDOW_M:
-            saw_full_window = True
-            drop = verts[i][2] - verts[j][2]  # > 0 iff this window descends i → j
-            if drop > 0.0:
-                grad = drop / run
-                if grad > best:
-                    best = grad
-    if not saw_full_window:
-        # Whole polyline is shorter than one window: measure its end-to-end descent.
-        total_run = cum_dist[n - 1]
-        drop = verts[0][2] - verts[n - 1][2]
-        if total_run > 0.0 and drop > 0.0:
-            best = drop / total_run
-    return best
+    cum = _projected_cumulative(verts)
+    return float(cum[-1]) if cum.size else 0.0
 
 
 def detect_climbs(
@@ -484,21 +532,3 @@ def _edge_from_graph_data(u: int, v: int, k: int, data: dict[str, Any]) -> Edge:
         avg_gradient=data["avg_gradient"],
         sac_scale=data.get("sac_scale"),
     )
-
-
-def _elevation_gain_loss(verts: list[tuple[float, float, float]]) -> tuple[float, float]:
-    """Return `(d_plus_m, d_minus_m)` from consecutive elevation deltas.
-
-    `d_plus_m` is the sum of strictly positive deltas. `d_minus_m` is the sum
-    of the absolute values of strictly negative deltas — positive magnitude,
-    not a signed quantity.
-    """
-    d_plus = 0.0
-    d_minus = 0.0
-    for i in range(1, len(verts)):
-        delta = verts[i][2] - verts[i - 1][2]
-        if delta > 0:
-            d_plus += delta
-        elif delta < 0:
-            d_minus += -delta
-    return d_plus, d_minus

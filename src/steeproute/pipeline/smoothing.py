@@ -39,6 +39,8 @@ import networkx as nx
 import numpy as np
 import shapely
 
+from steeproute.pipeline._common import empty_like, per_edge_searchsorted
+
 # Symmetric moving-average window for stage 3, in vertices. Window = 3 means each
 # interior vertex is the mean of itself and its two neighbours; endpoints pinned.
 SMOOTHING_WINDOW: int = 3
@@ -68,6 +70,9 @@ _DIFFUSION_LAMBDA: float = 0.5
 # WGS84 equatorial radius for the local equirectangular projection.
 _EARTH_RADIUS_M: float = 6_378_137.0
 
+# Meters per degree of latitude (the equirectangular projection's lat scale).
+_DEG_TO_M_LAT: float = _EARTH_RADIUS_M * math.radians(1.0)
+
 
 def smooth_polylines(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
     """Stage 3: moving-average smooth each edge's 2D polyline, preserving endpoints.
@@ -85,18 +90,38 @@ def smooth_polylines(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
             (upstream contract violation; fail-fast).
 
     Returns a new `MultiDiGraph`; the input graph is never mutated.
+
+    Vectorization (Story 14.2): coordinates for the whole graph are gathered in
+    ONE `shapely.get_coordinates` call, the window-3 moving average is a handful
+    of flat numpy array ops over every vertex at once (per-edge numpy dispatch
+    was measured to *regress* on these light loops — the win comes from
+    amortizing the overhead across the whole graph), and the smoothed geometries
+    are rebuilt in ONE `shapely.linestrings` call. Degenerate edges are dropped;
+    all nodes and edge iteration order are preserved. The output is numerically
+    equivalent to the pre-14.2 per-vertex formulation to within floating-point
+    reordering (the naive `(a+b+c)/3` mean replaces the compensated builtin
+    `sum()`; measured max ~1.4e-14 deg on the fixture) — small enough that the
+    regression goldens stay byte-identical, so no rebake was needed.
     """
-    out: nx.MultiDiGraph = graph.copy()
-    edges_to_drop: list[tuple[int, int, int]] = []
-    for u, v, k, data in out.edges(data=True, keys=True):
-        coords = _extract_coords(data.get("geometry"))
-        if not is_valid_polyline(coords):
-            edges_to_drop.append((u, v, k))
-            continue
-        smoothed = _moving_average(coords, SMOOTHING_WINDOW)
-        data["geometry"] = shapely.LineString(smoothed)
-    for u, v, k in edges_to_drop:
-        out.remove_edge(u, v, k)
+    out = empty_like(graph)
+    meta, coords, offs = _collect_linestrings(graph)
+    if not meta:
+        return out
+    valid = _valid_edges_mask(coords, offs)
+    # Window-3 moving average: each interior vertex → mean of its two neighbours
+    # and itself; endpoints pinned. `a`/`c` are the left/right neighbour shifts;
+    # the edge-boundary rows they cross are never read (masked out by `isint`).
+    left = np.empty_like(coords)
+    left[1:] = coords[:-1]
+    right = np.empty_like(coords)
+    right[:-1] = coords[1:]
+    mean = (left + coords + right) / 3.0
+    isint = np.ones(len(coords), dtype=bool)
+    isint[offs[:-1]] = False
+    isint[offs[1:] - 1] = False
+    smoothed = coords.copy()
+    smoothed[isint] = mean[isint]
+    _build_from_flat(out, meta, smoothed, offs, valid)
     return out
 
 
@@ -125,20 +150,78 @@ def resample_edges(
     Raises:
         ValueError: if `spacing_m` is non-positive or non-finite.
         TypeError: if any edge's `geometry` is not a `shapely.LineString`.
+
+    Vectorization (Story 14.2): the whole graph is resampled in flat numpy array
+    ops — one `shapely.get_coordinates` gather, a per-edge equirectangular
+    projection, `np.hypot` segment lengths + a per-edge-reset `np.cumsum` arc
+    length, and one `np.searchsorted` locating every uniform sample's segment
+    across all edges at once (a per-edge monotone offset keeps each search inside
+    its own edge). Geometries are rebuilt in one `shapely.linestrings` call. This
+    is numerically equivalent to the pre-14.2 per-vertex loop to within
+    floating-point reordering (`np.hypot` ≠ CPython's `math.hypot` by up to a ULP,
+    which could in principle nudge a sample across a segment boundary; measured
+    max ~1.4e-14 deg on the fixture, zero boundary flips) — small enough that the
+    regression goldens stay byte-identical, so no rebake was needed.
     """
     if not math.isfinite(spacing_m) or spacing_m <= 0:
         raise ValueError(f"spacing_m must be a positive finite number (got {spacing_m})")
-    out: nx.MultiDiGraph = graph.copy()
-    edges_to_drop: list[tuple[int, int, int]] = []
-    for u, v, k, data in out.edges(data=True, keys=True):
-        coords = _extract_coords(data.get("geometry"))
-        if not is_valid_polyline(coords):
-            edges_to_drop.append((u, v, k))
-            continue
-        resampled = _resample_meters(coords, spacing_m)
-        data["geometry"] = shapely.LineString(resampled)
-    for u, v, k in edges_to_drop:
-        out.remove_edge(u, v, k)
+    out = empty_like(graph)
+    meta, coords, offs = _collect_linestrings(graph)
+    if not meta:
+        return out
+    ne = len(meta)
+    valid = _valid_edges_mask(coords, offs)
+    idx = np.repeat(np.arange(ne, dtype=np.intp), np.diff(offs))  # per-vertex edge id
+    counts = np.diff(offs).astype(np.float64)
+
+    # Per-edge equirectangular projection at each edge's mean latitude.
+    lons = coords[:, 0]
+    lats = coords[:, 1]
+    mean_lat = np.add.reduceat(lats, offs[:-1]) / counts  # (ne,)
+    deg_to_m_lon = _DEG_TO_M_LAT * np.cos(np.radians(mean_lat))  # (ne,)
+    xs = lons * deg_to_m_lon[idx]
+    ys = lats * _DEG_TO_M_LAT
+
+    # Per-edge-local cumulative arc length. Segment i (verts i, i+1) counts only
+    # when both ends are the same edge; global cumsum minus each edge's start
+    # value resets it per edge.
+    within = idx[1:] == idx[:-1]
+    seg_len = np.where(within, np.hypot(np.diff(xs), np.diff(ys)), 0.0)
+    gcum = np.empty(len(coords), dtype=np.float64)
+    gcum[0] = 0.0
+    np.cumsum(seg_len, out=gcum[1:])
+    cum = gcum - gcum[offs[:-1]][idx]  # per-edge-local
+    total = cum[offs[1:] - 1]  # (ne,)
+
+    n_intervals = np.maximum(1, np.round(np.divide(total, spacing_m)).astype(np.intp))  # (ne,)
+    actual_spacing = np.where(total > 0.0, total / n_intervals, 0.0)  # (ne,)
+    out_counts = n_intervals + 1  # first + (n_intervals-1) interior + last
+    out_offs = np.zeros(ne + 1, dtype=np.intp)
+    np.cumsum(out_counts, out=out_offs[1:])
+
+    out_coords = np.empty((int(out_offs[-1]), 2), dtype=np.float64)
+    out_coords[out_offs[:-1]] = coords[offs[:-1]]  # first vertex, exact
+    out_coords[out_offs[1:] - 1] = coords[offs[1:] - 1]  # last vertex, exact
+
+    n_interior = n_intervals - 1  # (ne,)
+    if int(n_interior.sum()) > 0:
+        samp_edge = np.repeat(np.arange(ne, dtype=np.intp), n_interior)  # (S,)
+        samp_base = (np.cumsum(n_interior) - n_interior)[samp_edge]
+        j = np.arange(len(samp_edge), dtype=np.intp) - samp_base + 1  # 1..n_interior[e]
+        d = actual_spacing[samp_edge] * j
+        # One global searchsorted that stays inside each edge (shared helper);
+        # `- 1` turns "first vertex past d" into "the segment containing d".
+        pos = per_edge_searchsorted(cum, idx, d, samp_edge, side="left") - 1
+        pos = np.clip(pos, offs[:-1][samp_edge], offs[1:][samp_edge] - 2)
+        seg = cum[pos + 1] - cum[pos]
+        t = np.clip(np.where(seg > 0.0, (d - cum[pos]) / seg, 0.0), 0.0, 1.0)
+        sx = xs[pos] + t * (xs[pos + 1] - xs[pos])
+        sy = ys[pos] + t * (ys[pos + 1] - ys[pos])
+        interior_pos = out_offs[:-1][samp_edge] + j
+        out_coords[interior_pos, 0] = sx / deg_to_m_lon[samp_edge]
+        out_coords[interior_pos, 1] = sy / _DEG_TO_M_LAT
+
+    _build_from_flat(out, meta, out_coords, out_offs, valid)
     return out
 
 
@@ -324,6 +407,13 @@ def graph_deadband_elevation(
 
     Only the elevation component is touched; `(lat, lon)` pass through unchanged.
     Returns a new MultiDiGraph; the input is never mutated.
+
+    Not vectorized (Story 14.2): the transform is off by default
+    (`ELEVATION_DEADBAND_DEFAULT_M == 0`, early-return), and even active its cost
+    is the sequential hysteresis scan + the per-point `(lat, lon, elev)` tuple
+    rebuild — neither vectorizable without the deferred array-edge contract (Q4).
+    A flat-interp variant was measured *slower* (the flat machinery cost more than
+    the minority interp it replaced), so this stays scalar and bit-identical.
     """
     if deadband_m <= 0.0:
         return graph
@@ -368,18 +458,96 @@ def _deadband_profile(elevs: list[float], deadband_m: float) -> list[float]:
     return out
 
 
-def _extract_coords(geometry: object) -> list[tuple[float, float]]:
-    """Return [(lon, lat), ...] from a 2D or 3D shapely LineString (z dropped).
+def _collect_linestrings(
+    graph: nx.MultiDiGraph,
+) -> tuple[list[tuple[int, int, int, dict[str, object]]], np.ndarray, np.ndarray]:
+    """Gather every edge's LineString coords into ONE flat array (Story 14.2 vectorization primitive).
 
-    Non-LineString geometry on a pipeline edge is an upstream contract violation;
-    raises `TypeError` rather than silently dropping the edge.
+    Returns `(meta, coords, offs)` where `meta[e] = (u, v, k, data)` in edge
+    iteration order, `coords` is the `(V, 2)` float64 array of all vertices from
+    a single `shapely.get_coordinates` call, and `offs` is the `(len(meta)+1,)`
+    prefix-sum so edge `e`'s vertices are `coords[offs[e]:offs[e+1]]`.
+
+    Raises `TypeError` on any non-LineString geometry (upstream contract
+    violation, fail-fast — same message shape as the old per-edge `_extract_coords`).
     """
-    if not isinstance(geometry, shapely.LineString):
-        raise TypeError(
-            "pipeline.smoothing: edge geometry must be a shapely.LineString, "
-            f"got {type(geometry).__name__}"
-        )
-    return [(float(c[0]), float(c[1])) for c in geometry.coords]
+    meta: list[tuple[int, int, int, dict[str, object]]] = []
+    geoms: list[shapely.LineString] = []
+    for u, v, k, data in graph.edges(data=True, keys=True):
+        geom = data.get("geometry")
+        if not isinstance(geom, shapely.LineString):
+            raise TypeError(
+                "pipeline.smoothing: edge geometry must be a shapely.LineString, "
+                f"got {type(geom).__name__}"
+            )
+        meta.append((u, v, k, data))
+        geoms.append(geom)
+    if not geoms:
+        return meta, np.empty((0, 2), dtype=np.float64), np.zeros(1, dtype=np.intp)
+    coords, idx = shapely.get_coordinates(geoms, return_index=True)
+    coords = np.asarray(coords, dtype=np.float64)
+    counts = np.bincount(idx, minlength=len(geoms))
+    offs = np.zeros(len(geoms) + 1, dtype=np.intp)
+    np.cumsum(counts, out=offs[1:])
+    return meta, coords, offs
+
+
+def _valid_edges_mask(coords: np.ndarray, offs: np.ndarray) -> np.ndarray:
+    """Per-edge `is_valid_polyline` as a vectorized boolean mask.
+
+    Valid iff the edge has >= 2 vertices, all finite, and not all identical to its
+    first vertex — the flat-array equivalent of `is_valid_polyline`.
+    """
+    ne = len(offs) - 1
+    counts = np.diff(offs)
+    lons = coords[:, 0]
+    lats = coords[:, 1]
+    finite = np.isfinite(lons) & np.isfinite(lats)
+    idx = np.repeat(np.arange(ne, dtype=np.intp), counts)
+    first_lon = lons[offs[:-1]][idx]
+    first_lat = lats[offs[:-1]][idx]
+    distinct = (lons != first_lon) | (lats != first_lat)
+    all_finite = np.logical_and.reduceat(finite, offs[:-1])
+    any_distinct = np.logical_or.reduceat(distinct, offs[:-1])
+    return (counts >= 2) & all_finite & any_distinct
+
+
+def _build_from_flat(
+    out: nx.MultiDiGraph,
+    meta: list[tuple[int, int, int, dict[str, object]]],
+    coords: np.ndarray,
+    offs: np.ndarray,
+    valid: np.ndarray,
+) -> None:
+    """Rebuild geometries from a flat coords array in ONE `shapely.linestrings` call.
+
+    Adds each valid edge to `out` with its `data` shallow-copied and `geometry`
+    replaced by the LineString of `coords[offs[e]:offs[e+1]]`. Invalid (degenerate)
+    edges are skipped (dropped from the output). Edge order is preserved.
+    """
+    counts = np.diff(offs)
+    if bool(valid.all()):
+        # Common case — no degenerate edges dropped: feed the already-contiguous
+        # flat array straight to shapely (no per-edge slice loop, no full-array
+        # `np.concatenate` copy of every vertex).
+        kept = meta
+        line_idx = np.repeat(np.arange(len(meta), dtype=np.intp), counts)
+        flat = coords
+    else:
+        kept = [entry for e, entry in enumerate(meta) if bool(valid[e])]
+        if not kept:
+            return
+        slices = [coords[offs[e] : offs[e + 1]] for e in range(len(meta)) if bool(valid[e])]
+        flat = np.concatenate(slices)
+        line_idx = np.repeat(np.arange(len(kept), dtype=np.intp), [len(s) for s in slices])
+    # `indices=` makes shapely return one LineString per group as an ndarray;
+    # `np.asarray` gives it a subscriptable static type (the stub types the
+    # scalar-input overload as a bare LineString).
+    lines = np.asarray(shapely.linestrings(flat, indices=line_idx), dtype=object)
+    for i, (u, v, k, data) in enumerate(kept):
+        new_data = dict(data)
+        new_data["geometry"] = lines[i]
+        out.add_edge(u, v, key=k, **new_data)
 
 
 def is_valid_polyline(coords: list[tuple[float, float]]) -> bool:
@@ -395,78 +563,3 @@ def is_valid_polyline(coords: list[tuple[float, float]]) -> bool:
         return False
     first = coords[0]
     return any(c != first for c in coords[1:])
-
-
-def _moving_average(
-    coords: list[tuple[float, float]],
-    window: int,
-) -> list[tuple[float, float]]:
-    """Moving-average smoothing with endpoints pinned to input values.
-
-    The window is centered on each interior vertex; near the polyline boundaries
-    the window is clamped (smaller, asymmetric) to avoid stepping out of bounds.
-    For `window=3` (the only value used today) the clamp produces no asymmetry.
-    `window` must be odd and >= 1.
-    """
-    assert window >= 1 and window % 2 == 1, "window must be odd and >= 1"
-    half = window // 2
-    n = len(coords)
-    smoothed: list[tuple[float, float]] = []
-    for i in range(n):
-        if i == 0 or i == n - 1:
-            smoothed.append(coords[i])
-            continue
-        lo = max(0, i - half)
-        hi = min(n, i + half + 1)
-        window_coords = coords[lo:hi]
-        avg_x = sum(c[0] for c in window_coords) / len(window_coords)
-        avg_y = sum(c[1] for c in window_coords) / len(window_coords)
-        smoothed.append((avg_x, avg_y))
-    return smoothed
-
-
-def _resample_meters(
-    coords: list[tuple[float, float]],
-    spacing_m: float,
-) -> list[tuple[float, float]]:
-    """Resample `coords` (lon, lat in WGS84) to uniform ~`spacing_m` ground-meter spacing.
-
-    Uses a local equirectangular projection at the polyline's mean latitude:
-    accurate to ~0.1% over edge-scale distances (tens of meters to a few km),
-    no external projection dependency. First and last vertices are pinned to
-    the input's first and last exactly so endpoints match input node coords.
-    """
-    deg_to_m_lat = _EARTH_RADIUS_M * math.radians(1.0)
-    mean_lat = sum(lat for _lon, lat in coords) / len(coords)
-    deg_to_m_lon = deg_to_m_lat * math.cos(math.radians(mean_lat))
-
-    xy: list[tuple[float, float]] = [
-        (lon * deg_to_m_lon, lat * deg_to_m_lat) for lon, lat in coords
-    ]
-    cumulative: list[float] = [0.0]
-    for i in range(1, len(xy)):
-        dx = xy[i][0] - xy[i - 1][0]
-        dy = xy[i][1] - xy[i - 1][1]
-        cumulative.append(cumulative[-1] + math.hypot(dx, dy))
-    total = cumulative[-1]
-
-    n_intervals = max(1, round(total / spacing_m))
-    actual_spacing = total / n_intervals if total > 0 else 0.0
-
-    out: list[tuple[float, float]] = [coords[0]]
-    seg = 0
-    for i in range(1, n_intervals):
-        d = actual_spacing * i
-        while seg < len(cumulative) - 2 and cumulative[seg + 1] < d:
-            seg += 1
-        seg_len = cumulative[seg + 1] - cumulative[seg]
-        # Clamp t against float drift accumulating past cumulative[-1]: without
-        # this, the tail interior vertex can extrapolate past v's projected
-        # location and produce a non-monotone "bulge" before the pinned endpoint.
-        t = (d - cumulative[seg]) / seg_len if seg_len > 0 else 0.0
-        t = max(0.0, min(1.0, t))
-        x = xy[seg][0] + t * (xy[seg + 1][0] - xy[seg][0])
-        y = xy[seg][1] + t * (xy[seg + 1][1] - xy[seg][1])
-        out.append((x / deg_to_m_lon, y / deg_to_m_lat))
-    out.append(coords[-1])
-    return out

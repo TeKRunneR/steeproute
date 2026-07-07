@@ -58,6 +58,7 @@ import networkx as nx
 
 from steeproute.errors import BadCLIArgError, PipelineContractError
 from steeproute.models import Area, PipelineConfig
+from steeproute.pipeline._common import empty_like
 from steeproute.pipeline.climbs import compute_edge_metrics
 from steeproute.pipeline.dem import sample_elevation
 from steeproute.pipeline.osm import filter_trails, osm_load
@@ -280,10 +281,13 @@ def _drop_orphan_nodes(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
     return a clean subgraph; downstream stages assume every node connects to
     at least one edge.
     """
-    out: nx.MultiDiGraph = graph.copy()
-    orphans = [n for n, deg in out.degree() if deg == 0]
-    for n in orphans:
-        out.remove_node(n)
+    # Build from the kept nodes rather than copy-then-remove (Story 14.2, S3).
+    # Orphans have degree 0, so every edge carries over; node/edge order is
+    # preserved so downstream output is bit-identical.
+    orphans = {n for n, deg in graph.degree() if deg == 0}
+    out = empty_like(graph, exclude_nodes=orphans)
+    for u, v, k, data in graph.edges(data=True, keys=True):
+        out.add_edge(u, v, key=k, **data)
     if orphans:
         _logger.debug("pipeline: dropped %d orphan nodes", len(orphans))
     return out
@@ -300,18 +304,19 @@ def _drop_short_edges(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
     Length probe uses the same local-equirectangular projection as
     `pipeline.smoothing._resample_meters` (cos-of-mean-latitude correction).
     """
-    out: nx.MultiDiGraph = graph.copy()
-    edges_to_drop: list[tuple[int, int, int]] = []
-    for u, v, k, data in out.edges(data=True, keys=True):
+    # Build from kept edges rather than copy-then-remove (Story 14.2, S3).
+    out = empty_like(graph)
+    dropped = 0
+    for u, v, k, data in graph.edges(data=True, keys=True):
         coords = [(float(c[0]), float(c[1])) for c in data["geometry"].coords]
         if _polyline_length_m(coords) < _PIPELINE_LENGTH_FLOOR_M:
-            edges_to_drop.append((u, v, k))
-    for u, v, k in edges_to_drop:
-        out.remove_edge(u, v, k)
-    if edges_to_drop:
+            dropped += 1
+            continue
+        out.add_edge(u, v, key=k, **data)
+    if dropped:
         _logger.debug(
             "pipeline: dropped %d short edges (< %.3g m)",
-            len(edges_to_drop),
+            dropped,
             _PIPELINE_LENGTH_FLOOR_M,
         )
     # The drop may have created new orphans; reuse the same prune helper so

@@ -1,5 +1,7 @@
-# pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
+# pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false, reportPrivateUsage=false
 # Reason: same osmnx/networkx/shapely boundary as pipeline/osm.py + pipeline/smoothing.py.
+# reportPrivateUsage relaxed: the bit-equality oracle test imports `_DESCENT_WINDOW_M`
+# directly so it can never drift from the production constant it mirrors.
 """Unit tests for pipeline.climbs: compute_edge_metrics (stage 7).
 
 Stage 7 computes per-edge `length_m`, `d_plus_m`, `d_minus_m`, `avg_gradient`
@@ -24,7 +26,12 @@ import shapely
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
-from steeproute.pipeline.climbs import compute_edge_metrics, is_valid_for_metrics
+from steeproute.errors import PipelineContractError
+from steeproute.pipeline.climbs import (
+    _DESCENT_WINDOW_M,
+    compute_edge_metrics,
+    is_valid_for_metrics,
+)
 
 _FIXTURE_DIR = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "grenoble_small"
 _OSM_FIXTURE_PATH = _FIXTURE_DIR / "osm_graph.graphml"
@@ -72,6 +79,35 @@ def _expected_length_m(verts: list[tuple[float, float, float]]) -> float:
         dlon = (verts[i][1] - verts[i - 1][1]) * deg_to_m_lon
         total += math.hypot(dlat, dlon)
     return total
+
+
+def test_compute_edge_metrics_fails_fast_on_non_finite_without_corrupting_others() -> None:
+    """A non-finite coord raises rather than silently corrupting other edges' metrics.
+
+    The vectorized reductions share one `np.cumsum` and one `.max()` across the
+    whole graph, so a single NaN would otherwise leak into unrelated edges'
+    `length_m` / `max_windowed_descent_grad`. The fail-fast guard converts that
+    silent whole-graph corruption into a loud contract error.
+    """
+    good = [(45.0, 5.0, 1000.0), (45.0001, 5.0, 1010.0), (45.0002, 5.0, 1005.0)]
+    # NaN lives only in vertices_resampled (what stage 7 reads); the geometry
+    # stays finite so the test exercises the guard, not shapely's own NaN path.
+    bad = [(45.0, 5.0, 1000.0), (float("nan"), 5.0, 1010.0), (45.0002, 5.0, 1005.0)]
+    g = _single_edge_graph_with_elevation(good)
+    g.add_node(2, x=5.0, y=45.0)
+    g.add_node(3, x=5.0, y=45.0002)
+    g.add_edge(
+        2,
+        3,
+        key=0,
+        geometry=shapely.LineString([(5.0, 45.0), (5.0, 45.0001), (5.0, 45.0002)]),
+        vertices_resampled=bad,
+        sac_scale="hiking",
+        highway="path",
+        osm_way_id=999,
+    )
+    with pytest.raises(PipelineContractError, match="non-finite coordinate"):
+        compute_edge_metrics(g)
 
 
 # --- AC #4: analytical correctness on synthetic edges -------------------------
@@ -412,3 +448,189 @@ def test_compute_edge_metrics_property_metric_invariants(
     assert data["length_m"] > 0.0
     assert math.isfinite(data["avg_gradient"])
     assert data["avg_gradient"] >= 0.0
+
+
+# === Story 14.2 bit-equality oracles (Q2: vectorized stage-7 metrics + deadband) ===
+#
+# Verbatim copies of the pre-14.2 scalar metric/deadband helpers, kept as
+# bit-equality oracles: the vectorized production code must produce `==` (exact,
+# not approx) metrics/elevations over every edge of the real grenoble_small
+# fixture. "Verify before deleting the old code" gate (AC #1).
+
+# Track the production constant directly so the oracle can never drift from it.
+_ORACLE_DESCENT_WINDOW_M = _DESCENT_WINDOW_M
+
+
+def _oracle_cumulative_2d_distances(verts: list[tuple[float, float, float]]) -> list[float]:
+    """Verbatim pre-14.2 `_cumulative_2d_distances`."""
+    n = len(verts)
+    cum: list[float] = [0.0] * n
+    if n < 2:
+        return cum
+    mean_lat = sum(lat for lat, _lon, _elev in verts) / n
+    deg_to_m_lat = _EARTH_RADIUS_M * math.radians(1.0)
+    deg_to_m_lon = deg_to_m_lat * math.cos(math.radians(mean_lat))
+    for i in range(1, n):
+        dlat = (verts[i][0] - verts[i - 1][0]) * deg_to_m_lat
+        dlon = (verts[i][1] - verts[i - 1][1]) * deg_to_m_lon
+        cum[i] = cum[i - 1] + math.hypot(dlat, dlon)
+    return cum
+
+
+def _oracle_elevation_gain_loss(verts: list[tuple[float, float, float]]) -> tuple[float, float]:
+    """Verbatim pre-14.2 `_elevation_gain_loss`."""
+    d_plus = 0.0
+    d_minus = 0.0
+    for i in range(1, len(verts)):
+        delta = verts[i][2] - verts[i - 1][2]
+        if delta > 0:
+            d_plus += delta
+        elif delta < 0:
+            d_minus += -delta
+    return d_plus, d_minus
+
+
+def _oracle_max_windowed_descent_grad(
+    verts: list[tuple[float, float, float]], cum_dist: list[float]
+) -> float:
+    """Verbatim pre-14.2 `_max_windowed_descent_grad`."""
+    n = len(verts)
+    if n < 2:
+        return 0.0
+    best = 0.0
+    saw_full_window = False
+    j = 0
+    for i in range(n):
+        if j < i:
+            j = i
+        while j < n - 1 and cum_dist[j] - cum_dist[i] < _ORACLE_DESCENT_WINDOW_M:
+            j += 1
+        run = cum_dist[j] - cum_dist[i]
+        if run >= _ORACLE_DESCENT_WINDOW_M:
+            saw_full_window = True
+            drop = verts[i][2] - verts[j][2]
+            if drop > 0.0:
+                grad = drop / run
+                if grad > best:
+                    best = grad
+    if not saw_full_window:
+        total_run = cum_dist[n - 1]
+        drop = verts[0][2] - verts[n - 1][2]
+        if total_run > 0.0 and drop > 0.0:
+            best = drop / total_run
+    return best
+
+
+def _oracle_deadband_profile(elevs: list[float], deadband_m: float) -> list[float]:
+    """Verbatim pre-14.2 `_deadband_profile`."""
+    n = len(elevs)
+    if n < 3:
+        return list(elevs)
+    kept = [0]
+    ref = elevs[0]
+    for i in range(1, n):
+        if abs(elevs[i] - ref) >= deadband_m:
+            kept.append(i)
+            ref = elevs[i]
+    if kept[-1] != n - 1:
+        kept.append(n - 1)
+    out = list(elevs)
+    for a, b in zip(kept, kept[1:], strict=False):
+        span = b - a
+        ea, eb = elevs[a], elevs[b]
+        for jj in range(a, b + 1):
+            t = (jj - a) / span if span else 0.0
+            out[jj] = ea + t * (eb - ea)
+    return out
+
+
+def _fixture_metrics_input_graph() -> nx.MultiDiGraph:
+    """Grenoble fixture through stage 6 (smooth + deadband), input to `compute_edge_metrics`."""
+    import osmnx
+
+    from steeproute.pipeline.dem import sample_elevation
+    from steeproute.pipeline.osm import normalize_edges
+    from steeproute.pipeline.smoothing import (
+        graph_deadband_elevation,
+        graph_smooth_elevation,
+        resample_edges,
+        smooth_polylines,
+    )
+
+    graph = normalize_edges(osmnx.load_graphml(_OSM_FIXTURE_PATH))
+    graph = smooth_polylines(graph)
+    graph = resample_edges(graph)
+    graph = sample_elevation(graph, _DEM_FIXTURE_PATH)
+    graph = graph_smooth_elevation(graph)
+    return graph_deadband_elevation(graph)
+
+
+# The flat-array metrics (Story 14.2) use `np.hypot`/`np.add.reduceat` instead of
+# `math.hypot`/sequential `+=`, so they match the scalar oracle to floating-point
+# reordering (measured max ~1.7e-10 on the fixture; d_plus/d_minus were exactly
+# equal), not bit-for-bit. Tolerances below prove numerical equivalence while
+# catching real algorithmic divergence; the residual is sub-nm and does not move
+# the regression goldens (verified byte-identical, no rebake).
+_LENGTH_ATOL = 1e-6  # meters
+_GRAD_ATOL = 1e-9  # dimensionless gradient
+
+
+def test_compute_edge_metrics_numerically_equivalent_to_scalar_reference() -> None:
+    """AC #1: vectorized stage-7 metrics equal the scalar oracle to fp-reordering on the fixture."""
+    if not _DEM_FIXTURE_PATH.exists():
+        pytest.skip("grenoble_small DEM fixture not committed.")
+    metrics_input = _fixture_metrics_input_graph()
+    produced = compute_edge_metrics(metrics_input)
+
+    total = 0
+    for u, v, k, data in produced.edges(data=True, keys=True):
+        verts = metrics_input.edges[u, v, k]["vertices_resampled"]
+        cum = _oracle_cumulative_2d_distances(verts)
+        exp_length = cum[-1] if cum else 0.0
+        exp_dplus, exp_dminus = _oracle_elevation_gain_loss(verts)
+        exp_avg = (exp_dplus + exp_dminus) / exp_length
+        exp_wdg = _oracle_max_windowed_descent_grad(verts, cum)
+        ctx = f"edge ({u}, {v}, {k})"
+        assert abs(data["length_m"] - exp_length) <= _LENGTH_ATOL, f"{ctx} length_m"
+        assert abs(data["d_plus_m"] - exp_dplus) <= _LENGTH_ATOL, f"{ctx} d_plus_m"
+        assert abs(data["d_minus_m"] - exp_dminus) <= _LENGTH_ATOL, f"{ctx} d_minus_m"
+        assert abs(data["avg_gradient"] - exp_avg) <= _GRAD_ATOL, f"{ctx} avg_gradient"
+        assert abs(data["max_windowed_descent_grad"] - exp_wdg) <= _GRAD_ATOL, (
+            f"{ctx} max_windowed_descent_grad"
+        )
+        total += len(verts)
+    assert total > 1000, f"expected a substantial fixture, measured only {total} vertices"
+
+
+def test_graph_deadband_elevation_bit_identical_to_scalar_reference() -> None:
+    """AC #1: deadband output is bit-equal to the scalar oracle on the fixture (deadband stays scalar)."""
+    if not _DEM_FIXTURE_PATH.exists():
+        pytest.skip("grenoble_small DEM fixture not committed.")
+    import osmnx
+
+    from steeproute.pipeline.dem import sample_elevation
+    from steeproute.pipeline.osm import normalize_edges
+    from steeproute.pipeline.smoothing import (
+        graph_deadband_elevation,
+        graph_smooth_elevation,
+        resample_edges,
+        smooth_polylines,
+    )
+
+    graph = normalize_edges(osmnx.load_graphml(_OSM_FIXTURE_PATH))
+    graph = smooth_polylines(graph)
+    graph = resample_edges(graph)
+    graph = sample_elevation(graph, _DEM_FIXTURE_PATH)
+    smoothed = graph_smooth_elevation(graph)
+
+    deadband_m = 2.0  # active threshold — exercises the real hysteresis + interpolation path
+    produced = graph_deadband_elevation(smoothed, deadband_m)
+
+    total = 0
+    for u, v, k, data in produced.edges(data=True, keys=True):
+        src_verts = smoothed.edges[u, v, k]["vertices_resampled"]
+        exp_elevs = _oracle_deadband_profile([vert[2] for vert in src_verts], deadband_m)
+        got_elevs = [vert[2] for vert in data["vertices_resampled"]]
+        assert got_elevs == exp_elevs, f"deadband diverged on edge ({u}, {v}, {k})"
+        total += len(src_verts)
+    assert total > 1000, f"expected a substantial fixture, deadbanded only {total} vertices"

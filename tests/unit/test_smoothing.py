@@ -786,3 +786,155 @@ def test_graph_deadband_elevation_preserves_lat_lon_exactly() -> None:
     for original, smoothed in zip(verts, out.edges[0, 1, 0]["vertices_resampled"], strict=True):
         assert smoothed[0] == original[0]
         assert smoothed[1] == original[1]
+
+
+# === Story 14.2 bit-equality oracles (S2: vectorized stage 3-4) =================
+#
+# Verbatim copies of the pre-14.2 scalar `_moving_average` / `_resample_meters`,
+# kept as bit-equality oracles: the vectorized production code must produce
+# `==` (exact, not approx) coordinates over every vertex of the real
+# grenoble_small fixture. This is the "verify before deleting the old code" gate
+# (AC #1), mirroring 14.1's `_scalar_reference_sample_elevation`.
+
+
+def _scalar_moving_average(
+    coords: list[tuple[float, float]], window: int
+) -> list[tuple[float, float]]:
+    """Verbatim pre-14.2 `_moving_average` — the stage-3 bit-equality oracle."""
+    assert window >= 1 and window % 2 == 1, "window must be odd and >= 1"
+    half = window // 2
+    n = len(coords)
+    smoothed: list[tuple[float, float]] = []
+    for i in range(n):
+        if i == 0 or i == n - 1:
+            smoothed.append(coords[i])
+            continue
+        lo = max(0, i - half)
+        hi = min(n, i + half + 1)
+        window_coords = coords[lo:hi]
+        avg_x = sum(c[0] for c in window_coords) / len(window_coords)
+        avg_y = sum(c[1] for c in window_coords) / len(window_coords)
+        smoothed.append((avg_x, avg_y))
+    return smoothed
+
+
+def _scalar_resample_meters(
+    coords: list[tuple[float, float]], spacing_m: float
+) -> list[tuple[float, float]]:
+    """Verbatim pre-14.2 `_resample_meters` — the stage-4 bit-equality oracle."""
+    deg_to_m_lat = _EARTH_RADIUS_M * math.radians(1.0)
+    mean_lat = sum(lat for _lon, lat in coords) / len(coords)
+    deg_to_m_lon = deg_to_m_lat * math.cos(math.radians(mean_lat))
+
+    xy: list[tuple[float, float]] = [
+        (lon * deg_to_m_lon, lat * deg_to_m_lat) for lon, lat in coords
+    ]
+    cumulative: list[float] = [0.0]
+    for i in range(1, len(xy)):
+        dx = xy[i][0] - xy[i - 1][0]
+        dy = xy[i][1] - xy[i - 1][1]
+        cumulative.append(cumulative[-1] + math.hypot(dx, dy))
+    total = cumulative[-1]
+
+    n_intervals = max(1, round(total / spacing_m))
+    actual_spacing = total / n_intervals if total > 0 else 0.0
+
+    out: list[tuple[float, float]] = [coords[0]]
+    seg = 0
+    for i in range(1, n_intervals):
+        d = actual_spacing * i
+        while seg < len(cumulative) - 2 and cumulative[seg + 1] < d:
+            seg += 1
+        seg_len = cumulative[seg + 1] - cumulative[seg]
+        t = (d - cumulative[seg]) / seg_len if seg_len > 0 else 0.0
+        t = max(0.0, min(1.0, t))
+        x = xy[seg][0] + t * (xy[seg + 1][0] - xy[seg][0])
+        y = xy[seg][1] + t * (xy[seg + 1][1] - xy[seg][1])
+        out.append((x / deg_to_m_lon, y / deg_to_m_lat))
+    out.append(coords[-1])
+    return out
+
+
+def _fixture_geometry_graph() -> nx.MultiDiGraph:
+    """Stage-1/2 stand-in: the committed grenoble_small graphml, normalized."""
+    return normalize_edges(osmnx.load_graphml(_FIXTURE_PATH))
+
+
+def _edge_coords(data: dict[str, object]) -> list[tuple[float, float]]:
+    geom = data["geometry"]
+    assert isinstance(geom, shapely.LineString)
+    return [(float(c[0]), float(c[1])) for c in geom.coords]
+
+
+# Numerical-equivalence tolerance: the flat-array vectorization (Story 14.2) uses
+# `np.hypot`/naive means instead of `math.hypot`/compensated `sum()`, so results
+# match the scalar reference to within floating-point reordering (measured max
+# ~1.4e-14 deg on the fixture), not bit-for-bit. 1e-8 deg (~1 mm) proves numerical
+# equivalence while still catching any real algorithmic divergence. The residual
+# is sub-nm and does not move the regression goldens (verified byte-identical).
+_EQUIV_ATOL = 1e-8
+
+
+def test_smooth_polylines_numerically_equivalent_to_scalar_reference() -> None:
+    """AC #1: vectorized `smooth_polylines` equals the scalar oracle to fp-reordering on the fixture."""
+    if not _FIXTURE_PATH.exists():
+        pytest.skip("grenoble_small OSM fixture not committed.")
+    produced = smooth_polylines(_fixture_geometry_graph())
+
+    ref = _fixture_geometry_graph()
+    drop: list[tuple[int, int, int]] = []
+    for u, v, k, data in list(ref.edges(data=True, keys=True)):
+        coords = _edge_coords(data)
+        if not is_valid_polyline(coords):
+            drop.append((u, v, k))
+            continue
+        data["geometry"] = shapely.LineString(_scalar_moving_average(coords, SMOOTHING_WINDOW))
+    for e in drop:
+        ref.remove_edge(*e)
+
+    prod_edges = {(u, v, k): _edge_coords(d) for u, v, k, d in produced.edges(data=True, keys=True)}
+    ref_edges = {(u, v, k): _edge_coords(d) for u, v, k, d in ref.edges(data=True, keys=True)}
+    assert prod_edges.keys() == ref_edges.keys(), "stage-3 edge set diverged from scalar reference"
+    total = 0
+    for key, ref_coords in ref_edges.items():
+        got = prod_edges[key]
+        assert len(got) == len(ref_coords), f"stage-3 vertex count diverged on edge {key}"
+        for (px, py), (rx, ry) in zip(got, ref_coords, strict=True):
+            assert abs(px - rx) <= _EQUIV_ATOL and abs(py - ry) <= _EQUIV_ATOL, (
+                f"stage-3 coords diverged on edge {key}"
+            )
+        total += len(ref_coords)
+    assert total > 1000, f"expected a substantial fixture, smoothed only {total} vertices"
+
+
+def test_resample_edges_numerically_equivalent_to_scalar_reference() -> None:
+    """AC #1: vectorized `resample_edges` equals the scalar oracle to fp-reordering on the fixture."""
+    if not _FIXTURE_PATH.exists():
+        pytest.skip("grenoble_small OSM fixture not committed.")
+    smoothed = smooth_polylines(_fixture_geometry_graph())
+    produced = resample_edges(smoothed)
+
+    ref = smoothed.copy()
+    drop: list[tuple[int, int, int]] = []
+    for u, v, k, data in list(ref.edges(data=True, keys=True)):
+        coords = _edge_coords(data)
+        if not is_valid_polyline(coords):
+            drop.append((u, v, k))
+            continue
+        data["geometry"] = shapely.LineString(_scalar_resample_meters(coords, RESAMPLE_SPACING_M))
+    for e in drop:
+        ref.remove_edge(*e)
+
+    prod_edges = {(u, v, k): _edge_coords(d) for u, v, k, d in produced.edges(data=True, keys=True)}
+    ref_edges = {(u, v, k): _edge_coords(d) for u, v, k, d in ref.edges(data=True, keys=True)}
+    assert prod_edges.keys() == ref_edges.keys(), "stage-4 edge set diverged from scalar reference"
+    total = 0
+    for key, ref_coords in ref_edges.items():
+        got = prod_edges[key]
+        assert len(got) == len(ref_coords), f"stage-4 vertex count diverged on edge {key}"
+        for (px, py), (rx, ry) in zip(got, ref_coords, strict=True):
+            assert abs(px - rx) <= _EQUIV_ATOL and abs(py - ry) <= _EQUIV_ATOL, (
+                f"stage-4 coords diverged on edge {key}"
+            )
+        total += len(ref_coords)
+    assert total > 1000, f"expected a substantial fixture, resampled only {total} vertices"

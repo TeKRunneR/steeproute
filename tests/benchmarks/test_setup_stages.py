@@ -32,12 +32,25 @@ from __future__ import annotations
 import networkx as nx
 import osmnx
 import pytest
-from conftest import BENCH_UNTAGGED_POLICY, DEM_FIXTURE_PATH, OSM_FIXTURE_PATH
+from conftest import (
+    BENCH_DEADBAND_ACTIVE_M,
+    BENCH_PARAMS,
+    BENCH_UNTAGGED_POLICY,
+    DEM_FIXTURE_PATH,
+    OSM_FIXTURE_PATH,
+)
 from pytest_benchmark.fixture import BenchmarkFixture
 
+from steeproute.models import Climb
+from steeproute.pipeline.climbs import compute_edge_metrics
 from steeproute.pipeline.dem import sample_elevation
+from steeproute.pipeline.graph import contract_climbs
 from steeproute.pipeline.osm import filter_trails, normalize_edges
-from steeproute.pipeline.smoothing import resample_edges, smooth_polylines
+from steeproute.pipeline.smoothing import (
+    graph_deadband_elevation,
+    resample_edges,
+    smooth_polylines,
+)
 
 pytestmark = pytest.mark.benchmark
 
@@ -69,3 +82,34 @@ def test_stage5_sample_elevation(
     benchmark: BenchmarkFixture, resampled_graph: nx.MultiDiGraph
 ) -> None:
     benchmark(sample_elevation, resampled_graph, DEM_FIXTURE_PATH)
+
+
+# --- Query-side stages (6b / 7 / 9) — Story 14.2 (Q2, Q3) --------------------
+
+
+def test_stage6b_graph_deadband_elevation(
+    benchmark: BenchmarkFixture, smoothed_elevation_graph: nx.MultiDiGraph
+) -> None:
+    """Stage 6b deadband over an active (non-zero) threshold — the real hysteresis path."""
+    benchmark(graph_deadband_elevation, smoothed_elevation_graph, BENCH_DEADBAND_ACTIVE_M)
+
+
+def test_stage7_compute_edge_metrics(
+    benchmark: BenchmarkFixture, metrics_input_graph: nx.MultiDiGraph
+) -> None:
+    """Stage 7 per-edge metrics (length, gain/loss, avg gradient, windowed descent)."""
+    benchmark(compute_edge_metrics, metrics_input_graph)
+
+
+def test_stage9_contract_climbs(
+    benchmark: BenchmarkFixture, routable_and_climbs: tuple[nx.MultiDiGraph, list[Climb]]
+) -> None:
+    """Stage 9 contracted-graph build — the Q3 profiling seam (optimize only if material)."""
+    routable, climbs = routable_and_climbs
+    benchmark(
+        contract_climbs,
+        routable,
+        climbs,
+        l_connector=BENCH_PARAMS.l_connector,
+        annotate_junctions=BENCH_PARAMS.start_at_junction,
+    )

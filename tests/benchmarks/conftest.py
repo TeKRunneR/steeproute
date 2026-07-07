@@ -30,12 +30,17 @@ import osmnx
 import pytest
 
 from steeproute.cache import check_coverage
-from steeproute.models import Area, ContractedGraph, SolverParams
+from steeproute.models import Area, Climb, ContractedGraph, SolverParams
 from steeproute.pipeline import _drop_orphan_nodes, _drop_short_edges, operationalize_graph
-from steeproute.pipeline.climbs import detect_climbs
+from steeproute.pipeline.climbs import compute_edge_metrics, detect_climbs
 from steeproute.pipeline.graph import contract_climbs
 from steeproute.pipeline.osm import filter_trails, normalize_edges
-from steeproute.pipeline.smoothing import resample_edges, smooth_polylines
+from steeproute.pipeline.smoothing import (
+    graph_deadband_elevation,
+    graph_smooth_elevation,
+    resample_edges,
+    smooth_polylines,
+)
 
 _TESTS_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
@@ -63,6 +68,12 @@ BENCH_UNTAGGED_POLICY: str = "include"
 BENCH_DIFFICULTY_CAP: str = "T3"
 BENCH_ELEVATION_SMOOTHING_M: float = 50.0
 BENCH_ELEVATION_DEADBAND_M: float = 0.0
+
+# Non-zero deadband for the `graph_deadband_elevation` benchmark ONLY. The
+# production default (`BENCH_ELEVATION_DEADBAND_M` above) is 0.0, which short-
+# circuits to a no-op — useless as a throughput baseline. 2 m exercises the real
+# per-edge hysteresis + interpolation path. Pinned locally, never a CLI default.
+BENCH_DEADBAND_ACTIVE_M: float = 2.0
 BENCH_PARAMS = SolverParams(
     theta=0.20,
     min_climb_slope=0.20,
@@ -153,3 +164,50 @@ def resampled_graph(smoothed_graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
     if not DEM_FIXTURE_PATH.is_file():
         pytest.skip("grenoble_small DEM fixture not committed; elevation benchmark skipped.")
     return _drop_short_edges(resample_edges(smoothed_graph))
+
+
+# --- Query-stage input chain (stages 6b/7/9) --------------------------------
+#
+# These replay the query-side reshaping from `cli/query.py` off the committed
+# e2e cache (the same raw post-stage-5 graph the solver benchmark starts from),
+# so the stage-6b / stage-7 / stage-9 seams measure exactly what a real query
+# pays. Session-scoped: built once, read many; the stage functions are pure.
+
+
+@pytest.fixture(scope="session")
+def prepared_grenoble_graph() -> nx.MultiDiGraph:
+    """Raw post-stage-5 graph from the committed e2e cache (query-side input)."""
+    if not (E2E_CACHE_ROOT / "steeproute" / "index.json").is_file():
+        pytest.skip(
+            "grenoble_small e2e fixture cache not committed; query-stage benchmarks skipped."
+        )
+    return check_coverage(
+        E2E_CACHE_ROOT, Area(center=BENCH_CENTER, radius_km=BENCH_RADIUS_KM)
+    ).graph
+
+
+@pytest.fixture(scope="session")
+def smoothed_elevation_graph(prepared_grenoble_graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
+    """Post stage-6a (elevation smoothing), input to the `graph_deadband_elevation` bench."""
+    return graph_smooth_elevation(prepared_grenoble_graph, BENCH_ELEVATION_SMOOTHING_M)
+
+
+@pytest.fixture(scope="session")
+def metrics_input_graph(smoothed_elevation_graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
+    """Post stage-6 (smooth + deadband), input to the stage-7 `compute_edge_metrics` bench."""
+    return graph_deadband_elevation(smoothed_elevation_graph, BENCH_ELEVATION_DEADBAND_M)
+
+
+@pytest.fixture(scope="session")
+def routable_and_climbs(
+    metrics_input_graph: nx.MultiDiGraph,
+) -> tuple[nx.MultiDiGraph, list[Climb]]:
+    """`(routable_graph, climbs)` — the two inputs to `contract_climbs` (stage 9)."""
+    operational = compute_edge_metrics(metrics_input_graph)
+    routable = filter_trails(operational, BENCH_UNTAGGED_POLICY, BENCH_DIFFICULTY_CAP)
+    climbs = detect_climbs(
+        routable,
+        min_climb_slope=BENCH_PARAMS.min_climb_slope,
+        min_climb_ground_length=BENCH_PARAMS.min_climb_ground_length,
+    )
+    return routable, climbs

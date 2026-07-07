@@ -15,6 +15,7 @@ import truststore
 
 from steeproute.errors import BadCLIArgError, DataSourceUnavailableError
 from steeproute.models import Area
+from steeproute.pipeline._common import empty_like
 
 # OSM sac_scale tag values mapped to numeric T-rank for difficulty-cap filtering.
 # https://wiki.openstreetmap.org/wiki/Key:sac_scale
@@ -161,19 +162,23 @@ def filter_trails(
         )
     cap_rank = parse_difficulty_cap(difficulty_cap)
 
-    out = graph.copy()
-    edges_to_drop: list[tuple[int, int, int]] = []
-    for u, v, k, data in out.edges(data=True, keys=True):
+    # Build the output from the KEPT edges rather than copy-then-remove (Story
+    # 14.2, S3): stage 2 drops most edges (all non-trail/non-connector, over-cap,
+    # excluded-untagged), so copying them only to remove them is the dominant
+    # cost. All nodes carry over (orphan pruning is the orchestrator's job);
+    # edge/node iteration order is preserved so downstream output is unchanged.
+    out = empty_like(graph)
+    for u, v, k, data in graph.edges(data=True, keys=True):
         kind = classify_highway(data.get("highway"))
         if kind == "trail":
             sac = data.get("sac_scale")
             if sac is None:
-                if untagged_policy == "exclude":
-                    edges_to_drop.append((u, v, k))
+                if untagged_policy != "exclude":
+                    out.add_edge(u, v, key=k, **data)
                 continue
             rank = max_sac_rank(sac)
-            if rank is None or rank > cap_rank:
-                edges_to_drop.append((u, v, k))
+            if rank is not None and rank <= cap_rank:
+                out.add_edge(u, v, key=k, **data)
             continue
         if kind == "connector":
             # Roads aren't subject to the untagged policy (they carry no SAC
@@ -181,12 +186,9 @@ def filter_trails(
             # respects the difficulty cap, like a trail; an untagged or
             # unrecognized-sac road is admitted as a connector (Story 6.2).
             rank = max_sac_rank(data.get("sac_scale"))
-            if rank is not None and rank > cap_rank:
-                edges_to_drop.append((u, v, k))
+            if rank is None or rank <= cap_rank:
+                out.add_edge(u, v, key=k, **data)
             continue
-        edges_to_drop.append((u, v, k))
-    for u, v, k in edges_to_drop:
-        out.remove_edge(u, v, k)
     return out
 
 
