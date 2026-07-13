@@ -33,12 +33,13 @@ import pathlib
 
 import networkx as nx
 import numpy as np
-import pyproj
-import rasterio
-import rasterio.errors
-import rasterio.transform
 import shapely
 
+# NOTE: rasterio + pyproj load native DLLs (~0.7 s) and serve only the sampling
+# path — they are imported lazily inside `sample_elevation` so importing this
+# module stays cheap. `pipeline/__init__` imports it, so consumers of any pipeline
+# submodule (including spawned solver workers) would otherwise pay for them at
+# import time (Story 14.4 follow-up; see the matching NOTE in `pipeline/osm.py`).
 from steeproute.errors import DataSourceUnavailableError, DEMCoverageError
 
 # Graph-side CRS: shapely geometries from stages 1-4 are WGS84 lon/lat.
@@ -78,6 +79,12 @@ def sample_elevation(
             area isn't covered" (Architecture §Cat 10).
         TypeError: if any edge's `geometry` is not a `shapely.LineString`.
     """
+    # Deferred native-DLL imports — see the module-level NOTE above the imports.
+    import pyproj
+    import rasterio
+    import rasterio.errors
+    import rasterio.transform
+
     out: nx.MultiDiGraph = graph.copy()
     try:
         dataset_ctx = rasterio.open(dem_path)

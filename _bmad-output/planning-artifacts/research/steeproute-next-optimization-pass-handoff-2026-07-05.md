@@ -313,6 +313,17 @@ transform is sequential hysteresis — leave it Python unless the sub-timers say
 The `graph.copy()` purity cost inside `operationalize_graph` falls to S3-style handling
 (copy once, not three times: smooth → deadband → metrics currently copy each).
 
+**Resolved 2026-07-08 (outside the story sequence, in response to user-observed regression):**
+`operationalize_graph` now makes one working copy and threads `graph_smooth_elevation` /
+`graph_deadband_elevation` / `compute_edge_metrics` through it via a new keyword-only
+`inplace=True` (each function stays pure by default). Measured on a real r20 cache entry
+(130k nodes / 323k edges, `--elevation-deadband 1.0`): elevation-reshape 38.6 s → 24.1 s
+(saved 14.5 s), verified bit-identical to the old copy-per-stage sequence (0 mismatched
+edges) with the input graph still untouched. No golden rebake (bit-identical); pipeline
+content hash shifts as usual for a `pipeline/` edit (one-time cache re-prepare). The
+deadband hysteresis loop itself is still un-vectorized — that part is unchanged and stays
+blocked on the deferred array-edge contract (Q4) per the note above.
+
 ### Q3. Query-side copy churn + contraction
 
 `filter_trails` redux (5.2 s @ r20) is fixed by S3 (same function). `contract_climbs`

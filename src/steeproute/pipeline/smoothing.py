@@ -228,6 +228,8 @@ def resample_edges(
 def graph_smooth_elevation(
     graph: nx.MultiDiGraph,
     strength_m: float = ELEVATION_SMOOTHING_DEFAULT_M,
+    *,
+    inplace: bool = False,
 ) -> nx.MultiDiGraph:
     """Stage 6a: global graph-Laplacian diffusion of the whole elevation field.
 
@@ -269,14 +271,18 @@ def graph_smooth_elevation(
 
     Only the elevation component of each `(lat, lon, elev)` triple is touched;
     `(lat, lon)` pass through unchanged. Returns a new MultiDiGraph; the input is
-    never mutated.
+    never mutated — unless `inplace=True`, an internal optimization for
+    `operationalize_graph` (which owns a single working copy and threads the stage
+    functions through it, avoiding one full-graph `copy()` per stage). The
+    reads-then-writes structure below makes in-place safe: elevations are gathered
+    into flat arrays first, then written back, so mutating the source is harmless.
     """
     window = strength_m / RESAMPLE_SPACING_M
     if window <= 1.0:
         return graph
     iters = max(1, round(window * window / 6.0))
     lam = _DIFFUSION_LAMBDA
-    out: nx.MultiDiGraph = graph.copy()
+    out: nx.MultiDiGraph = graph if inplace else graph.copy()
 
     # One shared elevation variable per node; per-edge interior vertices are
     # private. Raw node elevations are already consistent across incident edges
@@ -387,6 +393,8 @@ def graph_smooth_elevation(
 def graph_deadband_elevation(
     graph: nx.MultiDiGraph,
     deadband_m: float = ELEVATION_DEADBAND_DEFAULT_M,
+    *,
+    inplace: bool = False,
 ) -> nx.MultiDiGraph:
     """Stage 6b: express the elevation deadband as a PROFILE transform.
 
@@ -406,7 +414,9 @@ def graph_deadband_elevation(
     unchanged.
 
     Only the elevation component is touched; `(lat, lon)` pass through unchanged.
-    Returns a new MultiDiGraph; the input is never mutated.
+    Returns a new MultiDiGraph; the input is never mutated — unless `inplace=True`
+    (the `operationalize_graph` single-working-copy optimization; safe here because
+    each edge's elevations are read into a local list before being written back).
 
     Not vectorized (Story 14.2): the transform is off by default
     (`ELEVATION_DEADBAND_DEFAULT_M == 0`, early-return), and even active its cost
@@ -417,7 +427,7 @@ def graph_deadband_elevation(
     """
     if deadband_m <= 0.0:
         return graph
-    out: nx.MultiDiGraph = graph.copy()
+    out: nx.MultiDiGraph = graph if inplace else graph.copy()
     for _u, _v, _k, data in out.edges(data=True, keys=True):
         verts: list[tuple[float, float, float]] = data["vertices_resampled"]
         elevs = [vert[2] for vert in verts]

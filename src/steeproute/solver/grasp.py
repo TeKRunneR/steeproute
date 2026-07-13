@@ -139,7 +139,7 @@ from steeproute.solver.reuse import (
     non_exempt_base_segment_ids,
 )
 
-__all__ = ["STAGNATION_ITERS_DEFAULT_PLACEHOLDER", "GraspSolver", "RCL_SIZE"]
+__all__ = ["STAGNATION_ITERS_DEFAULT_PLACEHOLDER", "AdjacencyTable", "GraspSolver", "RCL_SIZE"]
 
 
 STAGNATION_ITERS_DEFAULT_PLACEHOLDER: int = 100
@@ -193,6 +193,16 @@ class _CandidateRecord(NamedTuple):
     blocking: frozenset[tuple[int, int, int]]
 
 
+AdjacencyTable = dict[int, tuple[_CandidateRecord, ...]]
+"""Per-node pre-built RCL candidate table (`_build_adjacency`'s output).
+
+A pure function of the contracted graph + the SAC/descent filter params, so it is
+identical across a parallel worker's migration rounds and can be built once and
+reused (Story 14.4). Exposed as a named type so `solver/parallel.py` can cache and
+pass it back without naming the private `_CandidateRecord`.
+"""
+
+
 class GraspSolver:
     """GRASP solver driving construction + restart for FR10 / FR11 / FR29.
 
@@ -217,6 +227,8 @@ class GraspSolver:
         params: SolverParams,
         rng: np.random.Generator,
         progress_callback: ProgressCallback | None = None,
+        initial_solutions: list[Solution] | None = None,
+        adjacency: AdjacencyTable | None = None,
     ) -> None:
         if params.iter_budget < 1:
             # Fail loud at the boundary, symmetric with `TopNTracker`'s `n >= 1`
@@ -240,6 +252,19 @@ class GraspSolver:
             base_segment_id_map(graph)
         )
         self._tracker: TopNTracker = TopNTracker(params.n, params.j_max, self._segment_map)
+        # Elite migration (parallel island model, Story 14.4 follow-up): pre-seed the
+        # tracker with solutions merged from other workers' previous rounds, so this
+        # worker only *keeps* routes that beat the shared global elite (construction
+        # itself is unaffected — it's memoryless random restart). This bounds the
+        # parallel downside: with periodic migration, workers converge toward one
+        # shared elite instead of drifting into independent, redundant local optima.
+        # `None` (the default, and every single-process caller) leaves the tracker
+        # empty — byte-identical to pre-migration behaviour. Order matters for the
+        # order-sensitive tracker, so callers must pass a deterministically-ordered
+        # list (the merged `current_top()`).
+        if initial_solutions:
+            for solution in initial_solutions:
+                self._tracker.consider(solution)
         # Seed-node pool. Sorted ascending so start-node sampling is deterministic
         # across Python / networkx versions (dict-insertion order is the FR29
         # fragility). Under `--start-at-junction` (FR31, Story 10.1) the pool is
@@ -283,7 +308,15 @@ class GraspSolver:
         # Empty until `run()` builds it once per solve — solver instances are
         # single-run, and building it inside `run()` keeps the (one-off) cost
         # inside the benchmark suite's measured region.
-        self._adjacency: dict[int, tuple[_CandidateRecord, ...]] = {}
+        #
+        # A caller MAY pass a prebuilt `adjacency` (Story 14.4 island migration): it
+        # is a pure function of the graph + the SAC/descent filter params, so it is
+        # identical across a parallel worker's migration rounds. Reusing it skips the
+        # ~8 s `_build_adjacency` rebuild each round (measured on the r20 graph) — the
+        # dominant per-round cost. The caller is responsible for passing an adjacency
+        # built from the *same* graph + params; `run()` reuses a non-empty table
+        # verbatim, so a mismatched one would silently corrupt results.
+        self._adjacency: AdjacencyTable = adjacency if adjacency is not None else {}
         # Batched-draw buffer (Story 12.3): uniform [0, 1) values, refilled by
         # `_next_uniform` in `_RNG_CHUNK`-sized native calls and held as a plain
         # list (one exact `.tolist()` per refill) so per-draw consumption is a
@@ -296,6 +329,16 @@ class GraspSolver:
     def best_so_far(self) -> list[Solution]:
         """Current top-N (Architecture §Cat 5b: always-readable anytime view)."""
         return self._tracker.current_top()
+
+    @property
+    def adjacency(self) -> AdjacencyTable:
+        """The per-node adjacency table (empty until `run()` builds it, or injected).
+
+        Exposed so a parallel worker can build it once and pass it back into the
+        next round's solver (see the `adjacency` constructor arg) instead of paying
+        the ~8 s `_build_adjacency` rebuild every round.
+        """
+        return self._adjacency
 
     def run(self) -> list[Solution]:
         """Drive GRASP iterations to the first §Cat 5e termination; return final top-N.
@@ -332,8 +375,10 @@ class GraspSolver:
             return self._tracker.current_top()
         # Once-per-solve precompute (Story 12.1): the contracted graph is
         # immutable for the duration of a solve, so every walk-state-independent
-        # part of RCL construction is hoisted out of the hot loop here.
-        self._adjacency = self._build_adjacency()
+        # part of RCL construction is hoisted out of the hot loop here. Skipped
+        # when a prebuilt table was injected (Story 14.4 island-migration reuse).
+        if not self._adjacency:
+            self._adjacency = self._build_adjacency()
         callback = self._progress_callback
         stagnation_iters = self._params.stagnation_iters
         time_budget = self._params.time_budget

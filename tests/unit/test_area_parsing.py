@@ -94,6 +94,8 @@ def _check_solver_options(
     time_budget: float = 600.0,
     stagnation_iters: int | None = None,
     progress_interval: float = 5.0,
+    workers: int = 1,
+    merge_interval: int = 250_000,
     max_descent_slope: float | None = None,
 ) -> None:
     """Call `validate_solver_options` with in-range defaults; tests override one field."""
@@ -110,6 +112,8 @@ def _check_solver_options(
         time_budget=time_budget,
         stagnation_iters=stagnation_iters,
         progress_interval=progress_interval,
+        workers=workers,
+        merge_interval=merge_interval,
         max_descent_slope=max_descent_slope,
     )
 
@@ -131,6 +135,12 @@ def test_validate_solver_options_accepts_boundary_values() -> None:
     _check_solver_options(max_descent_slope=None)
     _check_solver_options(max_descent_slope=0.01)
     _check_solver_options(max_descent_slope=2.0)
+    # Story 14.4: --workers >= 1 (1 = single-process default; any positive count ok).
+    _check_solver_options(workers=1)
+    _check_solver_options(workers=8)
+    # --merge-interval >= 0 (0 = migration disabled; any positive cadence ok).
+    _check_solver_options(merge_interval=0)
+    _check_solver_options(merge_interval=100_000)
 
 
 @pytest.mark.parametrize(
@@ -178,6 +188,11 @@ def test_validate_solver_options_accepts_boundary_values() -> None:
         (lambda: _check_solver_options(time_budget=0.0), "--time-budget"),
         (lambda: _check_solver_options(time_budget=-1.0), "--time-budget"),
         (lambda: _check_solver_options(stagnation_iters=-1), "--stagnation-iters"),
+        # Story 14.4: --workers < 1 would break ProcessPoolExecutor / the budget split.
+        (lambda: _check_solver_options(workers=0), "--workers"),
+        (lambda: _check_solver_options(workers=-2), "--workers"),
+        # --merge-interval < 0 is nonsensical (0 legitimately disables migration).
+        (lambda: _check_solver_options(merge_interval=-1), "--merge-interval"),
         # Story 10.2 flag: NaN/inf would slip past the IEEE-754 descent comparison;
         # 0/negative would forbid every descent (drop the flag to disable instead).
         (lambda: _check_solver_options(max_descent_slope=float("nan")), "--max-descent-slope"),
@@ -240,6 +255,61 @@ def test_query_cli_rejects_nonfinite_progress_interval() -> None:
     )
     assert isinstance(result.exception, BadCLIArgError)
     assert "--progress-interval" in result.exception.user_message
+
+
+def test_query_cli_rejects_non_positive_workers() -> None:
+    """`--workers 0` / negative surfaces BadCLIArgError (Story 14.4) → exit-2 contract."""
+    runner = CliRunner()
+    for bad in ("0", "-1"):
+        result = runner.invoke(
+            query_cli, ["--center", "45.0716,6.1079", "--radius", "10", "--workers", bad]
+        )
+        assert isinstance(result.exception, BadCLIArgError), (
+            f"--workers {bad} should raise BadCLIArgError; got {result.exception!r}"
+        )
+        assert "--workers" in result.exception.user_message
+
+
+def test_query_cli_threads_workers_to_run_parallel_grasp(tmp_path: pathlib.Path) -> None:
+    """`--workers` reaches `run_parallel_grasp`'s `workers` arg (Story 14.4 CLI-layer plumbing).
+
+    Patches the pieces so no cache/solve/network work happens: `check_coverage` and the
+    stage functions are stubbed, and `run_parallel_grasp` is replaced with a spy that
+    records the `workers` value it was called with, then raises to stop the run.
+    """
+    captured: dict[str, object] = {}
+
+    def fake_run_parallel(*args: object, **kwargs: object) -> object:
+        # positional: (contracted, params, seed, workers)
+        captured["workers"] = args[3] if len(args) > 3 else kwargs.get("workers")
+        raise RuntimeError("stop after run_parallel_grasp call")
+
+    runner = CliRunner()
+    with (
+        mock.patch("steeproute.cli.query.check_coverage", return_value=mock.MagicMock()),
+        mock.patch("steeproute.cli.query.operationalize_graph", return_value=mock.MagicMock()),
+        mock.patch("steeproute.cli.query.filter_trails", return_value=mock.MagicMock()),
+        mock.patch("steeproute.cli.query.detect_climbs", return_value=[mock.MagicMock()]),
+        mock.patch("steeproute.cli.query.contract_climbs", return_value=mock.MagicMock()),
+        mock.patch("steeproute.cli.query.emit_osm_age_warning"),
+        mock.patch("steeproute.cli.query.run_parallel_grasp", side_effect=fake_run_parallel),
+    ):
+        result = runner.invoke(
+            query_cli,
+            [
+                "--center",
+                "45.0716,6.1079",
+                "--radius",
+                "10",
+                "--cache-dir",
+                str(tmp_path),
+                "--workers",
+                "3",
+            ],
+            catch_exceptions=True,
+        )
+    assert isinstance(result.exception, RuntimeError), result.output
+    assert captured["workers"] == 3
 
 
 def test_query_cli_happy_path_passes_parsing_then_hits_coverage_check(

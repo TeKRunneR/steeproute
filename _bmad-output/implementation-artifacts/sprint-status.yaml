@@ -28,7 +28,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-07-07  # story 14.3 done (post-review hardening: retry/backoff, fail-fast cancellation)
+last_updated: 2026-07-14  # story 14.4 done (post-review hardening + perf follow-up)
 
 project: bmad-test
 project_key: NOKEY
@@ -151,7 +151,7 @@ development_status:
   14-1-vectorize-elevation-sampling: done
   14-2-vectorize-and-de-churn-pipeline-loops: done
   14-3-parallelize-dem-tile-fetch: done
-  14-4-parallel-grasp-restarts: backlog
+  14-4-parallel-grasp-restarts: done
   14-5-reduce-osmnx-ingestion-cpu-cheap-levers: backlog
   14-6-r50-probe-re-measure-and-what-next: backlog
   epic-14-retrospective: optional

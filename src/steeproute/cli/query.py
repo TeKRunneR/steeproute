@@ -55,6 +55,7 @@ from steeproute.cli._shared import (
     j_max_option,
     l_connector_option,
     max_descent_slope_option,
+    merge_interval_option,
     min_climb_ground_length_option,
     min_climb_slope_option,
     n_option,
@@ -73,6 +74,7 @@ from steeproute.cli._shared import (
     validate_area_size,
     validate_solver_options,
     verbose_option,
+    workers_option,
 )
 from steeproute.models import (
     Area,
@@ -89,6 +91,12 @@ from steeproute.pipeline.graph import contract_climbs
 from steeproute.pipeline.osm import filter_trails
 from steeproute.progress import ProgressCallback, ProgressEvent, StageProgress, throttle
 from steeproute.solver.grasp import STAGNATION_ITERS_DEFAULT_PLACEHOLDER, GraspSolver
+from steeproute.solver.parallel import (
+    ParallelGraspFailed,
+    ParallelGraspInterrupted,
+    ParallelProgress,
+    run_parallel_grasp,
+)
 from steeproute.validator import validate
 
 # Concrete fallback when `--iter-budget` is unset: the iteration ceiling that
@@ -122,6 +130,8 @@ DEFAULT_ITER_BUDGET: int = 2000
 @iter_budget_option
 @time_budget_option
 @stagnation_iters_option
+@workers_option
+@merge_interval_option
 @progress_interval_option
 @output_dir_option
 @verbose_option
@@ -149,6 +159,8 @@ def cli(
     iter_budget: int | None,
     time_budget: float,
     stagnation_iters: int | None,
+    workers: int,
+    merge_interval: int,
     progress_interval: float,
     output_dir: pathlib.Path,
     verbose: bool,
@@ -185,6 +197,8 @@ def cli(
         time_budget=time_budget,
         stagnation_iters=stagnation_iters,
         progress_interval=progress_interval,
+        workers=workers,
+        merge_interval=merge_interval,
         max_descent_slope=max_descent_slope,
     )
     # Create the output directory now so an unusable `--output-dir` fails as a
@@ -258,10 +272,16 @@ def cli(
     # metric/solver path and `output.render`, so the metric box, the solver
     # objective, and the plotted curve all read one canonical profile (box==curve).
     with stage_progress.stage("elevation-reshape", note="stages 6-7"):
+        # `consume=True`: reshape the cache-loaded graph in place, skipping one
+        # full-graph copy (~5 s on an r20 graph). Safe because `prepared.graph` is
+        # freshly loaded here and never read again after this call — only
+        # `operational_graph` (its reshaped self) and `prepared.manifest` are used
+        # downstream. Output is identical to the copying path.
         operational_graph = operationalize_graph(
             prepared.graph,
             elevation_smoothing_m=elevation_smoothing,
             elevation_deadband_m=elevation_deadband,
+            consume=True,
         )
 
     # SAC cap-aware contraction (Story 6.1, FR4/FR10): drop above-cap edges
@@ -352,10 +372,71 @@ def cli(
                 l_connector=l_connector,
                 annotate_junctions=params.start_at_junction,
             )
-        solver = GraspSolver(
-            contracted, params, np.random.default_rng(seed), progress_callback=progress_callback
+        if workers == 1:
+            # Single-process path — byte-identical to pre-14.4 (FR29/NFR4). The
+            # parallel machinery below is never entered at the default `--workers 1`,
+            # so goldens and Story 7.3's live-best-so-far interrupt flush are
+            # preserved bit-for-bit.
+            solver = GraspSolver(
+                contracted, params, np.random.default_rng(seed), progress_callback=progress_callback
+            )
+            solutions = solver.run()
+            status = solver.convergence_status
+            convergence_iteration = solver.convergence_iteration
+        else:
+            # Parallel GRASP restarts (Story 14.4): fan across `workers` processes
+            # with island-model elite migration every `--merge-interval` iterations,
+            # merging into one top-N. Deterministic per `(seed, workers,
+            # merge_interval)`, but differs from `--workers 1` by design (independent
+            # seed streams + partitioned budget). Purely CLI-layer orchestration — no
+            # `SolverParams`/cache impact. Live aggregate progress crosses back via a
+            # queue (suppressed by `--quiet`).
+            try:
+                parallel = run_parallel_grasp(
+                    contracted,
+                    params,
+                    seed,
+                    workers,
+                    merge_interval=merge_interval,
+                    progress_interval=progress_interval,
+                    on_progress=None if quiet else _render_parallel_progress,
+                )
+                solutions = parallel.solutions
+                status = parallel.convergence_status
+                convergence_iteration = parallel.convergence_iteration
+            except ParallelGraspFailed as exc:
+                # A worker died (typically OOM — each worker holds its own graph copy,
+                # so memory grows O(workers)). Fall back to a correct single-process
+                # solve rather than crash; `solver` is assigned so a Ctrl-C during the
+                # fallback still lands in the interrupt handler below.
+                click.echo(
+                    f"warning: parallel solve failed ({exc}); falling back to "
+                    f"--workers 1. Try fewer --workers.",
+                    err=True,
+                )
+                solver = GraspSolver(
+                    contracted,
+                    params,
+                    np.random.default_rng(seed),
+                    progress_callback=progress_callback,
+                )
+                solutions = solver.run()
+                status = solver.convergence_status
+                convergence_iteration = solver.convergence_iteration
+    except ParallelGraspInterrupted as interrupt:
+        # N>1 Ctrl-C (§Cat 5b): render the top-N salvaged from workers that had
+        # already returned, tagged `interrupted`, and exit 130. In-flight workers'
+        # partial best-so-far can't be recovered across the process boundary — a
+        # documented degradation from the single-process flush below.
+        ctx = click.get_current_context()
+        partial = interrupt.partial
+        if contracted is None or not partial.solutions:
+            click.echo("interrupted before any solution found", err=True)
+            ctx.exit(130)
+        _validate_and_render(
+            partial.solutions, "interrupted", contracted, partial.convergence_iteration
         )
-        solutions = solver.run()
+        ctx.exit(130)
     except KeyboardInterrupt:
         ctx = click.get_current_context()
         if solver is None or contracted is None or not solver.best_so_far:
@@ -376,11 +457,11 @@ def cli(
         )
         ctx.exit(130)
 
-    # §Cat 5e: the solver records which termination fired (`converged` on
-    # stagnation, `budget-exhausted` on iter/time budget; `interrupted` is set on
-    # the Ctrl-C path above).
+    # §Cat 5e: the termination that fired (`converged` on stagnation,
+    # `budget-exhausted` on iter/time budget; `interrupted` on the Ctrl-C paths
+    # above). For N>1 this is the aggregated status from `run_parallel_grasp`.
     validated, degradation = _validate_and_render(
-        solutions, solver.convergence_status, contracted, solver.convergence_iteration
+        solutions, status, contracted, convergence_iteration
     )
 
     # End-of-run summary on stdout (Story 7.5, FR22): printed after render on the
@@ -394,7 +475,10 @@ def cli(
         _run_summary(
             validated,
             params,
-            solver.convergence_status,
+            status,
+            workers,
+            merge_interval,
+            sum(s.objective for s in solutions),
             time.perf_counter() - start,
             degradation,
         )
@@ -421,6 +505,24 @@ def _render_progress(event: ProgressEvent) -> None:
     print(
         f"progress: iter={event.iteration} best_objective={event.best_objective:.1f} "
         f"elapsed={event.elapsed_s:.1f}s eta={eta} stagnation={event.stagnation_counter}"
+    )
+
+
+def _render_parallel_progress(event: ParallelProgress) -> None:
+    """Aggregated live progress for the parallel solve (Story 14.4, §Cat 8).
+
+    Emitted from the parent on the `--progress-interval` cadence, folding the latest
+    per-worker snapshots into one line. `best_worker_objective` is the *leading
+    worker's* running top-N sum, not the merged result — it understates the final
+    answer (which combines all workers); the run summary's `total_objective` is the
+    real, comparable figure. Labelled as such so it can't be misread as the merged
+    objective. Uses the stable `progress:` sentinel like the single-process renderer;
+    a pure display side-effect (`--quiet` suppresses it).
+    """
+    print(
+        f"progress: workers={event.workers_reporting}/{event.workers_total} "
+        f"iters={event.total_iterations} best_worker_objective={event.best_worker_objective:.1f} "
+        f"elapsed={event.elapsed_s:.1f}s"
     )
 
 
@@ -489,6 +591,9 @@ def _run_summary(
     validated: ValidatedRouteSet,
     params: SolverParams,
     status: ConvergenceStatus,
+    workers: int,
+    merge_interval: int,
+    total_objective: float,
     wall_clock_s: float,
     degradation: str | None,
 ) -> str:
@@ -502,6 +607,14 @@ def _run_summary(
     code does (§Cat 6c). The `degradation:` line is included only for a degraded
     set (`routes_returned < N`); its value is the explanation already embedded in
     each report, passed in — never recomputed. `seed=none` marks an unseeded run.
+    `workers` is the CLI-layer parallel-restart count (Story 14.4), reported
+    alongside the params it orchestrates; it is not a `SolverParams` field, so it is
+    passed in separately. `iter_budget` shown is always the user's *total* (workers
+    each ran a `total // workers` share — an implementation detail, not reported).
+    `total_objective` is the summed objective of the returned top-N — the same
+    quantity the progress line tracks — so a parallel run's final merged result can
+    be compared like-for-like against a single-process run (the parallel *progress*
+    line only shows the leading worker's running sum, which understates the merge).
     """
     returned = len(validated.routes)
     failures = sum(1 for r in validated.routes if not r.validation.passed)
@@ -511,9 +624,11 @@ def _run_summary(
         (
             f"parameters: theta={params.theta} j_max={params.j_max} n={params.n} "
             f"seed={seed} iter_budget={params.iter_budget} "
-            f"time_budget={params.time_budget} stagnation_iters={params.stagnation_iters}"
+            f"time_budget={params.time_budget} stagnation_iters={params.stagnation_iters} "
+            f"workers={workers} merge_interval={merge_interval}"
         ),
         f"routes_returned: {returned}/{params.n}",
+        f"total_objective: {total_objective:.1f}",
         f"validation_failures: {failures}",
         f"convergence_status: {status}",
     ]

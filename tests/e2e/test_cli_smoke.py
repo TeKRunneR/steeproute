@@ -34,6 +34,8 @@ QUERY_FLAGS = [
     "--iter-budget",
     "--time-budget",
     "--stagnation-iters",
+    "--workers",
+    "--merge-interval",
     "--progress-interval",
     "--output-dir",
     "--verbose",
@@ -184,6 +186,22 @@ def test_query_negative_min_climb_slope_exits_2() -> None:
     assert result.returncode == 2, result.stderr
     assert result.stderr.startswith("error:")
     assert "--min-climb-slope" in result.stderr
+
+
+def test_query_zero_workers_exits_2() -> None:
+    """Story 14.4: `--workers 0` → BadCLIArgError → exit 2 (§Cat 10)."""
+    result = _run_cli(
+        "steeproute",
+        "--center",
+        "45.0716,6.1079",
+        "--radius",
+        "10",
+        "--workers",
+        "0",
+    )
+    assert result.returncode == 2, result.stderr
+    assert result.stderr.startswith("error:")
+    assert "--workers" in result.stderr
 
 
 def test_setup_dem_path_flag_removed() -> None:

@@ -79,7 +79,7 @@ _MIN_METRIC_LENGTH_M: float = 1e-6
 _DESCENT_WINDOW_M: float = 30.0
 
 
-def compute_edge_metrics(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
+def compute_edge_metrics(graph: nx.MultiDiGraph, *, inplace: bool = False) -> nx.MultiDiGraph:
     """Stage 7: attach `length_m`, `d_plus_m`, `d_minus_m`, `avg_gradient`, `max_windowed_descent_grad` per edge.
 
     Args:
@@ -87,9 +87,11 @@ def compute_edge_metrics(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
             from stages 5-6 with ≥ 2 entries of finite `(lat, lon, elevation_m)`.
 
     Returns:
-        A new MultiDiGraph; the input is never mutated. Upstream attributes
-        (`geometry`, `vertices_resampled`, `sac_scale`, `highway`, `osm_way_id`)
-        are carried through unchanged.
+        A new MultiDiGraph; the input is never mutated (unless `inplace=True` — the
+        `operationalize_graph` single-working-copy optimization; safe because metric
+        attributes are only ever added, never read back during the computation).
+        Upstream attributes (`geometry`, `vertices_resampled`, `sac_scale`,
+        `highway`, `osm_way_id`) are carried through unchanged.
 
     Vectorization (Story 14.2): every edge's `vertices_resampled` is gathered
     into ONE flat `(V, 3)` array and all four metrics are computed with flat numpy
@@ -101,7 +103,7 @@ def compute_edge_metrics(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
     ~1.7e-10 on the fixture; `d_plus_m`/`d_minus_m` were exactly bit-identical) —
     small enough that the regression goldens stay byte-identical, no rebake needed.
     """
-    out: nx.MultiDiGraph = graph.copy()
+    out: nx.MultiDiGraph = graph if inplace else graph.copy()
     keys: list[tuple[int, int, int]] = []
     arrays: list[np.ndarray] = []
     for u, v, k, data in out.edges(data=True, keys=True):

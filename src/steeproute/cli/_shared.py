@@ -192,6 +192,8 @@ def validate_solver_options(
     time_budget: float,
     stagnation_iters: int | None,
     progress_interval: float,
+    workers: int,
+    merge_interval: int,
     max_descent_slope: float | None = None,
 ) -> None:
     """Query-side solver-parameter sanity checks at the CLI boundary (§Cat 10 → exit 2).
@@ -217,6 +219,13 @@ def validate_solver_options(
     nonsensical (`0` legitimately disables the check). `--stagnation-iters` may
     be `None` here (unset); the query CLI then resolves it to the solver's
     default window.
+
+    `workers` (Story 14.4) never enters `SolverParams` — it is CLI-layer
+    orchestration only (so it can't invalidate the content-hashed cache) — but is
+    validated here with its solver-flag siblings: `< 1` is rejected because both
+    `ProcessPoolExecutor` and the per-worker budget split require `>= 1`.
+    `merge_interval` (island-migration cadence, parallel mode) is likewise
+    CLI-layer-only; `< 0` is rejected (`0` legitimately disables migration).
 
     Checks are fail-fast (first violation wins) and ordered finiteness-then-range
     so a `nan` is reported as non-finite rather than as a confusing range message.
@@ -273,6 +282,16 @@ def validate_solver_options(
     # `0` disables the stagnation check (§Cat 5e); negative is nonsensical.
     if stagnation_iters is not None and stagnation_iters < 0:
         raise BadCLIArgError(f"--stagnation-iters {stagnation_iters} must be >= 0.")
+    # Parallel GRASP restarts (Story 14.4). `1` = today's single-process path; `>= 1`
+    # required so `ProcessPoolExecutor` / the per-worker budget split never see `0`.
+    # Purely CLI-layer — never enters `SolverParams`, so no cache invalidation.
+    if workers < 1:
+        raise BadCLIArgError(f"--workers {workers} must be >= 1.")
+    # `0` disables island migration (independent workers); negative is nonsensical.
+    # Only meaningful for `--workers > 1`, but validated unconditionally so a bad
+    # value fails fast at the boundary regardless of worker count.
+    if merge_interval < 0:
+        raise BadCLIArgError(f"--merge-interval {merge_interval} must be >= 0.")
     # `--max-descent-slope` is opt-in: `None` (unset) = off, no check. When set it
     # must be a finite, strictly positive gradient — a `0`/negative cap would forbid
     # *every* descent (nonsensical; drop the flag to disable), and NaN/inf would slip
@@ -477,6 +496,39 @@ stagnation_iters_option = click.option(
     help=(
         "Stop after this many consecutive iterations with no top-N improvement; "
         "0 disables (default: 100, tunable post-baseline)."
+    ),
+)
+
+workers_option = click.option(
+    "--workers",
+    type=click.INT,
+    default=1,
+    show_default=True,
+    help=(
+        "Number of parallel processes for independent GRASP restarts. 1 (default) "
+        "runs the single-process path with byte-identical output; N>1 splits the "
+        "iteration budget across N cores and is reproducible per (seed, workers) but "
+        "differs by design from --workers 1. --time-budget/--stagnation-iters apply "
+        "per worker."
+    ),
+)
+
+# Default island-migration cadence for parallel mode (total iterations between
+# merges). ~4 rounds at a 1M budget; a no-op single final merge below ~this budget.
+# Tunable via --merge-interval; 0 disables migration (independent workers).
+MERGE_INTERVAL_DEFAULT: int = 250_000
+
+merge_interval_option = click.option(
+    "--merge-interval",
+    type=click.INT,
+    default=MERGE_INTERVAL_DEFAULT,
+    show_default=True,
+    help=(
+        "Parallel mode only (--workers > 1): merge the workers' best routes and "
+        "re-seed them every N total iterations (island-model migration). Lower = "
+        "more cooperation, so the parallel result reliably matches/beats "
+        "single-process instead of occasionally drifting worse. 0 disables migration "
+        "(independent workers, one final merge)."
     ),
 )
 

@@ -450,7 +450,7 @@ def test_osm_load_injects_truststore_before_fetch(
     """
     injected: list[bool] = []
     monkeypatch.setattr(
-        "steeproute.pipeline.osm.truststore.inject_into_ssl",
+        "truststore.inject_into_ssl",
         lambda: injected.append(True),
     )
 
@@ -458,7 +458,7 @@ def test_osm_load_injects_truststore_before_fetch(
         assert injected, "truststore.inject_into_ssl() must run before the OSM fetch"
         return nx.MultiDiGraph()
 
-    monkeypatch.setattr("steeproute.pipeline.osm.osmnx.graph_from_point", _fake_graph_from_point)
+    monkeypatch.setattr("osmnx.graph_from_point", _fake_graph_from_point)
     _ = osm_load(Area(center=(45.260, 5.788), radius_km=2.0))
     assert injected == [True]
 

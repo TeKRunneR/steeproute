@@ -223,6 +223,7 @@ def operationalize_graph(
     *,
     elevation_smoothing_m: float = ELEVATION_SMOOTHING_DEFAULT_M,
     elevation_deadband_m: float = ELEVATION_DEADBAND_DEFAULT_M,
+    consume: bool = False,
 ) -> nx.MultiDiGraph:
     """Query-side stages 6-7: reshape the cached raw-elevation graph into the operational graph.
 
@@ -238,16 +239,35 @@ def operationalize_graph(
     `vertices_resampled` that the metrics sum over is also what `output.render`
     plots, so the metric box, the solver objective, and the displayed curve all
     read one profile. `cli/query.py` calls this before climb detection and feeds
-    the returned graph to `output.render`. Pure — the input graph is never mutated.
+    the returned graph to `output.render`. Pure — the input graph is never mutated,
+    unless `consume=True` (see below).
 
     Args:
         graph: the cached post-stage-5 graph (raw `vertices_resampled`).
         elevation_smoothing_m: graph-Laplacian smoothing strength in meters.
         elevation_deadband_m: deadband hysteresis floor in meters (0 = off).
+        consume: when True, reshape `graph` in place instead of copying it first,
+            saving one full-graph `copy()` (~5 s on an r20 graph). The caller then
+            forfeits `graph` — it is mutated into the operational graph. Only safe
+            when the caller owns `graph` exclusively and never reads it again; the
+            sole such caller is `cli/query.py`, which passes a freshly cache-loaded
+            graph it discards after this call. Default False keeps the pure "input
+            never mutated" contract every other caller (and the purity test) relies
+            on. The returned graph is identical either way; only input aliasing
+            differs, so results are byte-for-byte unaffected.
     """
-    reshaped = graph_smooth_elevation(graph, elevation_smoothing_m)
-    reshaped = graph_deadband_elevation(reshaped, elevation_deadband_m)
-    return compute_edge_metrics(reshaped)
+    # One working copy, threaded through the three stages `inplace=True`, instead
+    # of a fresh `graph.copy()` inside each (~5 s per copy on an r20 graph — ~10 s
+    # of pure redundant copying eliminated). Output is byte-identical to the
+    # copy-per-stage form: the stages read each edge's vertices into local arrays
+    # before writing back, so mutating one shared copy in sequence is equivalent.
+    # `consume=True` drops even this last top-level copy when the caller owns the
+    # graph and discards it (the query CLI); the default copy preserves the "input
+    # never mutated" contract.
+    working = graph if consume else graph.copy()
+    working = graph_smooth_elevation(working, elevation_smoothing_m, inplace=True)
+    working = graph_deadband_elevation(working, elevation_deadband_m, inplace=True)
+    return compute_edge_metrics(working, inplace=True)
 
 
 def _assert_non_empty(

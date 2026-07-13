@@ -107,6 +107,38 @@ def test_compute_pipeline_content_hash_changes_when_a_pipeline_file_changes(
     assert before != after
 
 
+def test_compute_pipeline_content_hash_ignores_solver_changes(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `solver/` edit must NOT shift the content hash (Story 14.4 cache-safety).
+
+    `--workers` is plumbed entirely through `solver/` + `cli/`, neither of which is
+    in `_PIPELINE_CONTENT_GLOBS` (`pipeline/**` + `models.py`). This pins the claim
+    that adding `solver/parallel.py` — and any future solver-layer change — leaves
+    every prepared cache valid (no invalidation, no golden rebake), the reason the
+    story deliberately kept `workers` out of `SolverParams`/`models.py`.
+    """
+    fake_pkg = tmp_path / "steeproute"
+    fake_pkg.mkdir()
+    (fake_pkg / "cache.py").write_text("# fake module to anchor __file__\n", encoding="utf-8")
+    (fake_pkg / "models.py").write_text("# placeholder models\n", encoding="utf-8")
+    pipeline_dir = fake_pkg / "pipeline"
+    pipeline_dir.mkdir()
+    (pipeline_dir / "__init__.py").write_text("# placeholder orchestrator\n", encoding="utf-8")
+    solver_dir = fake_pkg / "solver"
+    solver_dir.mkdir()
+    (solver_dir / "parallel.py").write_text("# workers=1\n", encoding="utf-8")
+
+    monkeypatch.setattr(cache_mod, "__file__", str(fake_pkg / "cache.py"))
+
+    before = compute_pipeline_content_hash()
+    (solver_dir / "parallel.py").write_text("# workers=N MODIFIED\n", encoding="utf-8")
+    after = compute_pipeline_content_hash()
+
+    assert before == after
+
+
 def _build_manifest(**overrides: object) -> Manifest:
     defaults: dict[str, object] = {
         "area": Area(center=(45.0716, 6.1079), radius_km=2.0),

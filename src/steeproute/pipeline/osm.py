@@ -8,11 +8,15 @@ from __future__ import annotations
 import math
 
 import networkx as nx
-import osmnx
-import requests
 import shapely
-import truststore
 
+# NOTE: osmnx (which transitively drags in geopandas + pandas, ~2 s), requests and
+# truststore are imported lazily inside the fetch path (`osm_load` /
+# `_ensure_sac_scale_in_useful_tags`) — they serve only stage 1. `pipeline/__init__`
+# imports this module, so every consumer of any pipeline submodule (including
+# spawned solver workers that only need `max_sac_rank`/`parse_difficulty_cap`)
+# would otherwise pay the full fetch stack at import time (~4 s of the ~5 s
+# per-worker import chain measured at r20 — Story 14.4 follow-up).
 from steeproute.errors import BadCLIArgError, DataSourceUnavailableError
 from steeproute.models import Area
 from steeproute.pipeline._common import empty_like
@@ -70,6 +74,11 @@ def osm_load(area: Area) -> nx.MultiDiGraph:
             call. The original exception is chained via `raise ... from exc` so
             `--verbose` can surface its `repr` on the detail line.
     """
+    # Deferred fetch-stack imports — see the module-level NOTE above the imports.
+    import osmnx
+    import requests
+    import truststore
+
     _validate_area(area)
     _ensure_sac_scale_in_useful_tags()
     # Verify Overpass's TLS against the OS trust store rather than certifi's
@@ -198,6 +207,8 @@ def _ensure_sac_scale_in_useful_tags() -> None:
     Without this, every fetched edge has sac_scale=None regardless of how the
     area is tagged in OSM — silently breaking filter_trails downstream.
     """
+    import osmnx  # deferred — see the module-level NOTE above the imports
+
     if "sac_scale" not in osmnx.settings.useful_tags_way:
         osmnx.settings.useful_tags_way = list(osmnx.settings.useful_tags_way) + ["sac_scale"]
 

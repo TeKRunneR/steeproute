@@ -24,6 +24,8 @@ QUERY_FLAGS = [
     "--iter-budget",
     "--time-budget",
     "--stagnation-iters",
+    "--workers",
+    "--merge-interval",
     "--progress-interval",
     "--output-dir",
     "--verbose",
@@ -63,6 +65,8 @@ QUERY_ONLY_FLAGS = [
     "--iter-budget",
     "--time-budget",
     "--stagnation-iters",
+    "--workers",
+    "--merge-interval",
     "--progress-interval",
     "--output-dir",
 ]

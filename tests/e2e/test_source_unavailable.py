@@ -192,7 +192,10 @@ def test_dem_source_unreachable(tmp_path: pathlib.Path) -> None:
         exit_code, stderr = _invoke_with_wrapper(args)
 
     assert exit_code == 2
-    assert stderr.startswith("error: DEM source unreachable"), stderr
+    # Story 14.3's tile-fetch retries emit `WARNING: ... retrying` lines to stderr
+    # before the final error, so the error line is no longer the *first* line —
+    # assert on the line itself (same style as the `--verbose` sibling test).
+    assert "error: DEM source unreachable" in stderr, stderr
 
 
 def test_dem_source_unreachable_verbose_surfaces_detail(tmp_path: pathlib.Path) -> None:
@@ -224,7 +227,7 @@ def test_osm_network_failure(tmp_path: pathlib.Path) -> None:
     with (
         patch("steeproute.cli.setup.resolve_dem", _resolve_dem_from_fixture),
         patch(
-            "steeproute.pipeline.osm.osmnx.graph_from_point",
+            "osmnx.graph_from_point",
             side_effect=requests.ConnectionError("Failed to establish a new connection"),
         ),
     ):
@@ -240,7 +243,7 @@ def test_osm_network_failure_verbose_surfaces_detail(tmp_path: pathlib.Path) -> 
     with (
         patch("steeproute.cli.setup.resolve_dem", _resolve_dem_from_fixture),
         patch(
-            "steeproute.pipeline.osm.osmnx.graph_from_point",
+            "osmnx.graph_from_point",
             side_effect=requests.ConnectionError("Failed to establish a new connection"),
         ),
     ):
@@ -258,7 +261,7 @@ def test_osm_pipeline_wrapping_catches_requests_timeout(tmp_path: pathlib.Path) 
     with (
         patch("steeproute.cli.setup.resolve_dem", _resolve_dem_from_fixture),
         patch(
-            "steeproute.pipeline.osm.osmnx.graph_from_point",
+            "osmnx.graph_from_point",
             side_effect=requests.exceptions.Timeout("Read timeout"),
         ),
     ):

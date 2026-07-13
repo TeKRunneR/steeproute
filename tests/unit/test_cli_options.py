@@ -19,6 +19,7 @@ from steeproute.cli._shared import (
     iter_budget_option,
     j_max_option,
     l_connector_option,
+    merge_interval_option,
     min_climb_ground_length_option,
     n_option,
     osm_age_warn_days_option,
@@ -32,6 +33,7 @@ from steeproute.cli._shared import (
     time_budget_option,
     untagged_trails_option,
     verbose_option,
+    workers_option,
 )
 from steeproute.cli.query import cli as query_cli
 from steeproute.cli.setup import cli as setup_cli
@@ -80,6 +82,8 @@ ALL_DECORATORS = [
     iter_budget_option,
     time_budget_option,
     stagnation_iters_option,
+    workers_option,
+    merge_interval_option,
     progress_interval_option,
     output_dir_option,
     verbose_option,
