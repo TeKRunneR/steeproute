@@ -28,7 +28,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-07-14  # story 14.4 done (post-review hardening + perf follow-up)
+last_updated: 2026-07-14  # story 14.5 done (measured negative — no code change); 14.6 + epic-14 deferred to work future-ideas.md next
 
 project: bmad-test
 project_key: NOKEY
@@ -147,11 +147,11 @@ development_status:
   13-5-re-measure-and-epic-close-out: deferred    # subsumed by 14-6
   epic-13-retrospective: optional
 
-  epic-14: in-progress        # Setup + Solver Scaling toward r50 (correct-course 2026-07-06)
+  epic-14: done        # Setup + Solver Scaling toward r50 (correct-course 2026-07-06); 14-6 deferred
   14-1-vectorize-elevation-sampling: done
   14-2-vectorize-and-de-churn-pipeline-loops: done
   14-3-parallelize-dem-tile-fetch: done
   14-4-parallel-grasp-restarts: done
-  14-5-reduce-osmnx-ingestion-cpu-cheap-levers: backlog
-  14-6-r50-probe-re-measure-and-what-next: backlog
+  14-5-reduce-osmnx-ingestion-cpu-cheap-levers: done
+  14-6-r50-probe-re-measure-and-what-next: deferred    # 2026-07-14: parked to work future-ideas.md items first; revisit via correct-course when resumed
   epic-14-retrospective: optional
