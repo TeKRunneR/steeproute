@@ -50,8 +50,37 @@ on the Epic 14 r50 probe (Story 14.6) supplying the residual costs that justify 
 through its own correct-course.
 
 ## App
-Make an actual web app with a UI to:
-- Pick a center point on a map + radius
-- Run the setup + solver
-- View result routes
-- View results of old runs
+Make a thin web UI over the two existing CLIs (setup + solver): pick a center
+point + radius on a map, run the pipeline, view result routes, browse old runs.
+
+**Brainstormed 2026-07-14** (see `../brainstorming/brainstorming-session-2026-07-14-1437.md`).
+Key realization: this is *not* a stateless form over two CLIs. The fire-and-forget
++ return-to-live-progress requirement makes its heart a **single-worker backend job
+runner**; everything else is thin and reuses existing output (the query CLI already
+renders the Leaflet HTML report).
+
+**Settled decisions:**
+- **Stack:** FastAPI backend + plain HTML/JS/Leaflet frontend.
+- **Orchestration:** deliberate **manual two-step** — build region (setup job),
+  then query job. No silent/auto setup on uncached areas.
+- **Config form:** basic/advanced split, **all** flags accessible; app defaults =
+  quality demo params (not the low CLI defaults).
+- **Jobs:** fire-and-forget; **one run at a time** (single-worker serial queue,
+  queuing multiple is desired); must return to live progress of any run anytime.
+- **Progress:** scrape stdout for all **three** flavours (GRASP `ProgressEvent`s,
+  query-stage start/end+timing, setup stages) into one per-job **SSE** stream;
+  minimal UI to start (phase + stage + log tail + best-so-far cost). Stop button =
+  best-so-far flush.
+- **Result view:** reuse the existing Leaflet HTML report as-is (iframe).
+- **Persistence:** per-job JSON files (index doubles as the runs library); on
+  server restart mark any `running` job `failed (interrupted)`. SQLite later if needed.
+
+**The crux / only real risk:** unified stdout progress scraping. First
+implementation task = a **stdout format inventory** spike (capture real setup +
+query runs, pin the line shapes) before building the classifier.
+
+**Build sequence:** (1) format-inventory spike → (2) backend skeleton (queue +
+subprocess + per-job JSON + `GET /jobs`) → (3) progress plumbing (classifier →
+SSE) → (4) frontend run+watch (config form → live progress → return-to-progress)
+→ (5) map picker + cached-region overlay + build button → (6) run library
+(list / open via iframe / re-run-with-tweaks).
