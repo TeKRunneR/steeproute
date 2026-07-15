@@ -7,10 +7,12 @@ a time: pop → mark running → spawn the CLI as a subprocess → drain its std
 (keeping a bounded tail) → record the exit code → set the terminal status.
 
 The worker NEVER dies on a bad job: any per-job failure marks that job `failed`
-and moves on (architecture-app.md §Process patterns). Story 1.3 captures only a
-stdout tail for diagnostics — full progress classification + `progress.ndjson`
-and the SSE stream land in Story 1.4; the live Stop action (→ `stopped`, exit
-130) lands in Story 1.5.
+and moves on (architecture-app.md §Process patterns). As of Story 1.4 the worker
+also classifies each stdout line into the unified `ProgressModel`, appends it to
+the job's append-only `progress.ndjson`, and publishes it (plus a terminal
+status) to the SSE hub. A bounded stdout/stderr tail is still kept on the record
+for the failed-job diagnostic. The live Stop action (→ `stopped`, exit 130) lands
+in Story 1.5.
 """
 
 from __future__ import annotations
@@ -21,8 +23,9 @@ from collections import deque
 from collections.abc import Awaitable, Callable
 from typing import final
 
-from steeproute.app.cli_adapter import build_setup_argv
-from steeproute.app.models import JobRecord, JobStatus, SetupParams, utcnow_iso
+from steeproute.app.cli_adapter import build_setup_argv, progress_parser_for
+from steeproute.app.models import JobKind, JobRecord, JobStatus, SetupParams, utcnow_iso
+from steeproute.app.sse import ProgressEvent, ProgressHub, StatusEvent
 from steeproute.app.store import JobStore
 
 logger = logging.getLogger(__name__)
@@ -100,11 +103,15 @@ class Worker:
         *,
         build_argv: BuildArgv = default_build_argv,
         spawn: Spawn = _default_spawn,
+        hub: ProgressHub | None = None,
     ) -> None:
         self._store = store
         self._queue = queue
         self._build_argv = build_argv
         self._spawn = spawn
+        # A hub with no subscribers is a harmless no-op, so a caller that doesn't
+        # care about live streaming (e.g. some unit tests) can omit it.
+        self._hub = hub if hub is not None else ProgressHub()
 
     async def run(self) -> None:
         """Serial worker loop. Cancellation (lifespan shutdown) propagates out."""
@@ -146,12 +153,14 @@ class Worker:
                 record.status = JobStatus.FAILED
                 record.failure_reason = f"spawn-failed: {exc}"
                 self._store.update(record)
+                self._publish_status(record)
                 return
 
-            # Drain both pipes concurrently (see `_drain` — reading only one
-            # deadlocks), then reap the exit code.
+            # Classify + persist + stream stdout, and drain stderr, concurrently
+            # (see `_drain` — reading only one pipe deadlocks), then reap the exit
+            # code.
             await asyncio.gather(
-                _drain(proc.stdout, stdout_tail),
+                self._consume_stdout(record.id, record.kind, proc.stdout, stdout_tail),
                 _drain(proc.stderr, stderr_tail),
             )
             exit_code = await proc.wait()
@@ -170,6 +179,7 @@ class Worker:
             record.stdout_tail = list(stdout_tail)
             record.stderr_tail = list(stderr_tail)
             self._store.update(record)
+            self._publish_status(record)
             raise
 
         record.exit_code = exit_code
@@ -178,6 +188,46 @@ class Worker:
         record.stderr_tail = list(stderr_tail)
         record.status = JobStatus.DONE if exit_code == 0 else JobStatus.FAILED
         self._store.update(record)
+        self._publish_status(record)
+
+    async def _consume_stdout(
+        self,
+        job_id: str,
+        kind: JobKind,
+        stream: asyncio.StreamReader | None,
+        tail: deque[str],
+    ) -> None:
+        """Read stdout to EOF, classifying each line into the `ProgressModel`,
+        appending it to `progress.ndjson`, and publishing it to the SSE hub.
+
+        Keeps the bounded raw `tail` too (the failed-job diagnostic). This
+        coroutine is the sole appender for the job, so the running `seq` stays in
+        lock-step with the persisted line count.
+        """
+        if stream is None:
+            return
+        parser = progress_parser_for(kind)
+        seq = 0
+        async for raw in stream:
+            line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+            tail.append(line)
+            model = parser.feed(line)
+            if model is None:
+                continue
+            self._store.append_progress(job_id, model)
+            self._hub.publish(job_id, ProgressEvent(seq=seq, model=model))
+            seq += 1
+
+    def _publish_status(self, record: JobRecord) -> None:
+        """Publish the terminal status to the hub, closing any live stream."""
+        self._hub.publish(
+            record.id,
+            StatusEvent(
+                status=record.status.value,
+                exit_code=record.exit_code,
+                failure_reason=record.failure_reason,
+            ),
+        )
 
     def _mark_failed(self, job_id: str, *, reason: str) -> None:
         record = self._store.get(job_id)
@@ -188,3 +238,4 @@ class Worker:
         if record.finished_at is None:
             record.finished_at = utcnow_iso()
         self._store.update(record)
+        self._publish_status(record)

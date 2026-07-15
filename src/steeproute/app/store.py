@@ -3,9 +3,10 @@
 
 One directory per job under the store root: `<root>/<job_id>/job.json`. Writes
 are atomic (temp-file in the same dir + `os.replace`), mirroring the CLI cache's
-discipline so a crash mid-write never surfaces a partial record. The append-only
-`progress.ndjson` and boot-time restart recovery arrive in later stories (1.4,
-app-3-3); this store handles only the `job.json` record.
+discipline so a crash mid-write never surfaces a partial record. Alongside it,
+`progress.ndjson` is an **append-only** progress log (one `ProgressModel` per
+line) that powers the SSE snapshot-then-tail (Story 1.4). Boot-time restart
+recovery arrives in Story app-3-3.
 """
 
 from __future__ import annotations
@@ -17,9 +18,10 @@ from typing import final
 
 import platformdirs
 
-from steeproute.app.models import JobRecord
+from steeproute.app.models import JobRecord, ProgressModel
 
 _JOB_FILE = "job.json"
+_PROGRESS_FILE = "progress.ndjson"
 
 
 def default_store_root() -> pathlib.Path:
@@ -66,6 +68,37 @@ class JobStore:
             if path.is_file():
                 records.append(JobRecord.model_validate_json(path.read_text(encoding="utf-8")))
         return records
+
+    def append_progress(self, job_id: str, model: ProgressModel) -> None:
+        """Append one progress entry to the job's `progress.ndjson`.
+
+        Append-only (one JSON object per line), distinct from the atomic
+        `job.json` rewrite. The single worker is the sole appender (concurrency =
+        1), so line order == emission order and the line count == the next event
+        sequence number — which lets the SSE endpoint stitch snapshot-then-tail.
+        """
+        path = self._job_dir(job_id) / _PROGRESS_FILE
+        with path.open("a", encoding="utf-8") as fh:
+            _ = fh.write(model.model_dump_json() + "\n")
+
+    def read_progress(self, job_id: str) -> list[ProgressModel]:
+        """Read the persisted progress snapshot (empty if none yet).
+
+        Tolerant of a partial trailing line (a crash mid-append can leave one):
+        unparseable lines are skipped rather than failing the whole read.
+        """
+        path = self._job_dir(job_id) / _PROGRESS_FILE
+        if not path.is_file():
+            return []
+        out: list[ProgressModel] = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                out.append(ProgressModel.model_validate_json(line))
+            except ValueError:
+                continue
+        return out
 
     def _write_atomic(self, record: JobRecord) -> None:
         """Write `job.json` via a same-dir temp file + `os.replace` (atomic).

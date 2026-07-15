@@ -48,6 +48,18 @@ class JobStatus(enum.StrEnum):
     STOPPED = "stopped"
 
 
+class Phase(enum.StrEnum):
+    """Coarse progress phase within a run (architecture-app.md §Category 3).
+
+    `setup` = a build job's stages; `query`/`solve` = a query job's non-solve
+    stages and its GRASP solve phase (Story 2.2). Story 1.4 emits only `setup`.
+    """
+
+    SETUP = "setup"
+    QUERY = "query"
+    SOLVE = "solve"
+
+
 class AreaSpec(BaseModel):
     """Search area on the wire — mirrors `steeproute.models.Area` (center + bbox
     half-side km), kept as its own App-side model so nothing outside `cli_adapter`
@@ -96,6 +108,34 @@ class JobRecord(BaseModel):
     failure_reason: str | None = None
     stdout_tail: list[str] = Field(default_factory=list)
     stderr_tail: list[str] = Field(default_factory=list)
+
+
+class GraspProgress(BaseModel):
+    """GRASP solver readout — populated only during a query's solve phase
+    (Story 2.2), `null` on the `ProgressModel` otherwise."""
+
+    iter: int
+    best_cost: float
+
+
+class ProgressModel(BaseModel):
+    """The unified, flavour-agnostic progress snapshot (architecture-app.md
+    §SSE event conventions). One is emitted per meaningful stdout line and
+    persisted (append-only) to `progress.ndjson`; the SSE stream replays them.
+
+    `stage_index`/`stage_total` are NOT parsed from stdout (the wire carries a
+    stage name only) — the classifier derives them positionally from a known
+    ordered stage list per job kind. `grasp` is present-as-`null`, never omitted;
+    it is always `null` for setup jobs.
+    """
+
+    phase: Phase
+    stage_name: str | None = None
+    stage_index: int = 0
+    stage_total: int = 0
+    grasp: GraspProgress | None = None
+    elapsed: float | None = None
+    log_tail: list[str] = Field(default_factory=list)
 
 
 def utcnow_iso() -> str:

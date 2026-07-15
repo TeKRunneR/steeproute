@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 
 from steeproute.app.api import router as jobs_router
 from steeproute.app.queue import BuildArgv, JobQueue, Worker, default_build_argv
+from steeproute.app.sse import ProgressHub
 from steeproute.app.store import JobStore, default_store_root
 
 logger = logging.getLogger(__name__)
@@ -60,9 +61,11 @@ def _make_lifespan(
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         store = JobStore(store_root if store_root is not None else default_store_root())
         queue = JobQueue()
-        worker = Worker(store, queue, build_argv=build_argv or default_build_argv)
+        hub = ProgressHub()
+        worker = Worker(store, queue, build_argv=build_argv or default_build_argv, hub=hub)
         app.state.job_store = store
         app.state.job_queue = queue
+        app.state.progress_hub = hub
 
         task = asyncio.create_task(worker.run())
         logger.info("steeproute-app started; single-worker job queue running")
