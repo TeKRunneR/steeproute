@@ -26,7 +26,7 @@ from steeproute.app.models import (
     new_job_id,
     utcnow_iso,
 )
-from steeproute.app.queue import JobQueue
+from steeproute.app.queue import JobQueue, Worker
 from steeproute.app.sse import ProgressEvent, ProgressHub
 from steeproute.app.store import JobStore
 
@@ -48,6 +48,10 @@ def _queue(request: Request) -> JobQueue:
 
 def _hub(request: Request) -> ProgressHub:
     return request.app.state.progress_hub
+
+
+def _worker(request: Request) -> Worker:
+    return request.app.state.job_worker
 
 
 def _require_job(job_id: str, request: Request) -> JobRecord:
@@ -101,6 +105,36 @@ def list_jobs(request: Request) -> list[JobRecord]:
 def get_job(job: Annotated[JobRecord, Depends(_require_job)]) -> JobRecord:
     """One job record, or 404 if there is no such job (via `_require_job`)."""
     return job
+
+
+@router.post("/jobs/{job_id}/stop")
+async def stop_job(
+    job: Annotated[JobRecord, Depends(_require_job)], request: Request
+) -> JobRecord:
+    """Hard-cancel a running job (architecture-app.md §Category 7).
+
+    Requests the worker to kill the child; the worker owns the terminal transition
+    to `stopped`/exit 130 (it is the single writer of terminal status), so the
+    record returned here may still read `running` — the client observes `stopped`
+    over SSE / on re-fetch. 409 if the job is not currently running (unknown id →
+    404 via `_require_job`). `async` so `proc.kill()` runs on the event loop, not a
+    threadpool thread.
+    """
+    if job.status is not JobStatus.RUNNING:
+        raise HTTPException(
+            status_code=409,
+            detail=f"job {job.id!r} is not running (status {job.status.value!r})",
+        )
+    # A 200 must mean the kill was actually dispatched. `stop()` returns False only
+    # when the record reads `running` but the worker has no such active job — a
+    # stale record (e.g. left by a crash; reconciled on boot in Story 3.3), not a
+    # live job — so surface that as 409 rather than a misleading success.
+    if not _worker(request).stop(job.id):
+        raise HTTPException(
+            status_code=409,
+            detail=f"job {job.id!r} is not the active running job",
+        )
+    return _store(request).get(job.id) or job
 
 
 @router.get("/jobs/{job_id}/events", response_class=EventSourceResponse)

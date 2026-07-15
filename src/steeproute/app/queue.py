@@ -11,8 +11,13 @@ and moves on (architecture-app.md §Process patterns). As of Story 1.4 the worke
 also classifies each stdout line into the unified `ProgressModel`, appends it to
 the job's append-only `progress.ndjson`, and publishes it (plus a terminal
 status) to the SSE hub. A bounded stdout/stderr tail is still kept on the record
-for the failed-job diagnostic. The live Stop action (→ `stopped`, exit 130) lands
-in Story 1.5.
+for the failed-job diagnostic.
+
+Story 1.5 adds the hard-cancel Stop seam (architecture-app.md §Category 7): the
+worker tracks the single running `(job_id, proc)` and exposes `stop(job_id)`,
+which kills the child. The worker stays the SOLE writer of the terminal status —
+`stop` only requests the kill and records the intent; the normal reap path then
+turns it into a `stopped`/exit-130 transition. A stopped job has no result.
 """
 
 from __future__ import annotations
@@ -112,6 +117,36 @@ class Worker:
         # A hub with no subscribers is a harmless no-op, so a caller that doesn't
         # care about live streaming (e.g. some unit tests) can omit it.
         self._hub = hub if hub is not None else ProgressHub()
+        # Stop seam (Story 1.5). Concurrency = 1, so at most one child runs. The
+        # active job id is tracked separately from its process handle: the id is
+        # set the instant the record flips to RUNNING (before the child spawns),
+        # the proc handle only once it exists. `_stop_requested` remembers ids
+        # asked to stop so the reap path marks them `stopped` instead of `failed`.
+        # All touched only from the one event loop → no locking.
+        self._current_job_id: str | None = None
+        self._current_proc: asyncio.subprocess.Process | None = None
+        self._stop_requested: set[str] = set()
+
+    def stop(self, job_id: str) -> bool:
+        """Request a hard cancel of the running job (architecture-app.md §Category 7).
+
+        Returns True iff `job_id` is the worker's active job — recording the stop
+        intent (so the reap path marks it `stopped`/130) and killing the child if
+        it has already spawned. `_current_job_id` is set synchronously the instant
+        the record flips to RUNNING (no `await` between), so a caller that saw
+        `status=running` always matches here — including during the brief spawn
+        window, where the worker honors the recorded intent as soon as the child
+        exists. Returns False only when `job_id` is not the active job (e.g. a
+        stale RUNNING record left by a crash, reconciled on boot in Story 3.3);
+        the caller turns that into a 409.
+        """
+        if job_id != self._current_job_id:
+            return False
+        self._stop_requested.add(job_id)
+        proc = self._current_proc
+        if proc is not None and proc.returncode is None:
+            proc.kill()
+        return True
 
     async def run(self) -> None:
         """Serial worker loop. Cancellation (lifespan shutdown) propagates out."""
@@ -138,6 +173,10 @@ class Worker:
         record.status = JobStatus.RUNNING
         record.started_at = utcnow_iso()
         self._store.update(record)
+        # Claim this as the active job SYNCHRONOUSLY — no `await` between the
+        # RUNNING store write above and here — so a `stop()` racing the status
+        # change can never see `running` yet fail to match (the pre-spawn window).
+        self._current_job_id = record.id
 
         argv = self._build_argv(record)
         stdout_tail: deque[str] = deque(maxlen=STDOUT_TAIL_LINES)
@@ -156,14 +195,35 @@ class Worker:
                 self._publish_status(record)
                 return
 
+            # Expose the live child so `stop()` can kill it, then honor a Stop that
+            # arrived while the child was still spawning (intent already recorded).
+            self._current_proc = proc
+            if record.id in self._stop_requested and proc.returncode is None:
+                proc.kill()
+
             # Classify + persist + stream stdout, and drain stderr, concurrently
             # (see `_drain` — reading only one pipe deadlocks), then reap the exit
-            # code.
+            # code. A `stop()` kill lands here as clean EOF + a normal `wait()`.
             await asyncio.gather(
                 self._consume_stdout(record.id, record.kind, proc.stdout, stdout_tail),
                 _drain(proc.stderr, stderr_tail),
             )
             exit_code = await proc.wait()
+
+            record.finished_at = utcnow_iso()
+            record.stdout_tail = list(stdout_tail)
+            record.stderr_tail = list(stderr_tail)
+            if record.id in self._stop_requested:
+                # Hard-cancelled via `stop()`: a stopped job has no result, and the
+                # OS exit code from a kill is not meaningful (on Windows it is not
+                # 130), so pin the CLI's Ctrl-C convention over `proc.returncode`.
+                record.exit_code = 130
+                record.status = JobStatus.STOPPED
+            else:
+                record.exit_code = exit_code
+                record.status = JobStatus.DONE if exit_code == 0 else JobStatus.FAILED
+            self._store.update(record)
+            self._publish_status(record)
         except asyncio.CancelledError:
             # Lifespan shutdown mid-run (cancel can land during spawn, drain, or
             # wait): kill the child so it can't outlive the server as an orphan,
@@ -181,14 +241,12 @@ class Worker:
             self._store.update(record)
             self._publish_status(record)
             raise
-
-        record.exit_code = exit_code
-        record.finished_at = utcnow_iso()
-        record.stdout_tail = list(stdout_tail)
-        record.stderr_tail = list(stderr_tail)
-        record.status = JobStatus.DONE if exit_code == 0 else JobStatus.FAILED
-        self._store.update(record)
-        self._publish_status(record)
+        finally:
+            # Clear the active-job tracking and the (now-consumed) stop intent on
+            # every exit path: normal terminal, spawn-fail return, and cancel.
+            self._current_job_id = None
+            self._current_proc = None
+            self._stop_requested.discard(record.id)
 
     async def _consume_stdout(
         self,

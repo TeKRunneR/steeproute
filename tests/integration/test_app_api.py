@@ -37,12 +37,52 @@ _FAKE_CLI = textwrap.dedent(
     """
 ).strip()
 
+# Fake CLI that runs until killed — for the Stop path (Story 1.5). Prints a line
+# so the job is observably alive, then blocks so it stays `running` until the
+# worker's `stop()` kills it.
+_FAKE_CLI_SLEEP = textwrap.dedent(
+    """
+    import sys, time
+    print("steeproute-setup: build starting (fake)", flush=True)
+    time.sleep(60)
+    """
+).strip()
+
 
 def _make_fake_build_argv(fake_cli: pathlib.Path, exit_code: int):
     def build_argv(_record: JobRecord) -> list[str]:
         return [sys.executable, str(fake_cli), str(exit_code)]
 
     return build_argv
+
+
+def _make_sleeper_build_argv(fake_cli: pathlib.Path):
+    def build_argv(_record: JobRecord) -> list[str]:
+        return [sys.executable, str(fake_cli)]
+
+    return build_argv
+
+
+def _sleeper_client(tmp_path: pathlib.Path) -> TestClient:
+    fake_cli = tmp_path / "fake_sleep_cli.py"
+    fake_cli.write_text(_FAKE_CLI_SLEEP, encoding="utf-8")
+    app = create_app(
+        store_root=tmp_path / "jobs",
+        build_argv=_make_sleeper_build_argv(fake_cli),
+    )
+    return TestClient(app)
+
+
+def _poll_until_status(
+    client: TestClient, job_id: str, target: str, timeout: float = 15.0
+) -> dict[str, object]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        body = client.get(f"/jobs/{job_id}").json()
+        if body["status"] == target:
+            return body
+        time.sleep(0.05)
+    raise AssertionError(f"job {job_id} did not reach {target!r} within {timeout}s")
 
 
 def _lifecycle_client(tmp_path: pathlib.Path, exit_code: int) -> TestClient:
@@ -178,3 +218,71 @@ def test_bad_area_rejected_422(tmp_path: pathlib.Path) -> None:
         # Missing radius_km → pydantic validation error.
         body = {"kind": "setup", "area": {"center": [45.26, 5.788]}}
         assert client.post("/jobs", json=body).status_code == 422
+
+
+# --- Story 1.5: hard-cancel Stop ---------------------------------------------
+
+
+def test_stop_running_job_marks_stopped(tmp_path: pathlib.Path) -> None:
+    with _sleeper_client(tmp_path) as client:
+        job_id = client.post("/jobs", json=_setup_body()).json()["id"]
+        _poll_until_status(client, job_id, "running")
+        resp = client.post(f"/jobs/{job_id}/stop")
+        assert resp.status_code == 200
+        final = _poll_until_terminal(client, job_id)
+        assert final["status"] == "stopped"
+        # Hard cancel → CLI Ctrl-C exit convention, and no result (Category 7).
+        assert final["exit_code"] == 130
+        assert final["result_dir"] is None
+
+
+def test_stop_queued_job_returns_409(tmp_path: pathlib.Path) -> None:
+    # Concurrency = 1: while the first job sleeps (running), a second stays queued.
+    with _sleeper_client(tmp_path) as client:
+        running = client.post("/jobs", json=_setup_body()).json()["id"]
+        queued = client.post("/jobs", json=_setup_body()).json()["id"]
+        _poll_until_status(client, running, "running")
+        assert client.get(f"/jobs/{queued}").json()["status"] == "queued"
+        resp = client.post(f"/jobs/{queued}/stop")
+        assert resp.status_code == 409
+        assert "detail" in resp.json()
+        # Clean up the running job so teardown is prompt.
+        client.post(f"/jobs/{running}/stop")
+
+
+def test_stop_finished_job_returns_409(tmp_path: pathlib.Path) -> None:
+    with _lifecycle_client(tmp_path, exit_code=0) as client:
+        job_id = client.post("/jobs", json=_setup_body()).json()["id"]
+        _poll_until_terminal(client, job_id)
+        assert client.post(f"/jobs/{job_id}/stop").status_code == 409
+
+
+def test_stop_unknown_job_returns_404(tmp_path: pathlib.Path) -> None:
+    with _lifecycle_client(tmp_path, exit_code=0) as client:
+        resp = client.post("/jobs/does-not-exist/stop")
+        assert resp.status_code == 404
+        assert "detail" in resp.json()
+
+
+# --- Story 1.5: run-watch page + frontend modules served ---------------------
+
+
+def test_run_watch_page_served_as_html() -> None:
+    # Any id resolves to the same page; the page's JS reads the id from the URL.
+    resp = _client().get("/runs/anything")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/html")
+    body = resp.text
+    assert 'id="log-tail"' in body  # the progress frame
+    assert 'id="stop-btn"' in body  # the Stop control
+    assert 'id="live-indicator"' in body  # global chrome present here too
+
+
+def test_frontend_js_modules_served_from_static_mount() -> None:
+    client = _client()
+    for module in ("api.js", "run-watch.js", "live-indicator.js"):
+        resp = client.get(f"/static/js/{module}")
+        assert resp.status_code == 200, module
+        assert "javascript" in resp.headers["content-type"]
+    # api.js is the single URL holder; the other modules import from it.
+    assert "/jobs/" in client.get("/static/js/api.js").text

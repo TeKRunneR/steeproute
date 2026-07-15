@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>steeproute · run</title>
+    <link rel="stylesheet" href="/static/css/app.css" />
+  </head>
+  <body>
+    <!-- Global chrome: duplicated per page (buildless, no templating — accepted
+         for an N=1 tool). live-indicator.js targets #live-indicator here too. -->
+    <header class="app-header">
+      <a class="app-name" href="/">steeproute</a>
+      <nav class="app-nav">
+        <a href="/">Map</a>
+        <a href="/runs">Runs</a>
+      </nav>
+      <span id="live-indicator" class="live-indicator"></span>
+    </header>
+
+    <main class="app-main">
+      <!-- Job identity + Stop (UX spec §S3). -->
+      <section class="run-head">
+        <div class="run-head-row">
+          <h1 id="job-identity" class="run-identity">Loading…</h1>
+          <button id="stop-btn" class="stop-btn" type="button" hidden>Stop</button>
+        </div>
+        <p id="job-status" class="run-status"></p>
+      </section>
+
+      <!-- Flavour-agnostic progress frame: phase / stage (n/total) / log tail.
+           The GRASP line (#progress-grasp) stays hidden unless a frame carries
+           `grasp` — setup never does. -->
+      <section class="progress-frame">
+        <div id="progress-phase" class="progress-phase">PHASE: —</div>
+        <div id="progress-stage" class="progress-stage">STAGE: —</div>
+        <div id="progress-grasp" class="progress-grasp" hidden></div>
+        <pre id="log-tail" class="log-tail" aria-label="log tail"></pre>
+      </section>
+
+      <footer id="run-footer" class="run-footer" hidden></footer>
+    </main>
+
+    <script type="module" src="/static/js/live-indicator.js"></script>
+    <script type="module" src="/static/js/run-watch.js"></script>
+  </body>
+</html>

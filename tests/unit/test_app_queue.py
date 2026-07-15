@@ -293,3 +293,71 @@ def test_shutdown_interrupts_running_job_and_kills_child(tmp_path: pathlib.Path)
 
     # The killed child never reached its post-sleep marker write.
     assert not finished.exists()
+
+
+_SLEEPER = "import sys, time\nprint('started', flush=True)\ntime.sleep(30)\nsys.exit(0)\n"
+
+
+def test_stop_running_job_marks_stopped(tmp_path: pathlib.Path) -> None:
+    # A hard cancel of the running job → `stopped`, exit 130 (CLI Ctrl-C
+    # convention, not the OS kill code), no result.
+    async def scenario() -> None:
+        store = JobStore(tmp_path / "jobs")
+        queue = JobQueue()
+        store.create(_record("stopme"))
+        queue.enqueue("stopme")
+
+        def build_argv(_r: JobRecord) -> list[str]:
+            return [sys.executable, "-c", _SLEEPER]
+
+        worker = Worker(store, queue, build_argv=build_argv)
+        task = asyncio.create_task(worker.run())
+        await _await_status(store, "stopme", JobStatus.RUNNING)
+
+        assert worker.stop("stopme") is True
+        final = await _await_terminal(store, "stopme")
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        assert final.status is JobStatus.STOPPED
+        assert final.exit_code == 130
+        assert final.result_dir is None
+
+    asyncio.run(scenario())
+
+
+def test_stop_during_spawn_window_is_honored(tmp_path: pathlib.Path) -> None:
+    # Regression: a stop() that lands after the record flips to RUNNING but before
+    # the child is exposed must still be honored (the pre-spawn window). The worker
+    # tracks the active job id synchronously at RUNNING, records the intent, and
+    # kills the child as soon as it exists — so the job ends `stopped`, not `done`.
+    async def scenario() -> None:
+        store = JobStore(tmp_path / "jobs")
+        queue = JobQueue()
+        store.create(_record("racer"))
+        queue.enqueue("racer")
+
+        def build_argv(_r: JobRecord) -> list[str]:
+            return [sys.executable, "-c", _SLEEPER]
+
+        async def spawn(argv: list[str]) -> asyncio.subprocess.Process:
+            proc = await asyncio.create_subprocess_exec(
+                *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            # A Stop arrives mid-spawn: the id is already tracked, but the proc is
+            # not yet exposed — stop() must record the intent and return True.
+            assert worker.stop("racer") is True
+            return proc
+
+        worker = Worker(store, queue, build_argv=build_argv, spawn=spawn)
+        task = asyncio.create_task(worker.run())
+        final = await _await_terminal(store, "racer")
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        assert final.status is JobStatus.STOPPED
+        assert final.exit_code == 130
+
+    asyncio.run(scenario())

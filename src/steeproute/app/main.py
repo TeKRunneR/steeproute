@@ -46,6 +46,15 @@ def index() -> FileResponse:
     return FileResponse(_STATIC_DIR / "index.html")
 
 
+@router.get("/runs/{job_id}", include_in_schema=False)
+def run_watch() -> FileResponse:
+    """Serve the S3 Run-watch page (Story 1.5). UI lives under `/runs*`, the JSON
+    API under `/jobs*`; the page's JS reads the `{job_id}` back out of the URL
+    (the handler needs no param). The `/runs` run-library list (no id) lands in
+    Story 3.1 — no route conflict."""
+    return FileResponse(_STATIC_DIR / "run-watch.html")
+
+
 def _make_lifespan(
     *,
     store_root: pathlib.Path | None,
@@ -66,6 +75,8 @@ def _make_lifespan(
         app.state.job_store = store
         app.state.job_queue = queue
         app.state.progress_hub = hub
+        # Exposed so `POST /jobs/{id}/stop` can reach the running child (Story 1.5).
+        app.state.job_worker = worker
 
         task = asyncio.create_task(worker.run())
         logger.info("steeproute-app started; single-worker job queue running")

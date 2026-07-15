@@ -43,14 +43,104 @@ body {
   color: #ffffff;
 }
 
-/* Pushed to the right; holds "● query running · r20 · iter 12k" once wired. */
+/* Pushed to the right; holds "● setup running · r20 · <stage>" when a job runs. */
 .live-indicator {
   margin-left: auto;
   font-size: 0.9rem;
   color: #9aa5b1;
 }
 
+.live-indicator-link {
+  color: #7bd389;
+  text-decoration: none;
+}
+
+.live-indicator-link:hover {
+  text-decoration: underline;
+}
+
 .app-main {
   padding: 1.5rem;
   max-width: 60rem;
+}
+
+/* --- S3 Run watch (Story 1.5) ------------------------------------------- */
+
+.run-head-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.run-identity {
+  font-size: 1.2rem;
+  margin: 0;
+  flex: 1;
+}
+
+.run-status {
+  color: #52606d;
+  font-size: 0.9rem;
+  margin: 0.4rem 0 0;
+}
+
+.stop-btn {
+  background: #b8433a;
+  color: #fff;
+  border: 0;
+  border-radius: 4px;
+  padding: 0.45rem 1rem;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.stop-btn:hover {
+  background: #9c342c;
+}
+
+.stop-btn:disabled {
+  background: #cbd2d9;
+  cursor: default;
+}
+
+.progress-frame {
+  margin-top: 1.25rem;
+}
+
+.progress-phase,
+.progress-stage,
+.progress-grasp {
+  font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+  font-size: 0.95rem;
+  margin-bottom: 0.3rem;
+}
+
+.progress-phase {
+  font-weight: 700;
+}
+
+.progress-grasp {
+  color: #2b6cb0;
+}
+
+.log-tail {
+  margin-top: 0.75rem;
+  background: #1f2933;
+  color: #e4e7eb;
+  font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+  height: 22rem;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.run-footer {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid #cbd2d9;
+  font-size: 0.95rem;
 }

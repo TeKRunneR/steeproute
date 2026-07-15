@@ -16,8 +16,8 @@
         <a href="/">Map</a>
         <a href="/runs">Runs</a>
       </nav>
-      <!-- Live-job indicator slot — empty for now; wired to the active job's SSE
-           stream in a later story. -->
+      <!-- Live-job indicator slot — populated by live-indicator.js with the
+           active running job (return-to-live, UX-DR6). Empty when idle. -->
       <span id="live-indicator" class="live-indicator"></span>
     </header>
 
@@ -31,5 +31,6 @@
     </main>
 
     <script src="/vendor/leaflet-1.9.4.min.js"></script>
+    <script type="module" src="/static/js/live-indicator.js"></script>
   </body>
 </html>
