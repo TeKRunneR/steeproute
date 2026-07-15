@@ -28,7 +28,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-07-14  # story 14.5 done (measured negative — no code change); 14.6 + epic-14 deferred to work future-ideas.md next
+last_updated: 2026-07-15  # app-1-1 (stdout format-inventory spike) → review
 
 project: bmad-test
 project_key: NOKEY
@@ -155,3 +155,25 @@ development_status:
   14-5-reduce-osmnx-ingestion-cpu-cheap-levers: done
   14-6-r50-probe-re-measure-and-what-next: deferred    # 2026-07-14: parked to work future-ideas.md items first; revisit via correct-course when resumed
   epic-14-retrospective: optional
+
+  # ---------------------------------------------------------------------------
+  # App track (epics-app.md) — the web App subsystem. `app-` prefix disambiguates
+  # from the CLI track above, which reused Epic 1-3 numbering (1-1-*, 2-1-*, ...).
+  # ---------------------------------------------------------------------------
+  app-epic-1: in-progress        # Pick and build a region from the map
+  app-1-1-stdout-format-inventory-spike: done
+  app-1-2-runnable-app-skeleton-with-static-shell: backlog
+  app-1-3-job-store-and-single-worker-queue: backlog
+  app-1-4-setup-progress-plumbing-classifier-log-and-sse-stream: backlog
+  app-1-5-watch-a-running-job: backlog
+  app-1-6-map-home-pick-an-area-and-build-a-region: backlog
+
+  app-epic-2: backlog        # Configure, run, and watch a route query
+  app-2-1-configure-and-queue-a-query-schema-driven-form: backlog
+  app-2-2-query-flavour-progress-grasp-and-non-solve-stages: backlog
+  app-2-3-view-the-resulting-routes: backlog
+
+  app-epic-3: backlog        # Browse, revisit, and re-run past runs
+  app-3-1-run-library-list: backlog
+  app-3-2-cancel-queued-and-re-run-with-tweaks: backlog
+  app-3-3-restart-recovery: backlog
