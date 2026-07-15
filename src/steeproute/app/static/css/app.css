@@ -1,0 +1,56 @@
+/* steeproute web App — minimal hand-rolled styling (no design system, per the
+   UX spec's out-of-scope list). Only the global header needs styling in the
+   skeleton story. */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: #1a1a1a;
+  background: #fafafa;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 0.6rem 1rem;
+  background: #1f2933;
+  color: #f5f7fa;
+}
+
+.app-name {
+  font-weight: 700;
+  font-size: 1.1rem;
+  color: #f5f7fa;
+  text-decoration: none;
+}
+
+.app-nav {
+  display: flex;
+  gap: 1rem;
+}
+
+.app-nav a {
+  color: #cbd2d9;
+  text-decoration: none;
+}
+
+.app-nav a:hover {
+  color: #ffffff;
+}
+
+/* Pushed to the right; holds "● query running · r20 · iter 12k" once wired. */
+.live-indicator {
+  margin-left: auto;
+  font-size: 0.9rem;
+  color: #9aa5b1;
+}
+
+.app-main {
+  padding: 1.5rem;
+  max-width: 60rem;
+}

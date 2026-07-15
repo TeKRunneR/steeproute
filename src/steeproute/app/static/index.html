@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>steeproute</title>
+    <!-- Leaflet reused from the CLI report's vendored copy (served at /vendor). -->
+    <link rel="stylesheet" href="/vendor/leaflet-1.9.4.min.css" />
+    <link rel="stylesheet" href="/static/css/app.css" />
+  </head>
+  <body>
+    <!-- Global chrome: present on every screen (architecture-app.md §Category 10). -->
+    <header class="app-header">
+      <a class="app-name" href="/">steeproute</a>
+      <nav class="app-nav">
+        <a href="/">Map</a>
+        <a href="/runs">Runs</a>
+      </nav>
+      <!-- Live-job indicator slot — empty for now; wired to the active job's SSE
+           stream in a later story. -->
+      <span id="live-indicator" class="live-indicator"></span>
+    </header>
+
+    <main class="app-main">
+      <h1>Map home</h1>
+      <p>
+        The map picker lands in a later story. This is the runnable app skeleton:
+        the server, the global header, and the static + Leaflet mounts are in
+        place.
+      </p>
+    </main>
+
+    <script src="/vendor/leaflet-1.9.4.min.js"></script>
+  </body>
+</html>

@@ -63,6 +63,11 @@ dependencies = [
     # Story 3.10 / Architecture §Cat 9). The vendored Leaflet + Chart.js assets are
     # inlined into the template, so Jinja2 is the only runtime templating dependency.
     "jinja2>=3,<4",
+    # `fastapi[standard]` backs the web App subsystem (`steeproute.app`, App Epic 1).
+    # The `[standard]` extra bundles uvicorn + the `fastapi` dev CLI so the app runs
+    # with no separate server dependency. FastAPI >=0.135 has native SSE
+    # (`EventSourceResponse`), which later App stories rely on instead of sse-starlette.
+    "fastapi[standard]>=0.139.0",
 ]
 
 
@@ -87,6 +92,9 @@ dev = [
 # Add script entry points here:
 steeproute = "steeproute.cli.query:main"
 steeproute-setup = "steeproute.cli.setup:main"
+# Web App (App Epic 1). `run()` launches uvicorn programmatically (single worker,
+# concurrency=1 per NFR1) — NOT the click `run_entry_point` wrapper the CLIs use.
+steeproute-app = "steeproute.app.main:run"
 # Dev-only: regenerates pinned-regression goldens (Story 8.1, Architecture §Cat 11d).
 # Resolves fixtures/goldens against the source tree — run via `uv run` from the repo.
 update-regression = "steeproute.regression:main"
