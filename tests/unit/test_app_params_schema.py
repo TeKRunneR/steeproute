@@ -37,10 +37,15 @@ def test_excluded_fields_are_absent() -> None:
 
 def test_quality_demo_defaults_override_cli_defaults() -> None:
     fields = _schema_by_name()
-    assert fields["iter_budget"].default == 200_000
-    assert fields["stagnation_iters"].default == 10_000
+    assert fields["iter_budget"].default == 1_000_000
+    assert fields["stagnation_iters"].default == 200_000
     assert fields["difficulty_cap"].default == "T4"
     assert fields["elevation_deadband"].default == 1.0
+    assert fields["j_max"].default == 0.0
+    # area_cap can't be "disabled" with 0 (validate_area_size rejects any area
+    # > cap, and area is never negative) — a large no-op ceiling instead.
+    assert fields["area_cap"].default == 100_000.0
+    assert fields["workers"].default == 4
 
 
 def test_unmentioned_fields_keep_cli_default() -> None:
@@ -48,7 +53,6 @@ def test_unmentioned_fields_keep_cli_default() -> None:
     assert fields["theta"].default == 0.20
     assert fields["n"].default == 5
     assert fields["untagged_trails"].default == "include"
-    assert fields["workers"].default == 1
 
 
 def test_field_types_match_click_option_kinds() -> None:

@@ -44,11 +44,20 @@ _EXCLUDED_FIELDS: frozenset[str] = frozenset(
 # Quality-demo overrides (AGENTS.md §Solver / GRASP): the App's defaults are
 # the high-quality manual-run params, not the CLI's fast-iteration defaults.
 # Every field not listed here keeps its CLI default unchanged.
+#
+# `area_cap` can't be "disabled" with 0 — `validate_area_size` rejects any
+# area strictly greater than the cap, and a disk area is never negative, so
+# `--area-cap 0` would reject every selection. 100_000 km² (~178 km radius) is
+# large enough to be a no-op for this personal-tool use case while still
+# catching an obvious typo.
 _QUALITY_DEFAULTS: dict[str, Any] = {
-    "iter_budget": 200_000,
-    "stagnation_iters": 10_000,
+    "iter_budget": 1_000_000,
+    "stagnation_iters": 200_000,
     "difficulty_cap": "T4",
     "elevation_deadband": 1.0,
+    "j_max": 0.0,
+    "area_cap": 100_000.0,
+    "workers": 4,
 }
 
 # Basic row = the common knobs a user tunes first; everything else is

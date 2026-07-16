@@ -438,7 +438,7 @@ def test_query_params_schema_endpoint(tmp_path: pathlib.Path) -> None:
         ):
             assert excluded not in fields
         # Quality-demo overrides are what the form actually prefills.
-        assert fields["iter_budget"]["default"] == 200_000
+        assert fields["iter_budget"]["default"] == 1_000_000
         assert fields["difficulty_cap"]["default"] == "T4"
         assert fields["theta"]["group"] == "basic"
 

@@ -100,10 +100,13 @@ def test_query_argv_unset_fields_resolve_to_quality_demo_defaults() -> None:
     # All-None QueryParams() must NOT fall back to the CLI's own low defaults —
     # the App's quality-demo overrides must be what actually gets passed.
     argv = _query_argv(AreaSpec(center=(1.0, 2.0), radius_km=1.0), QueryParams())
-    assert argv[argv.index("--iter-budget") + 1] == "200000"
-    assert argv[argv.index("--stagnation-iters") + 1] == "10000"
+    assert argv[argv.index("--iter-budget") + 1] == "1000000"
+    assert argv[argv.index("--stagnation-iters") + 1] == "200000"
     assert argv[argv.index("--difficulty-cap") + 1] == "T4"
     assert argv[argv.index("--elevation-deadband") + 1] == "1"
+    assert argv[argv.index("--j-max") + 1] == "0"
+    assert argv[argv.index("--area-cap") + 1] == "100000"
+    assert argv[argv.index("--workers") + 1] == "4"
 
 
 def test_query_argv_unset_fields_resolve_to_cli_defaults_when_unmentioned() -> None:
