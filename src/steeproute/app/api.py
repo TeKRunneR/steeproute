@@ -14,19 +14,23 @@ The store, queue, and SSE hub are created in `main.lifespan` and read off
 from __future__ import annotations
 
 import pathlib
+import re
 from collections.abc import AsyncIterator
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 
 from steeproute.app.cli_adapter import SchemaField, list_regions, query_params_schema, resolve_area
 from steeproute.app.models import (
     AreaResolution,
     JobCreate,
+    JobKind,
     JobRecord,
     JobStatus,
     RegionInfo,
+    RouteInfo,
     new_job_id,
     utcnow_iso,
 )
@@ -38,6 +42,10 @@ router = APIRouter()
 
 # Terminal states — once reached, the SSE stream emits a final `status` and closes.
 _TERMINAL: frozenset[JobStatus] = frozenset({JobStatus.DONE, JobStatus.FAILED, JobStatus.STOPPED})
+
+# The CLI writes one `route-<i>.html` (+ `.json` sidecar) per route, 1-indexed
+# (FR21; `output.py::render`). The result view lists and serves only the HTML.
+_ROUTE_FILE: re.Pattern[str] = re.compile(r"^route-(\d+)\.html$")
 
 
 def _store(request: Request) -> JobStore:
@@ -151,6 +159,62 @@ def resolve_region(
 def get_job(job: Annotated[JobRecord, Depends(_require_job)]) -> JobRecord:
     """One job record, or 404 if there is no such job (via `_require_job`)."""
     return job
+
+
+def _viewable_result_dir(job: JobRecord) -> pathlib.Path:
+    """The job's on-disk result directory, or 404 if it has no viewable result.
+
+    Only a **done query** produces a route report (App Story 2.3): a hard-cancelled
+    (`stopped`) or `failed` job has no result (architecture-app.md §Category 7), and
+    `setup` jobs render nothing. The directory is read straight off `job.result_dir`
+    — the value the worker already persisted before the query ran (queue.py) — so
+    the per-job path formula lives in exactly one place, not re-derived here.
+    """
+    if job.kind is not JobKind.QUERY or job.status is not JobStatus.DONE or job.result_dir is None:
+        raise HTTPException(status_code=404, detail=f"job {job.id!r} has no viewable result")
+    return pathlib.Path(job.result_dir)
+
+
+@router.get("/jobs/{job_id}/routes")
+def list_result_routes(job: Annotated[JobRecord, Depends(_require_job)]) -> list[RouteInfo]:
+    """The `route-<i>.html` files a done query produced, in numeric order (App
+    Story 2.3). 404 for a job with no viewable result; `[]` for a done query that
+    produced none (graceful degradation). Each entry carries the parsed route
+    index so the S5 selector labels routes without re-parsing the filename. Only
+    regular files are listed (never a directory/symlink that happens to match the
+    name) so a listed route is always one `get_result_file` can serve."""
+    result_dir = _viewable_result_dir(job)
+    if not result_dir.is_dir():
+        return []
+    routes = [
+        RouteInfo(index=int(m.group(1)), filename=p.name)
+        for p in result_dir.iterdir()
+        if p.is_file() and (m := _ROUTE_FILE.match(p.name)) is not None
+    ]
+    return sorted(routes, key=lambda r: r.index)
+
+
+@router.get("/jobs/{job_id}/result/{filename:path}")
+def get_result_file(
+    job: Annotated[JobRecord, Depends(_require_job)], filename: str
+) -> FileResponse:
+    """Serve one file from the job's `result/` dir for the S5 iframe (App Story 2.3).
+
+    Constrained to `<job>/result/` (architecture-app.md §Static-serve safety): the
+    candidate is resolved (following symlinks) and must stay inside the result dir,
+    so `..` traversal, absolute paths, and out-of-tree symlinks are all refused —
+    and the job's own `job.json`/`progress.ndjson` (which live in the *parent* dir)
+    are unreachable by construction. Anything not resolving to a regular file under
+    `result/` → 404. Not routed through `cli_adapter`: the query subprocess already
+    wrote these files; this reads the App's own job store, not CLI internals.
+    """
+    result_dir = _viewable_result_dir(job).resolve()
+    candidate = (result_dir / filename).resolve()
+    if not candidate.is_relative_to(result_dir) or not candidate.is_file():
+        raise HTTPException(
+            status_code=404, detail=f"no result file {filename!r} for job {job.id!r}"
+        )
+    return FileResponse(candidate)
 
 
 @router.post("/jobs/{job_id}/stop")

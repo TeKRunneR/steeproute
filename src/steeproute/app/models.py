@@ -220,6 +220,16 @@ class AreaResolution(BaseModel):
     cache_key_hash: str | None = None
 
 
+class RouteInfo(BaseModel):
+    """One route report a done query produced (App Story 2.3): the CLI's
+    `route-<index>.html` file. `index` is the 1-based route number parsed from
+    the filename server-side, so the S5 selector labels routes without
+    re-parsing the filename in JS."""
+
+    index: int
+    filename: str
+
+
 class GraspProgress(BaseModel):
     """GRASP solver readout — populated only during a query's solve phase
     (Story 2.2), `null` on the `ProgressModel` otherwise."""

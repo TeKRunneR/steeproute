@@ -28,7 +28,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-07-16  # app-2-2 (query-flavour progress) → done
+last_updated: 2026-07-16  # app-2-3 (view the resulting routes) → done; app-epic-2 complete
 
 project: bmad-test
 project_key: NOKEY
@@ -168,10 +168,10 @@ development_status:
   app-1-5-watch-a-running-job: done
   app-1-6-map-home-pick-an-area-and-build-a-region: done
 
-  app-epic-2: in-progress        # Configure, run, and watch a route query
+  app-epic-2: done        # Configure, run, and watch a route query
   app-2-1-configure-and-queue-a-query-schema-driven-form: done
   app-2-2-query-flavour-progress-grasp-and-non-solve-stages: done
-  app-2-3-view-the-resulting-routes: backlog
+  app-2-3-view-the-resulting-routes: done
 
   app-epic-3: backlog        # Browse, revisit, and re-run past runs
   app-3-1-run-library-list: backlog

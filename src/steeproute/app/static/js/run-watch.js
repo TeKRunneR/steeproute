@@ -8,7 +8,14 @@
 // progress frame carries `grasp` (query solve phase, Story 2.2) — absent for
 // setup, never reserved.
 
-import { getJob, stopJob, openJobEvents, ApiError } from "./api.js";
+import {
+  getJob,
+  stopJob,
+  openJobEvents,
+  resultViewUrl,
+  jobLoadErrorMessage,
+  ApiError,
+} from "./api.js";
 
 const jobId = decodeURIComponent(location.pathname.split("/").pop() ?? "");
 
@@ -25,6 +32,7 @@ const footerEl = $("run-footer");
 let startedAt = null;
 let elapsedTimer = null;
 let terminal = false;
+let jobKind = null;
 
 function fmtElapsed(ms) {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -77,9 +85,9 @@ function showFooter(status, exitCode) {
   if (elapsedTimer) clearInterval(elapsedTimer);
   footerEl.hidden = false;
   footerEl.innerHTML = "";
-  // A stopped/done job offers no View-routes here (View-routes lands in Epic 2);
-  // a failed job shows its exit code + a Re-run affordance (prefill form is Epic
-  // 2/3 — this is a placeholder link for now).
+  // A failed job shows its exit code + a Re-run affordance (prefill form is Epic
+  // 3 — this is a placeholder link for now); a stopped (hard-cancelled) job has
+  // no result (architecture-app.md §Category 7), so no View-routes there.
   if (status === "failed") {
     const code = exitCode != null ? ` (exit code ${exitCode})` : "";
     footerEl.append(document.createTextNode(`failed${code} · `));
@@ -89,8 +97,16 @@ function showFooter(status, exitCode) {
     footerEl.appendChild(rerun);
   } else if (status === "stopped") {
     footerEl.textContent = "stopped · no result";
+  } else if (status === "done" && jobKind === "query") {
+    // A done query produced the CLI route report(s) — offer the S5 iframe view
+    // (Story 2.3). A done setup job renders nothing, so it gets a plain marker.
+    footerEl.append(document.createTextNode("done · "));
+    const view = document.createElement("a");
+    view.href = resultViewUrl(jobId);
+    view.textContent = "View routes";
+    footerEl.appendChild(view);
   } else if (status === "done") {
-    footerEl.textContent = "done"; // [View routes] lands with Epic 2
+    footerEl.textContent = "done";
   }
 }
 
@@ -116,12 +132,12 @@ async function init() {
   try {
     job = await getJob(jobId);
   } catch (err) {
-    identityEl.textContent =
-      err instanceof ApiError && err.status === 404 ? `No such job: ${jobId}` : "Failed to load job.";
+    identityEl.textContent = jobLoadErrorMessage(err, jobId);
     return;
   }
   renderIdentity(job);
   startedAt = job.started_at;
+  jobKind = job.kind;
   renderStatus(job.status);
 
   const alreadyTerminal = ["done", "failed", "stopped"].includes(job.status);

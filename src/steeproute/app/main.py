@@ -56,6 +56,15 @@ def run_watch() -> FileResponse:
     return FileResponse(_STATIC_DIR / "run-watch.html")
 
 
+@router.get("/runs/{job_id}/result", include_in_schema=False)
+def result_view() -> FileResponse:
+    """Serve the S5 Result-view page (Story 2.3): a shell that iframes the run's
+    existing CLI `route-<i>.html` report(s). Distinct extra path segment from
+    `/runs/{job_id}` above — no route conflict; the page's JS reads the id from
+    the URL and fetches `/jobs/{id}/routes` + `/jobs/{id}/result/<file>`."""
+    return FileResponse(_STATIC_DIR / "result.html")
+
+
 def _make_lifespan(
     *,
     store_root: pathlib.Path | None,

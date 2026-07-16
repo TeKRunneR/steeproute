@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>steeproute · routes</title>
+    <link rel="stylesheet" href="/static/css/app.css" />
+  </head>
+  <body>
+    <!-- Global chrome: duplicated per page (buildless, no templating — accepted
+         for an N=1 tool). live-indicator.js targets #live-indicator here too. -->
+    <header class="app-header">
+      <a class="app-name" href="/">steeproute</a>
+      <nav class="app-nav">
+        <a href="/">Map</a>
+        <a href="/runs">Runs</a>
+      </nav>
+      <span id="live-indicator" class="live-indicator"></span>
+    </header>
+
+    <!-- S5 Result view (UX spec §S5): the run's existing CLI HTML report(s)
+         embedded in an iframe as-is. A route selector switches the iframe src
+         between route-1.html … route-N.html. No native re-render. -->
+    <main class="app-main result-main">
+      <section class="result-head">
+        <a id="back-to-run" class="result-back" href="/runs">← back to run</a>
+        <nav id="route-selector" class="route-selector" aria-label="routes"></nav>
+        <p id="result-status" class="result-status"></p>
+      </section>
+      <iframe
+        id="route-frame"
+        class="route-frame"
+        title="route report"
+        referrerpolicy="no-referrer"
+      ></iframe>
+    </main>
+
+    <script type="module" src="/static/js/live-indicator.js"></script>
+    <script type="module" src="/static/js/result.js"></script>
+  </body>
+</html>

@@ -321,3 +321,74 @@ body {
   border-top: 1px solid #cbd2d9;
   font-size: 0.95rem;
 }
+
+/* --- S5 Result view (Story 2.3) ----------------------------------------- */
+
+/* Full-bleed: the report iframe fills everything below the header + selector. */
+.app-main.result-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  max-width: none;
+  min-height: 0;
+}
+
+.result-head {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.75rem 1rem;
+  background: #ffffff;
+  border-bottom: 1px solid #cbd2d9;
+}
+
+.result-back {
+  color: #2b6cb0;
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+
+.result-back:hover {
+  text-decoration: underline;
+}
+
+.route-selector {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.route-tab {
+  background: #e4e7eb;
+  color: #1f2933;
+  border: 0;
+  border-radius: 4px;
+  padding: 0.35rem 0.8rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.route-tab:hover {
+  background: #cbd2d9;
+}
+
+.route-tab.active {
+  background: #2b6cb0;
+  color: #fff;
+}
+
+.result-status {
+  color: #52606d;
+  font-size: 0.9rem;
+  margin: 0;
+  margin-left: auto;
+}
+
+.route-frame {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  min-height: 0;
+}

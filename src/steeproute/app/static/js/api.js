@@ -82,3 +82,29 @@ export function openJobEvents(jobId) {
 export function runWatchUrl(jobId) {
   return `/runs/${jobId}`;
 }
+
+/** The Result-view (S5) page URL for a job. */
+export function resultViewUrl(jobId) {
+  return `/runs/${jobId}/result`;
+}
+
+/** The route reports a done query produced, as `{index, filename}` objects in
+ *  numeric order. Throws ApiError(404) for a job with no viewable result; `[]`
+ *  if it produced none. */
+export function listRoutes(jobId) {
+  return _json(`/jobs/${jobId}/routes`);
+}
+
+/** Human-readable message for a failed `getJob` (shared by the run-watch and
+ *  result views, which both surface it their own way). */
+export function jobLoadErrorMessage(err, jobId) {
+  return err instanceof ApiError && err.status === 404
+    ? `No such job: ${jobId}`
+    : "Failed to load job.";
+}
+
+/** The static URL of one result file under the job's `result/` dir (for the
+ *  iframe `src`). Serving is constrained server-side to `<job>/result/`. */
+export function resultFileUrl(jobId, filename) {
+  return `/jobs/${jobId}/result/${filename}`;
+}

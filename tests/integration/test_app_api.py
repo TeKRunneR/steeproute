@@ -32,7 +32,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from steeproute.app.main import create_app
-from steeproute.app.models import JobRecord
+from steeproute.app.models import AreaSpec, JobKind, JobRecord, JobStatus, new_job_id, utcnow_iso
+from steeproute.app.store import JobStore
 from steeproute.cache import Manifest, write_entry
 from steeproute.models import Area
 
@@ -452,3 +453,131 @@ def test_home_page_renders_map_and_actions() -> None:
     assert "map-home.js" in body
     # Global chrome still present on the reworked home page.
     assert 'id="live-indicator"' in body
+
+
+# --- Story 2.3: result view (view the resulting routes) ----------------------
+
+
+def _seed_job(
+    tmp_path: pathlib.Path,
+    *,
+    kind: JobKind = JobKind.QUERY,
+    status: JobStatus = JobStatus.DONE,
+    route_indices: tuple[int, ...] = (1, 2),
+    make_result_dir: bool = True,
+) -> tuple[JobStore, str]:
+    """Seed a job (and, for a done query, its `result/route-<i>.html` files)
+    directly on the store the TestClient app will read. No worker/subprocess —
+    the result-view endpoints only read the store, so a crafted record suffices."""
+    store = JobStore(tmp_path / "jobs")
+    job_id = new_job_id()
+    record = JobRecord(
+        id=job_id,
+        kind=kind,
+        area=AreaSpec(center=(45.26, 5.788), radius_km=2.0),
+        params={},
+        status=status,
+        created_at=utcnow_iso(),
+    )
+    if kind is JobKind.QUERY and status is JobStatus.DONE:
+        result_dir = store.job_dir(job_id) / "result"
+        if make_result_dir:
+            result_dir.mkdir(parents=True, exist_ok=True)
+            for i in route_indices:
+                (result_dir / f"route-{i}.html").write_text(
+                    f"<!doctype html><h1>route {i}</h1>", encoding="utf-8"
+                )
+        record.result_dir = str(result_dir)
+    store.create(record)  # writes job.json into the per-job dir
+    # A sibling progress log the result endpoint must never serve.
+    (store.job_dir(job_id) / "progress.ndjson").write_text("{}\n", encoding="utf-8")
+    return store, job_id
+
+
+def _seeded_client(tmp_path: pathlib.Path) -> TestClient:
+    return TestClient(create_app(store_root=tmp_path / "jobs"))
+
+
+def test_result_routes_lists_all_and_serves_each(tmp_path: pathlib.Path) -> None:
+    _, job_id = _seed_job(tmp_path, route_indices=(1, 2))
+    with _seeded_client(tmp_path) as client:
+        listing = client.get(f"/jobs/{job_id}/routes")
+        assert listing.status_code == 200
+        data = listing.json()
+        assert [r["filename"] for r in data] == ["route-1.html", "route-2.html"]
+        assert [r["index"] for r in data] == [1, 2]
+        for name in ("route-1.html", "route-2.html"):
+            resp = client.get(f"/jobs/{job_id}/result/{name}")
+            assert resp.status_code == 200
+            assert "text/html" in resp.headers["content-type"]
+            assert "<h1>route" in resp.text
+
+
+def test_result_routes_ordered_numerically_not_lexically(tmp_path: pathlib.Path) -> None:
+    _, job_id = _seed_job(tmp_path, route_indices=(1, 2, 10))
+    with _seeded_client(tmp_path) as client:
+        # Lexical order would put route-10 before route-2; the endpoint sorts by
+        # the integer index.
+        data = client.get(f"/jobs/{job_id}/routes").json()
+        assert [r["filename"] for r in data] == [
+            "route-1.html",
+            "route-2.html",
+            "route-10.html",
+        ]
+        assert [r["index"] for r in data] == [1, 2, 10]
+
+
+def test_result_file_traversal_is_refused(tmp_path: pathlib.Path) -> None:
+    _, job_id = _seed_job(tmp_path, route_indices=(1,))
+    with _seeded_client(tmp_path) as client:
+        # `../job.json` (fully percent-encoded so it reaches the handler rather
+        # than being normalized away) must not escape `<job>/result/`.
+        escaped = client.get(f"/jobs/{job_id}/result/%2e%2e%2fjob.json")
+        assert escaped.status_code == 404
+        assert '"id"' not in escaped.text  # the record was NOT leaked
+        # The sibling progress log is equally unreachable.
+        assert client.get(f"/jobs/{job_id}/result/%2e%2e%2fprogress.ndjson").status_code == 404
+
+
+def test_missing_route_file_404(tmp_path: pathlib.Path) -> None:
+    _, job_id = _seed_job(tmp_path, route_indices=(1,))
+    with _seeded_client(tmp_path) as client:
+        assert client.get(f"/jobs/{job_id}/result/route-9.html").status_code == 404
+
+
+def test_result_view_gated_to_done_query(tmp_path: pathlib.Path) -> None:
+    # Every non-(done-query) job offers no viewable result: routes + file 404.
+    cases = [
+        _seed_job(tmp_path, kind=JobKind.QUERY, status=JobStatus.STOPPED)[1],
+        _seed_job(tmp_path, kind=JobKind.QUERY, status=JobStatus.FAILED)[1],
+        _seed_job(tmp_path, kind=JobKind.SETUP, status=JobStatus.DONE)[1],
+        _seed_job(tmp_path, kind=JobKind.QUERY, status=JobStatus.RUNNING)[1],
+    ]
+    with _seeded_client(tmp_path) as client:
+        for job_id in cases:
+            assert client.get(f"/jobs/{job_id}/routes").status_code == 404
+            assert client.get(f"/jobs/{job_id}/result/route-1.html").status_code == 404
+
+
+def test_result_endpoints_unknown_job_404(tmp_path: pathlib.Path) -> None:
+    with _seeded_client(tmp_path) as client:
+        assert client.get("/jobs/nope/routes").status_code == 404
+        assert client.get("/jobs/nope/result/route-1.html").status_code == 404
+
+
+def test_result_routes_empty_when_no_files(tmp_path: pathlib.Path) -> None:
+    # A done query that produced no routes (graceful degradation) lists [], not 404.
+    _, job_id = _seed_job(tmp_path, route_indices=(), make_result_dir=False)
+    with _seeded_client(tmp_path) as client:
+        assert client.get(f"/jobs/{job_id}/routes").json() == []
+
+
+def test_result_view_page_and_js_served() -> None:
+    client = _client()
+    page = client.get("/runs/some-id/result")
+    assert page.status_code == 200
+    body = page.text
+    assert 'id="route-frame"' in body
+    assert 'id="route-selector"' in body
+    assert "result.js" in body
+    assert client.get("/static/js/result.js").status_code == 200
