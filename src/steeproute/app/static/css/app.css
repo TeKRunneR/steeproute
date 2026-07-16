@@ -83,7 +83,11 @@ body {
 
 .map {
   flex: 1;
-  height: 100%;
+  /* Height comes from the flex row's default `align-items: stretch` (like
+     `.picker-panel`), NOT `height: 100%`: the body uses `min-height: 100vh`
+     (not `height`), so a percentage height here resolves against an indefinite
+     containing block and collapses to 0, leaving Leaflet a zero-height canvas. */
+  min-height: 0;
 }
 
 .picker-panel {
