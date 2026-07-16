@@ -2,9 +2,10 @@
 
 Thin by design: parse → store/enqueue → serialize. snake_case on the wire, no
 response envelope (the resource is returned directly; errors are FastAPI's
-default `{detail}` via `HTTPException`). Story 1.4 adds the SSE progress stream
-(`GET /jobs/{id}/events`, snapshot-then-tail) on top of Story 1.3's job
-endpoints; stop, delete, and `/regions` arrive in later stories.
+default `{detail}` via `HTTPException`). Story 1.4 added the SSE progress stream
+(`GET /jobs/{id}/events`), Story 1.5 the hard-cancel `POST /jobs/{id}/stop`, and
+Story 1.6 the read-only `GET /regions` map overlay; `DELETE /jobs/{id}` (cancel
+queued) arrives with Story 3.2.
 
 The store, queue, and SSE hub are created in `main.lifespan` and read off
 `app.state`.
@@ -12,17 +13,21 @@ The store, queue, and SSE hub are created in `main.lifespan` and read off
 
 from __future__ import annotations
 
+import pathlib
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 
+from steeproute.app.cli_adapter import list_regions, resolve_area
 from steeproute.app.models import (
+    AreaResolution,
     JobCreate,
     JobKind,
     JobRecord,
     JobStatus,
+    RegionInfo,
     new_job_id,
     utcnow_iso,
 )
@@ -33,9 +38,7 @@ from steeproute.app.store import JobStore
 router = APIRouter()
 
 # Terminal states — once reached, the SSE stream emits a final `status` and closes.
-_TERMINAL: frozenset[JobStatus] = frozenset(
-    {JobStatus.DONE, JobStatus.FAILED, JobStatus.STOPPED}
-)
+_TERMINAL: frozenset[JobStatus] = frozenset({JobStatus.DONE, JobStatus.FAILED, JobStatus.STOPPED})
 
 
 def _store(request: Request) -> JobStore:
@@ -52,6 +55,13 @@ def _hub(request: Request) -> ProgressHub:
 
 def _worker(request: Request) -> Worker:
     return request.app.state.job_worker
+
+
+def _regions_cache_root(request: Request) -> pathlib.Path | None:
+    """The cache root `GET /regions` reads. `None` → the CLI default root (the
+    real location the setup subprocess writes to); tests inject a crafted root.
+    `getattr` default guards the (test-only) case where the lifespan hasn't run."""
+    return getattr(request.app.state, "regions_cache_root", None)
 
 
 def _require_job(job_id: str, request: Request) -> JobRecord:
@@ -101,6 +111,35 @@ def list_jobs(request: Request) -> list[JobRecord]:
     return _store(request).list()
 
 
+@router.get("/regions")
+def get_regions(request: Request) -> list[RegionInfo]:
+    """Built regions for the map overlay (architecture-app.md §Category 6).
+
+    Read straight from the CLI's on-disk cache through `cli_adapter.regions` (the
+    only cache-reading code); an empty or absent cache returns `[]`, not an error.
+    Read-only — listing regions never triggers a build. snake_case, no envelope.
+    """
+    return list_regions(cache_root=_regions_cache_root(request))
+
+
+@router.get("/regions/resolve")
+def resolve_region(
+    request: Request,
+    lat: float,
+    lon: float,
+    radius_km: Annotated[float, Query(gt=0)],
+) -> AreaResolution:
+    """Resolve a candidate selection to its bbox + green/grey coverage (Story 1.6).
+
+    The map picker sends its picked `center`/`radius_km`; the server returns the
+    exact WGS84 bbox and the coverage decision computed by the CLI cache's own
+    conversion + containment (`cli_adapter.resolve_area`). Keeps ALL km→deg and
+    containment server-side so the overlay can't drift from query-side coverage.
+    Read-only. `radius_km` must be > 0 (else 422).
+    """
+    return resolve_area((lat, lon), radius_km, cache_root=_regions_cache_root(request))
+
+
 @router.get("/jobs/{job_id}")
 def get_job(job: Annotated[JobRecord, Depends(_require_job)]) -> JobRecord:
     """One job record, or 404 if there is no such job (via `_require_job`)."""
@@ -108,9 +147,7 @@ def get_job(job: Annotated[JobRecord, Depends(_require_job)]) -> JobRecord:
 
 
 @router.post("/jobs/{job_id}/stop")
-async def stop_job(
-    job: Annotated[JobRecord, Depends(_require_job)], request: Request
-) -> JobRecord:
+async def stop_job(job: Annotated[JobRecord, Depends(_require_job)], request: Request) -> JobRecord:
     """Hard-cancel a running job (architecture-app.md §Category 7).
 
     Requests the worker to kill the child; the worker owns the terminal transition

@@ -110,6 +110,49 @@ class JobRecord(BaseModel):
     stderr_tail: list[str] = Field(default_factory=list)
 
 
+class RegionBounds(BaseModel):
+    """WGS84 lat/lon bbox corners of a prepared region (`south`/`west`/`north`/
+    `east` degrees). Precomputed server-side from the CLI cache's shared km→deg
+    conversion (`steeproute.cache.area_bbox_wgs84`) so the Leaflet overlay and
+    the green/grey containment test use exact geometry — the frontend renders
+    and tests against these, never re-deriving km→deg."""
+
+    south: float
+    west: float
+    north: float
+    east: float
+
+
+class RegionInfo(BaseModel):
+    """A built (prepared) region for the map overlay (`GET /regions`,
+    architecture-app.md §Category 6). Mirrors the cache's per-entry coverage
+    view: the entry hash, the area center, its bbox half-side, and the
+    precomputed WGS84 bbox. snake_case; App-side type so nothing outside
+    `cli_adapter` imports the CLI `Area`."""
+
+    cache_key_hash: str
+    center: tuple[float, float]
+    radius_km: float
+    bounds: RegionBounds
+
+
+class AreaResolution(BaseModel):
+    """Server-computed resolution of a candidate selection (`GET /regions/resolve`).
+
+    The map home sends a picked `center` + `radius_km`; the server returns the
+    exact WGS84 `bounds` (via `steeproute.cache.area_bbox_wgs84`) and the
+    green/grey decision (`covered`, plus the containing entry's `cache_key_hash`)
+    from the CLI cache's own containment (`cache.find_covering_entry`). This keeps
+    ALL km→deg + containment on the server — the frontend never re-derives either,
+    so its overlay can't drift from the query-side coverage check."""
+
+    center: tuple[float, float]
+    radius_km: float
+    bounds: RegionBounds
+    covered: bool
+    cache_key_hash: str | None = None
+
+
 class GraspProgress(BaseModel):
     """GRASP solver readout — populated only during a query's solve phase
     (Story 2.2), `null` on the `ProgressModel` otherwise."""

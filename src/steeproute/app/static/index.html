@@ -21,16 +21,35 @@
       <span id="live-indicator" class="live-indicator"></span>
     </header>
 
-    <main class="app-main">
-      <h1>Map home</h1>
-      <p>
-        The map picker lands in a later story. This is the runnable app skeleton:
-        the server, the global header, and the static + Leaflet mounts are in
-        place.
-      </p>
+    <main class="app-main map-main">
+      <div id="map" class="map"></div>
+      <aside class="picker-panel">
+        <h1 class="picker-title">Pick an area</h1>
+        <p id="picker-hint" class="picker-hint">
+          Click the map to drop a center, then drag the handle to set the radius.
+        </p>
+        <dl id="selection-readout" class="selection-readout" hidden>
+          <dt>Center</dt>
+          <dd id="sel-center">—</dd>
+          <dt>Radius (bbox half-side)</dt>
+          <dd id="sel-radius">—</dd>
+          <dt>Coverage</dt>
+          <dd id="sel-coverage">—</dd>
+        </dl>
+        <div class="picker-actions">
+          <button id="build-btn" class="primary-btn" type="button" disabled>
+            Build this region
+          </button>
+          <button id="configure-btn" class="primary-btn secondary" type="button" disabled>
+            Configure query
+          </button>
+        </div>
+        <p id="picker-status" class="picker-status" role="status"></p>
+      </aside>
     </main>
 
     <script src="/vendor/leaflet-1.9.4.min.js"></script>
+    <script type="module" src="/static/js/map-home.js"></script>
     <script type="module" src="/static/js/live-indicator.js"></script>
   </body>
 </html>

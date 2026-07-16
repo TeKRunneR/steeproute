@@ -32,6 +32,29 @@ export function listJobs() {
   return _json("/jobs");
 }
 
+/** Built regions for the map overlay (each has center, radius_km, bounds). */
+export function listRegions() {
+  return _json("/regions");
+}
+
+/** Resolve a picked area to its server-computed bbox + coverage decision
+ *  ({center, radius_km, bounds, covered, cache_key_hash}). The server owns all
+ *  km→deg + containment, so the client never re-derives geometry. */
+export function resolveArea(lat, lon, radiusKm) {
+  const q = new URLSearchParams({ lat, lon, radius_km: radiusKm });
+  return _json(`/regions/resolve?${q}`);
+}
+
+/** Enqueue a job (e.g. `{kind:"setup", area:{center,radius_km}}`). Returns the
+ *  created record (201) with its id; throws ApiError(422) on invalid params. */
+export function createJob(body) {
+  return _json("/jobs", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 /** One job record, or throws ApiError(404) for an unknown id. */
 export function getJob(jobId) {
   return _json(`/jobs/${jobId}`);

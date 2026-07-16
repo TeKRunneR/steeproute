@@ -3,8 +3,9 @@
 App Story 1.2 stood up the runnable skeleton (factory, static mounts, home page).
 App Story 1.3 hangs the job runner off it: a per-job JSON store and a single
 serial worker (concurrency = 1, architecture-app.md §Category 2) started in the
-`lifespan`, plus the `POST/GET /jobs` API. Progress classification + SSE (1.4),
-the map/run-watch/run-library UI (1.5+), and `/regions` (1.6) come later.
+`lifespan`, plus the `POST/GET /jobs` API. Story 1.4 added progress + SSE, 1.5 the
+run-watch UI + Stop, and 1.6 the map home + read-only `GET /regions` overlay; the
+run-library UI (Epic 3) comes later.
 
 Run it with `uv run steeproute-app` (single-worker uvicorn) or, for hot reload,
 `uv run fastapi dev src/steeproute/app/main.py`.
@@ -59,11 +60,14 @@ def _make_lifespan(
     *,
     store_root: pathlib.Path | None,
     build_argv: BuildArgv | None,
+    cache_root: pathlib.Path | None,
 ):
     """Build the lifespan that owns the job runner.
 
-    `store_root` and `build_argv` are injectable so tests use a tmp store and a
-    fake subprocess command; production passes neither and gets the real defaults.
+    `store_root`, `build_argv`, and `cache_root` are injectable so tests use a tmp
+    store, a fake subprocess command, and a crafted cache; production passes none
+    and gets the real defaults (`cache_root=None` → the CLI's default cache root
+    that `steeproute-setup` writes to, per `cli_adapter.argv`).
     """
 
     @asynccontextmanager
@@ -77,6 +81,8 @@ def _make_lifespan(
         app.state.progress_hub = hub
         # Exposed so `POST /jobs/{id}/stop` can reach the running child (Story 1.5).
         app.state.job_worker = worker
+        # Cache root for `GET /regions` (Story 1.6); `None` = the CLI default root.
+        app.state.regions_cache_root = cache_root
 
         task = asyncio.create_task(worker.run())
         logger.info("steeproute-app started; single-worker job queue running")
@@ -95,11 +101,14 @@ def create_app(
     *,
     store_root: pathlib.Path | None = None,
     build_argv: BuildArgv | None = None,
+    cache_root: pathlib.Path | None = None,
 ) -> FastAPI:
     """Build the FastAPI application (factory, so tests get isolated instances)."""
     app = FastAPI(
         title="steeproute",
-        lifespan=_make_lifespan(store_root=store_root, build_argv=build_argv),
+        lifespan=_make_lifespan(
+            store_root=store_root, build_argv=build_argv, cache_root=cache_root
+        ),
     )
     app.include_router(router)
     app.include_router(jobs_router)

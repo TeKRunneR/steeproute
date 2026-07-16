@@ -11,6 +11,9 @@ body {
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color: #1a1a1a;
   background: #fafafa;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
 }
 
 .app-header {
@@ -62,6 +65,112 @@ body {
 .app-main {
   padding: 1.5rem;
   max-width: 60rem;
+}
+
+/* --- S1 Map home (Story 1.6) -------------------------------------------- */
+
+/* Full-bleed: the map + picker panel fill everything below the header. */
+.app-main.map-main {
+  flex: 1;
+  display: flex;
+  padding: 0;
+  max-width: none;
+  min-height: 0; /* let the flex child (#map) actually shrink/grow */
+}
+
+.map {
+  flex: 1;
+  height: 100%;
+}
+
+.picker-panel {
+  width: 20rem;
+  flex: 0 0 20rem;
+  padding: 1.25rem;
+  overflow-y: auto;
+  background: #ffffff;
+  border-left: 1px solid #cbd2d9;
+}
+
+.picker-title {
+  font-size: 1.2rem;
+  margin: 0 0 0.5rem;
+}
+
+.picker-hint {
+  color: #52606d;
+  font-size: 0.9rem;
+  margin: 0 0 1rem;
+}
+
+.selection-readout {
+  margin: 0 0 1rem;
+  font-size: 0.9rem;
+}
+
+.selection-readout dt {
+  color: #7b8794;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-top: 0.6rem;
+}
+
+.selection-readout dd {
+  margin: 0.15rem 0 0;
+  font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+}
+
+.picker-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+.primary-btn {
+  background: #2b6cb0;
+  color: #fff;
+  border: 0;
+  border-radius: 4px;
+  padding: 0.55rem 1rem;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.primary-btn:hover:not(:disabled) {
+  background: #245a94;
+}
+
+.primary-btn.secondary {
+  background: #3a923f;
+}
+
+.primary-btn.secondary:hover:not(:disabled) {
+  background: #317d36;
+}
+
+.primary-btn:disabled {
+  background: #cbd2d9;
+  cursor: default;
+}
+
+.picker-status {
+  color: #52606d;
+  font-size: 0.9rem;
+  min-height: 1.2em;
+  margin: 0;
+}
+
+/* Draggable radius handle — a divIcon (no marker-image asset needed). */
+.map-handle {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #2b6cb0;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px #2b6cb0;
+  cursor: ew-resize;
 }
 
 /* --- S3 Run watch (Story 1.5) ------------------------------------------- */

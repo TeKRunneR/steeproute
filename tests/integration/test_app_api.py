@@ -1,8 +1,8 @@
-# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportMissingTypeArgument=false
 # Reason: Starlette's TestClient re-exports httpx, whose response accessors
 # (.get/.status_code/.headers/.text/.json()) surface as Unknown — a stub boundary,
 # same per-file relaxation pattern used for the networkx boundary in conftest.py.
-"""Integration tests for the web App API (App Stories 1.2 + 1.3).
+"""Integration tests for the web App API (App Stories 1.2 + 1.3 + 1.5 + 1.6).
 
 Story 1.2 surface: the FastAPI factory, the home page + global header markup, and
 the static mounts (frontend dir + reused CLI Leaflet assets).
@@ -11,7 +11,13 @@ Story 1.3 surface: the job lifecycle over the real store + single-worker queue,
 driven through `TestClient` as a context manager (which runs the `lifespan`, and
 with it the worker). The worker spawns a fake CLI script instead of the real
 `steeproute-setup` via an injected `build_argv`, and writes to a tmp store root —
-so no real build/network runs. SSE, stop, delete, and `/regions` arrive later.
+so no real build/network runs.
+
+Story 1.5 surface: the hard-cancel Stop path + run-watch page/JS served.
+
+Story 1.6 surface: `GET /regions` over a crafted cache root (real `write_entry`,
+no build) and the map-home markup + `map-home.js` served. `DELETE /jobs/{id}`
+arrives with Story 3.2.
 """
 
 from __future__ import annotations
@@ -21,11 +27,14 @@ import sys
 import textwrap
 import time
 
+import networkx as nx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from steeproute.app.main import create_app
 from steeproute.app.models import JobRecord
+from steeproute.cache import Manifest, write_entry
+from steeproute.models import Area
 
 # Fake CLI: emit a stdout line, then exit with the code encoded in argv.
 #   argv: <exit_code>
@@ -95,7 +104,9 @@ def _lifecycle_client(tmp_path: pathlib.Path, exit_code: int) -> TestClient:
     return TestClient(app)
 
 
-def _poll_until_terminal(client: TestClient, job_id: str, timeout: float = 15.0) -> dict[str, object]:
+def _poll_until_terminal(
+    client: TestClient, job_id: str, timeout: float = 15.0
+) -> dict[str, object]:
     deadline = time.monotonic() + timeout
     terminal = {"done", "failed", "stopped"}
     while time.monotonic() < deadline:
@@ -280,9 +291,91 @@ def test_run_watch_page_served_as_html() -> None:
 
 def test_frontend_js_modules_served_from_static_mount() -> None:
     client = _client()
-    for module in ("api.js", "run-watch.js", "live-indicator.js"):
+    for module in ("api.js", "run-watch.js", "live-indicator.js", "map-home.js"):
         resp = client.get(f"/static/js/{module}")
         assert resp.status_code == 200, module
         assert "javascript" in resp.headers["content-type"]
     # api.js is the single URL holder; the other modules import from it.
     assert "/jobs/" in client.get("/static/js/api.js").text
+
+
+# --- Story 1.6: GET /regions + map home --------------------------------------
+
+
+def _seed_cache_entry(cache_root: pathlib.Path, cache_key_hash: str, area: Area) -> None:
+    """Register a built region via real `write_entry` (empty graph — no build)."""
+    manifest = Manifest(
+        area=area,
+        untagged_policy="include",
+        dem_version="ign_rge_alti_5m_2024-12",
+        pipeline_content_hash="a" * 64,
+        osm_extract_date="2026-05-20T12:00:00Z",
+        cache_key_hash=cache_key_hash,
+        steeproute_version="0.1.0",
+        steeproute_commit="abc1234",
+        created_at="2026-05-20T12:00:00Z",
+    )
+    write_entry(cache_root, manifest, nx.MultiDiGraph())
+
+
+def _regions_client(tmp_path: pathlib.Path, seeded: tuple[str, Area] | None = None) -> TestClient:
+    cache_root = tmp_path / "cache"
+    if seeded is not None:
+        _seed_cache_entry(cache_root, seeded[0], seeded[1])
+    app = create_app(store_root=tmp_path / "jobs", cache_root=cache_root)
+    return TestClient(app)
+
+
+def test_regions_empty_cache_returns_empty_list(tmp_path: pathlib.Path) -> None:
+    with _regions_client(tmp_path) as client:
+        resp = client.get("/regions")
+        assert resp.status_code == 200
+        assert resp.json() == []  # empty cache is [], not an error
+
+
+def test_regions_lists_built_region_snake_case(tmp_path: pathlib.Path) -> None:
+    area = Area(center=(45.19, 5.72), radius_km=10.0)
+    with _regions_client(tmp_path, seeded=("ab" * 8, area)) as client:
+        body = client.get("/regions").json()
+        assert isinstance(body, list) and len(body) == 1  # bare list, no envelope
+        region = body[0]
+        assert region["cache_key_hash"] == "ab" * 8
+        assert region["center"] == [45.19, 5.72]
+        assert region["radius_km"] == 10.0
+        # snake_case bbox the frontend renders/tests against verbatim.
+        assert set(region["bounds"]) == {"south", "west", "north", "east"}
+        assert region["bounds"]["south"] < 45.19 < region["bounds"]["north"]
+        assert region["bounds"]["west"] < 5.72 < region["bounds"]["east"]
+
+
+def test_regions_resolve_reports_coverage_over_built_region(tmp_path: pathlib.Path) -> None:
+    area = Area(center=(45.19, 5.72), radius_km=12.0)
+    with _regions_client(tmp_path, seeded=("ab" * 8, area)) as client:
+        # A smaller selection at the same center is strictly contained → covered.
+        inside = client.get("/regions/resolve", params={"lat": 45.19, "lon": 5.72, "radius_km": 10})
+        assert inside.status_code == 200
+        body = inside.json()
+        assert body["covered"] is True
+        assert body["cache_key_hash"] == "ab" * 8
+        assert set(body["bounds"]) == {"south", "west", "north", "east"}
+        # A far-away selection is not covered.
+        outside = client.get("/regions/resolve", params={"lat": 46.5, "lon": 7.0, "radius_km": 10})
+        assert outside.json()["covered"] is False
+        assert outside.json()["cache_key_hash"] is None
+
+
+def test_regions_resolve_rejects_nonpositive_radius(tmp_path: pathlib.Path) -> None:
+    with _regions_client(tmp_path) as client:
+        resp = client.get("/regions/resolve", params={"lat": 45.19, "lon": 5.72, "radius_km": 0})
+        assert resp.status_code == 422  # Query(gt=0)
+
+
+def test_home_page_renders_map_and_actions() -> None:
+    body = _client().get("/").text
+    # Full-bleed map container + the two context-sensitive actions.
+    assert 'id="map"' in body
+    assert 'id="build-btn"' in body
+    assert 'id="configure-btn"' in body
+    assert "map-home.js" in body
+    # Global chrome still present on the reworked home page.
+    assert 'id="live-indicator"' in body

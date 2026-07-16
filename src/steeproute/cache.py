@@ -879,6 +879,19 @@ def _area_to_polygon(area: Area) -> shapely.Polygon:
     )
 
 
+def area_bbox_wgs84(area: Area) -> tuple[float, float, float, float]:
+    """Return `area`'s WGS84 bbox as `(south, west, north, east)` degrees.
+
+    Uses the same km→deg conversion as `check_coverage` / `_bounds_geojson`
+    (`_area_to_polygon`), so a consumer that renders the bbox and tests
+    containment against it — the web App's `GET /regions` overlay — matches the
+    CLI's coverage geometry exactly rather than re-deriving the conversion.
+    `(south, west, north, east)` == `(lat_min, lon_min, lat_max, lon_max)`.
+    """
+    minx, miny, maxx, maxy = _area_to_polygon(area).bounds  # (lon, lat) ring
+    return (miny, minx, maxy, maxx)
+
+
 @dataclass(frozen=True, slots=True)
 class _IndexedEntry:
     """One row from `index.json`, internal to `cache.py` containment logic.
@@ -1223,3 +1236,65 @@ def check_coverage(cache_root: pathlib.Path, query_area: Area) -> PreparedData:
         )
 
     return read_entry(cache_root, chosen.cache_key_hash)
+
+
+@dataclass(frozen=True, slots=True)
+class CoverageEntry:
+    """Public read-only view of one prepared cache entry: its key + area.
+
+    Mirrors the two fields `index.json` carries per entry (`cache_key_hash`,
+    `area`). Distinct from the internal `_IndexedEntry` only in being part of
+    the public API — `list_prepared_areas` returns these to coverage-overlay
+    consumers (the web App's `GET /regions`) that need *every* built area, not a
+    single containment match.
+    """
+
+    cache_key_hash: str
+    area: Area
+
+
+def list_prepared_areas(cache_root: pathlib.Path) -> list[CoverageEntry]:
+    """List every prepared cache entry as a `(cache_key_hash, area)` view.
+
+    Read-only coverage listing for the web App's map overlay — the counterpart
+    to `check_coverage` when a caller wants all built areas rather than the one
+    that contains a query. Applies the same index-recovery `check_coverage`
+    does: a missing / unparseable / stale-empty index is rebuilt once from the
+    on-disk manifests before reading. Returns `[]` for an empty or entirely
+    absent cache (never raises), and — unlike the query path — does **not**
+    create the cache tree when nothing exists yet, so a bare `GET /regions`
+    against a fresh machine leaves no side effects.
+    """
+    index_path = cache_root / _CACHE_SUBDIR / _INDEX_FILENAME
+    indexed = _read_indexed_entries(index_path)
+    if indexed is None:
+        if not _areas_dir(cache_root).is_dir():
+            return []  # no cache at all — nothing to rebuild
+        rebuild_index(cache_root)
+        indexed = _read_indexed_entries(index_path) or []
+    elif not indexed and _areas_has_valid_entries(cache_root):
+        # Empty index but committed entries on disk (Story 2.7 D1 window).
+        rebuild_index(cache_root)
+        indexed = _read_indexed_entries(index_path) or []
+    return [CoverageEntry(cache_key_hash=e.cache_key_hash, area=e.area) for e in indexed]
+
+
+def find_covering_entry(cache_root: pathlib.Path, query_area: Area) -> CoverageEntry | None:
+    """Smallest prepared entry whose bbox strictly contains `query_area`, or `None`.
+
+    A graph-free coverage probe for the web App's map overlay (`GET /regions/resolve`):
+    it answers "would a query at this area be covered?" without loading the chosen
+    entry's graph (which is what `check_coverage` does next). Shares
+    `_select_smallest_containing` with `check_coverage`, so the App's green/grey
+    decision matches the CLI's query-side coverage exactly — no reimplemented
+    containment. Applies the same index recovery as `list_prepared_areas`; returns
+    `None` for an empty cache or a query no prepared area contains.
+    """
+    indexed = [
+        _IndexedEntry(cache_key_hash=e.cache_key_hash, area=e.area)
+        for e in list_prepared_areas(cache_root)
+    ]
+    chosen = _select_smallest_containing(query_area, indexed)
+    if chosen is None:
+        return None
+    return CoverageEntry(cache_key_hash=chosen.cache_key_hash, area=chosen.area)
