@@ -43,12 +43,18 @@ Planning lives under `_bmad-output/planning-artifacts/`:
   future change must not silently alter existing goldens, and new behavior
   gets its own regression coverage.
 - Good manual-run / demo / gallery params (CLI defaults are too low for
-  quality output): `--iter-budget 200000 --stagnation-iters 10000
-  --difficulty-cap T4 --elevation-deadband 1`. `--j-max 0` for `--n >= 2` on a
-  reasonably large box returns fully segment-disjoint routes (only affects
-  routes 2+, not route 1). Do **not** lower `--theta` below its 0.20 default —
-  the route-level average-slope floor is intentionally limiting; that's the
-  whole point of the tool.
+  quality output): `--iter-budget 1000000 --stagnation-iters 200000
+  --difficulty-cap T4 --elevation-deadband 1 --j-max 0 --workers 4
+  --area-cap 100000`. `--j-max 0` for `--n >= 2` on a reasonably large box
+  returns fully segment-disjoint routes (only affects routes 2+, not route 1)
+  — it's a real, valid ceiling value, not a "disable" flag. `--area-cap`
+  *can't* be disabled with `0`: the check rejects any area strictly greater
+  than the cap and area is never negative, so `0` would reject every
+  selection — `100000` km² (~178 km radius) is a practical no-op ceiling
+  instead. Do **not** lower `--theta` below its 0.20 default — the
+  route-level average-slope floor is intentionally limiting; that's the whole
+  point of the tool. (The web App's query config form mirrors these as its
+  quality-demo defaults — `cli_adapter/params_schema.py`.)
 
 ## Scale target
 
