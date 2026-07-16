@@ -24,12 +24,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import pathlib
 from collections import deque
 from collections.abc import Awaitable, Callable
 from typing import final
 
-from steeproute.app.cli_adapter import build_setup_argv, progress_parser_for
-from steeproute.app.models import JobKind, JobRecord, JobStatus, SetupParams, utcnow_iso
+from steeproute.app.cli_adapter import build_query_argv, build_setup_argv, progress_parser_for
+from steeproute.app.models import (
+    JobKind,
+    JobRecord,
+    JobStatus,
+    QueryParams,
+    SetupParams,
+    utcnow_iso,
+)
 from steeproute.app.sse import ProgressEvent, ProgressHub, StatusEvent
 from steeproute.app.store import JobStore
 
@@ -42,9 +50,29 @@ STDOUT_TAIL_LINES = 50
 # driving the real spawn/drain/exit path.
 BuildArgv = Callable[[JobRecord], list[str]]
 
+# Per-job output subdir name under the job store's own directory (App Story
+# 2.1): `<store_root>/<job_id>/result/`, passed to `steeproute --output-dir`.
+RESULT_DIR_NAME = "result"
+
 
 def default_build_argv(record: JobRecord) -> list[str]:
-    """Build the subprocess argv for a job via the CLI adapter (setup only for now)."""
+    """Build the subprocess argv for a job via the CLI adapter, dispatched by kind.
+
+    A query job's `record.result_dir` MUST already be set (the worker sets it
+    before calling this, alongside the RUNNING transition — see `_run_one`) so
+    the `--output-dir` passed here is a real per-job path, never the CLI's
+    relative `./results` default.
+    """
+    if record.kind is JobKind.QUERY:
+        if record.result_dir is None:
+            raise ValueError(
+                f"job {record.id!r}: result_dir must be set before building query argv"
+            )
+        return build_query_argv(
+            record.area,
+            QueryParams.model_validate(record.params),
+            pathlib.Path(record.result_dir),
+        )
     return build_setup_argv(record.area, SetupParams.model_validate(record.params))
 
 
@@ -172,6 +200,13 @@ class Worker:
 
         record.status = JobStatus.RUNNING
         record.started_at = utcnow_iso()
+        if record.kind is JobKind.QUERY and record.result_dir is None:
+            # A query subprocess needs a real, isolated output directory (the
+            # CLI's own `--output-dir` default is a relative `./results`, which
+            # would collide across jobs run from the same server cwd) — set it
+            # here, before argv is built, so `default_build_argv` can pass it as
+            # `--output-dir` and Story 2.3 can later serve it statically.
+            record.result_dir = str(self._store.job_dir(record.id) / RESULT_DIR_NAME)
         self._store.update(record)
         # Claim this as the active job SYNCHRONOUSLY — no `await` between the
         # RUNNING store write above and here — so a `stop()` racing the status

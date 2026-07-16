@@ -7,10 +7,19 @@ boundary).
 
 from __future__ import annotations
 
-from steeproute.app.cli_adapter import build_setup_argv, resolve_setup_executable
-from steeproute.app.models import AreaSpec, SetupParams
+import pathlib
+
+from steeproute.app.cli_adapter import (
+    build_query_argv,
+    build_setup_argv,
+    resolve_query_executable,
+    resolve_setup_executable,
+)
+from steeproute.app.models import AreaSpec, QueryParams, SetupParams
 
 _EXE = "fake-steeproute-setup"
+_QUERY_EXE = "fake-steeproute"
+_OUT_DIR = pathlib.Path("/tmp/fake-job/result")
 
 
 def _argv(area: AreaSpec, params: SetupParams) -> list[str]:
@@ -68,3 +77,81 @@ def test_executable_defaults_to_resolved_console_script() -> None:
     # else the bare script name — matched case-insensitively (Windows uppercases it).
     stem = argv[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
     assert stem in ("steeproute-setup", "steeproute-setup.exe")
+
+
+# --- build_query_argv (App Story 2.1) ----------------------------------------
+
+
+def _query_argv(
+    area: AreaSpec, params: QueryParams, output_dir: pathlib.Path = _OUT_DIR
+) -> list[str]:
+    return build_query_argv(area, params, output_dir, executable=_QUERY_EXE)
+
+
+def test_query_argv_includes_area_and_output_dir() -> None:
+    argv = _query_argv(AreaSpec(center=(45.26, 5.788), radius_km=2.0), QueryParams())
+    assert argv[0] == _QUERY_EXE
+    assert argv[argv.index("--center") + 1] == "45.26,5.788"
+    assert argv[argv.index("--radius") + 1] == "2"
+    assert argv[argv.index("--output-dir") + 1] == str(_OUT_DIR)
+
+
+def test_query_argv_unset_fields_resolve_to_quality_demo_defaults() -> None:
+    # All-None QueryParams() must NOT fall back to the CLI's own low defaults —
+    # the App's quality-demo overrides must be what actually gets passed.
+    argv = _query_argv(AreaSpec(center=(1.0, 2.0), radius_km=1.0), QueryParams())
+    assert argv[argv.index("--iter-budget") + 1] == "200000"
+    assert argv[argv.index("--stagnation-iters") + 1] == "10000"
+    assert argv[argv.index("--difficulty-cap") + 1] == "T4"
+    assert argv[argv.index("--elevation-deadband") + 1] == "1"
+
+
+def test_query_argv_unset_fields_resolve_to_cli_defaults_when_unmentioned() -> None:
+    argv = _query_argv(AreaSpec(center=(1.0, 2.0), radius_km=1.0), QueryParams())
+    assert argv[argv.index("--theta") + 1] == "0.2"
+    assert argv[argv.index("--n") + 1] == "5"
+    assert argv[argv.index("--untagged-trails") + 1] == "include"
+
+
+def test_query_argv_explicit_value_overrides_default() -> None:
+    argv = _query_argv(AreaSpec(center=(1.0, 2.0), radius_km=1.0), QueryParams(theta=0.35, n=8))
+    assert argv[argv.index("--theta") + 1] == "0.35"
+    assert argv[argv.index("--n") + 1] == "8"
+
+
+def test_query_argv_seed_omitted_when_unset() -> None:
+    argv = _query_argv(AreaSpec(center=(1.0, 2.0), radius_km=1.0), QueryParams())
+    assert "--seed" not in argv
+
+
+def test_query_argv_seed_included_when_set() -> None:
+    argv = _query_argv(AreaSpec(center=(1.0, 2.0), radius_km=1.0), QueryParams(seed=42))
+    assert argv[argv.index("--seed") + 1] == "42"
+
+
+def test_query_argv_max_descent_slope_omitted_when_unset() -> None:
+    argv = _query_argv(AreaSpec(center=(1.0, 2.0), radius_km=1.0), QueryParams())
+    assert "--max-descent-slope" not in argv
+
+
+def test_query_argv_max_descent_slope_included_when_set() -> None:
+    argv = _query_argv(
+        AreaSpec(center=(1.0, 2.0), radius_km=1.0), QueryParams(max_descent_slope=0.4)
+    )
+    assert argv[argv.index("--max-descent-slope") + 1] == "0.4"
+
+
+def test_query_argv_start_at_junction_flag_only_when_true() -> None:
+    off = _query_argv(AreaSpec(center=(1.0, 2.0), radius_km=1.0), QueryParams())
+    assert "--start-at-junction" not in off
+    on = _query_argv(
+        AreaSpec(center=(1.0, 2.0), radius_km=1.0), QueryParams(start_at_junction=True)
+    )
+    assert "--start-at-junction" in on
+
+
+def test_query_argv_executable_defaults_to_resolved_console_script() -> None:
+    argv = build_query_argv(AreaSpec(center=(1.0, 2.0), radius_km=2.0), QueryParams(), _OUT_DIR)
+    assert argv[0] == resolve_query_executable()
+    stem = argv[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
+    assert stem in ("steeproute", "steeproute.exe")

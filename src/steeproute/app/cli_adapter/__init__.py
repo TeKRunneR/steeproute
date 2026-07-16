@@ -14,18 +14,35 @@ Import the adapter only through this public interface.
 
 from __future__ import annotations
 
-from steeproute.app.cli_adapter.argv import build_setup_argv, resolve_setup_executable
+from steeproute.app.cli_adapter.argv import (
+    build_query_argv,
+    build_setup_argv,
+    resolve_query_executable,
+    resolve_setup_executable,
+)
+from steeproute.app.cli_adapter.params_schema import (
+    SchemaField,
+    query_params_schema,
+    resolve_query_defaults,
+)
 from steeproute.app.cli_adapter.progress_parse import (
+    QueryProgressParser,
     SetupProgressParser,
     progress_parser_for,
 )
 from steeproute.app.cli_adapter.regions import list_regions, resolve_area
 
 __all__ = [
+    "QueryProgressParser",
+    "SchemaField",
     "SetupProgressParser",
+    "build_query_argv",
     "build_setup_argv",
     "list_regions",
     "progress_parser_for",
+    "query_params_schema",
     "resolve_area",
+    "resolve_query_defaults",
+    "resolve_query_executable",
     "resolve_setup_executable",
 ]

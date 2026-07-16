@@ -218,12 +218,6 @@ def test_list_jobs_reflects_submissions(tmp_path: pathlib.Path) -> None:
         assert ids == [first, second]  # id-ordered == submission order
 
 
-def test_query_kind_rejected_422(tmp_path: pathlib.Path) -> None:
-    with _lifecycle_client(tmp_path, exit_code=0) as client:
-        body = {"kind": "query", "area": {"center": [45.26, 5.788], "radius_km": 2.0}}
-        assert client.post("/jobs", json=body).status_code == 422
-
-
 def test_bad_area_rejected_422(tmp_path: pathlib.Path) -> None:
     with _lifecycle_client(tmp_path, exit_code=0) as client:
         # Missing radius_km → pydantic validation error.
@@ -368,6 +362,85 @@ def test_regions_resolve_rejects_nonpositive_radius(tmp_path: pathlib.Path) -> N
     with _regions_client(tmp_path) as client:
         resp = client.get("/regions/resolve", params={"lat": 45.19, "lon": 5.72, "radius_km": 0})
         assert resp.status_code == 422  # Query(gt=0)
+
+
+# --- Story 2.1: query jobs + config-form schema ------------------------------
+
+
+def _query_body(**params: object) -> dict[str, object]:
+    return {
+        "kind": "query",
+        "area": {"center": [45.26, 5.788], "radius_km": 2.0},
+        "params": params,
+    }
+
+
+def test_query_job_accepted_and_runs_to_done(tmp_path: pathlib.Path) -> None:
+    # The fake build_argv ignores kind/params entirely (same fixture the setup
+    # lifecycle tests use), so this exercises: the API no longer 422s `query`,
+    # the worker's per-job result_dir assignment, and the new
+    # `QueryProgressParser` (no longer a `NotImplementedError`) on real stdout.
+    with _lifecycle_client(tmp_path, exit_code=0) as client:
+        resp = client.post("/jobs", json=_query_body())
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["kind"] == "query"
+        assert body["status"] == "queued"
+
+        final = _poll_until_terminal(client, body["id"])
+        assert final["status"] == "done"
+        assert final["exit_code"] == 0
+        # A query job gets a per-job result directory assigned by the worker.
+        assert final["result_dir"] is not None
+        assert body["id"] in final["result_dir"]
+
+
+def test_query_job_invalid_param_type_rejected_422(tmp_path: pathlib.Path) -> None:
+    with _lifecycle_client(tmp_path, exit_code=0) as client:
+        body = _query_body(theta="not-a-number")
+        assert client.post("/jobs", json=body).status_code == 422
+
+
+def test_query_job_mismatched_params_rejected_422(tmp_path: pathlib.Path) -> None:
+    # A setup-only field posted under kind=query must not be silently ignored.
+    with _lifecycle_client(tmp_path, exit_code=0) as client:
+        body = {
+            "kind": "query",
+            "area": {"center": [45.26, 5.788], "radius_km": 2.0},
+            "params": {"force_refresh": True},
+        }
+        assert client.post("/jobs", json=body).status_code == 422
+
+
+def test_query_job_accepts_explicit_params(tmp_path: pathlib.Path) -> None:
+    with _lifecycle_client(tmp_path, exit_code=0) as client:
+        resp = client.post("/jobs", json=_query_body(theta=0.35, n=8, seed=42))
+        assert resp.status_code == 201
+        assert resp.json()["params"]["theta"] == 0.35
+        assert resp.json()["params"]["n"] == 8
+        assert resp.json()["params"]["seed"] == 42
+
+
+def test_query_params_schema_endpoint(tmp_path: pathlib.Path) -> None:
+    with _lifecycle_client(tmp_path, exit_code=0) as client:
+        resp = client.get("/params/query-schema")
+        assert resp.status_code == 200
+        fields = {f["name"]: f for f in resp.json()}
+        # Excluded (App-owned, plus click's own --version) flags never reach the frontend.
+        for excluded in (
+            "center",
+            "radius",
+            "output_dir",
+            "cache_dir",
+            "verbose",
+            "quiet",
+            "version",
+        ):
+            assert excluded not in fields
+        # Quality-demo overrides are what the form actually prefills.
+        assert fields["iter_budget"]["default"] == 200_000
+        assert fields["difficulty_cap"]["default"] == "T4"
+        assert fields["theta"]["group"] == "basic"
 
 
 def test_home_page_renders_map_and_actions() -> None:

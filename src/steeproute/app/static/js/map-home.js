@@ -11,6 +11,7 @@
 // hand-copied conversion.
 
 import { createJob, listRegions, resolveArea, runWatchUrl } from "./api.js";
+import { openConfigForm } from "./config-form.js";
 
 const DEFAULT_RADIUS_KM = 10;
 const GRENOBLE = [45.19, 5.72];
@@ -147,8 +148,8 @@ buildBtn.addEventListener("click", async () => {
 });
 
 configureBtn.addEventListener("click", () => {
-  // Placeholder: the config form + query kind land in Epic 2 (Story 2.1).
-  statusEl.textContent = "Configure query arrives in Epic 2.";
+  if (!center || configureBtn.disabled) return;
+  openConfigForm({ center: [center.lat, center.lon], radius_km: radiusKm });
 });
 
 async function loadRegions() {

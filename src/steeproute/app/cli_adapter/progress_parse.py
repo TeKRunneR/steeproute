@@ -91,15 +91,41 @@ class SetupProgressParser:
         )
 
 
-def progress_parser_for(kind: JobKind) -> SetupProgressParser:
+@final
+class QueryProgressParser:
+    """Minimal query-flavour classifier (App Story 2.1).
+
+    Query jobs now reach the worker (Story 2.1 accepts `kind=query`), so
+    `_consume_stdout` needs a non-raising classifier for every stdout line —
+    but stage advancement and the GRASP best-cost/iteration readout (Flavours
+    B/C of `format-inventory.md`) are explicitly Story 2.2's scope. Until then
+    this only feeds `log_tail`; `stage_name`/`stage_index`/`stage_total` stay
+    at their zero-value defaults and `grasp` stays `null`, which Run-watch
+    already renders as "no stage/GRASP info yet" (the same shape a setup
+    cache-hit run produces before its first stage line).
+    """
+
+    def __init__(self) -> None:
+        self._log_tail: deque[str] = deque(maxlen=LOG_TAIL_MAX)
+
+    def feed(self, line: str) -> ProgressModel | None:
+        if not line.strip():
+            return None
+        self._log_tail.append(line)
+        return ProgressModel(
+            phase=Phase.QUERY,
+            grasp=None,
+            log_tail=list(self._log_tail),
+        )
+
+
+def progress_parser_for(kind: JobKind) -> SetupProgressParser | QueryProgressParser:
     """Return a fresh stateful classifier for a job kind.
 
-    Only `setup` is classified in this story; the `query` flavour (Flavours B/C)
-    lands in Story 2.2. Query jobs are rejected at the API (422), so a query kind
-    never reaches the worker that calls this.
+    `setup` gets the full stage-aware classifier (Story 1.4); `query` gets the
+    minimal log-tail-only classifier above until Story 2.2 adds stage/GRASP
+    parsing for its two stdout flavours.
     """
     if kind is JobKind.SETUP:
         return SetupProgressParser()
-    raise NotImplementedError(
-        f"progress classification for kind {kind.value!r} arrives in Story 2.2"
-    )
+    return QueryProgressParser()

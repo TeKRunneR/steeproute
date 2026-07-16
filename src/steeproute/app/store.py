@@ -44,6 +44,16 @@ class JobStore:
     def _job_dir(self, job_id: str) -> pathlib.Path:
         return self._root / job_id
 
+    def job_dir(self, job_id: str) -> pathlib.Path:
+        """The job's own directory (public accessor; App Story 2.1).
+
+        A query job's `--output-dir` must be a per-job path (the CLI's own
+        `./results` default is relative to the server's cwd and would collide
+        across jobs) — this is the one place that path is computed, so
+        `cli_adapter.argv` and the worker never recompute or duplicate the
+        store's directory-layout formula (architecture-app.md §Category 5)."""
+        return self._job_dir(job_id)
+
     def create(self, record: JobRecord) -> None:
         """Persist a new job record, creating its per-job directory."""
         self._job_dir(record.id).mkdir(parents=True, exist_ok=True)

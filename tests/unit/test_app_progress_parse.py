@@ -14,15 +14,16 @@ import pathlib
 
 import pytest
 
-from steeproute.app.cli_adapter import SetupProgressParser, progress_parser_for
+from steeproute.app.cli_adapter import (
+    QueryProgressParser,
+    SetupProgressParser,
+    progress_parser_for,
+)
 from steeproute.app.cli_adapter.progress_parse import SETUP_STAGES
 from steeproute.app.models import JobKind, Phase, ProgressModel
 
 _FIXTURE = (
-    pathlib.Path(__file__).parents[1]
-    / "fixtures"
-    / "app_stdout"
-    / "setup_cache_miss.stdout.txt"
+    pathlib.Path(__file__).parents[1] / "fixtures" / "app_stdout" / "setup_cache_miss.stdout.txt"
 )
 
 
@@ -119,6 +120,36 @@ def test_stage_index_progression_over_fixture() -> None:
 
 def test_parser_factory_setup_and_query() -> None:
     assert isinstance(progress_parser_for(JobKind.SETUP), SetupProgressParser)
-    # Query classification is Story 2.2; the factory refuses it explicitly.
-    with pytest.raises(NotImplementedError):
-        _ = progress_parser_for(JobKind.QUERY)
+    # Query jobs now reach the worker (App Story 2.1) — the factory must return
+    # a working (non-raising) classifier, not defer with NotImplementedError.
+    assert isinstance(progress_parser_for(JobKind.QUERY), QueryProgressParser)
+
+
+# --- QueryProgressParser: minimal, log-tail-only (App Story 2.1) ------------
+
+
+def test_query_parser_blank_line_emits_nothing() -> None:
+    assert QueryProgressParser().feed("   ") is None
+
+
+def test_query_parser_feeds_log_tail_without_stage_or_grasp() -> None:
+    parser = QueryProgressParser()
+    model = parser.feed("stage: elevation-reshape ...")
+    assert model is not None
+    assert model.phase is Phase.QUERY
+    # Stage/GRASP classification is Story 2.2's scope — not parsed here yet.
+    assert model.stage_name is None
+    assert model.stage_index == 0
+    assert model.grasp is None
+    assert "stage: elevation-reshape ..." in model.log_tail
+
+
+def test_query_parser_log_tail_accumulates_in_order() -> None:
+    parser = QueryProgressParser()
+    _ = parser.feed("steeproute: cache-hit cache_key_hash: abc123")
+    model = parser.feed("progress: iter=10 best_objective=42.0 elapsed=1.0s eta=? stagnation=0")
+    assert model is not None
+    assert model.log_tail == [
+        "steeproute: cache-hit cache_key_hash: abc123",
+        "progress: iter=10 best_objective=42.0 elapsed=1.0s eta=? stagnation=0",
+    ]

@@ -20,11 +20,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 
-from steeproute.app.cli_adapter import list_regions, resolve_area
+from steeproute.app.cli_adapter import SchemaField, list_regions, query_params_schema, resolve_area
 from steeproute.app.models import (
     AreaResolution,
     JobCreate,
-    JobKind,
     JobRecord,
     JobStatus,
     RegionInfo,
@@ -84,14 +83,11 @@ def _status_payload(
 async def create_job(body: JobCreate, request: Request) -> JobRecord:
     """Enqueue a job. Returns the created record (status `queued`) with HTTP 201.
 
-    Only `setup` jobs are supported in this version; a `query` job is a valid
-    enum value but not yet wired (Epic 2), so it is rejected 422.
+    Both `setup` and `query` kinds are accepted (App Story 2.1); `body.params`
+    is already validated against the kind-matching model (`SetupParams` or
+    `QueryParams`) by `JobCreate`'s own kind-dispatch, so a malformed or
+    mismatched body has already failed 422 before this handler runs.
     """
-    if body.kind is not JobKind.SETUP:
-        raise HTTPException(
-            status_code=422,
-            detail=f"job kind {body.kind.value!r} is not supported yet (setup only)",
-        )
     record = JobRecord(
         id=new_job_id(),
         kind=body.kind,
@@ -109,6 +105,17 @@ async def create_job(body: JobCreate, request: Request) -> JobRecord:
 def list_jobs(request: Request) -> list[JobRecord]:
     """The full job registry (ordered by creation)."""
     return _store(request).list()
+
+
+@router.get("/params/query-schema")
+def get_query_params_schema() -> list[SchemaField]:
+    """The introspected query-form schema (App Story 2.1, architecture-app.md
+    §Category 9): field name/type/default/choices/help/basic-or-advanced group,
+    derived from `steeproute.cli.query`'s click command — never hand-duplicated.
+    `config-form.js` renders the basic/advanced form directly from this; no
+    other file hand-lists query flags.
+    """
+    return query_params_schema()
 
 
 @router.get("/regions")

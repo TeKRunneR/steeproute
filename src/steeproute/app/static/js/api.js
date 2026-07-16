@@ -37,6 +37,13 @@ export function listRegions() {
   return _json("/regions");
 }
 
+/** The introspected query config-form schema (each field has name, type,
+ *  default, help, group, choices) — the single source `config-form.js`
+ *  renders from; no flag names are hand-listed in JS. */
+export function getQuerySchema() {
+  return _json("/params/query-schema");
+}
+
 /** Resolve a picked area to its server-computed bbox + coverage decision
  *  ({center, radius_km, bounds, covered, cache_key_hash}). The server owns all
  *  km→deg + containment, so the client never re-derives geometry. */

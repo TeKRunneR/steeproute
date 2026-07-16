@@ -22,9 +22,9 @@ import datetime
 import enum
 import time
 import uuid
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal, cast
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class JobKind(enum.StrEnum):
@@ -72,21 +72,88 @@ class AreaSpec(BaseModel):
 class SetupParams(BaseModel):
     """Setup-job parameters beyond the area. Minimal by design for v1 — the full
     click-introspected schema is Epic 2 (query). Field names map 1:1 onto
-    `steeproute-setup` flags in `cli_adapter.argv`."""
+    `steeproute-setup` flags in `cli_adapter.argv`.
+
+    `extra="forbid"` so a body carrying `QueryParams`-shaped fields under
+    `kind=setup` fails 422 instead of silently ignoring them (JobCreate's
+    kind-dispatch below relies on this to actually reject a mismatched body)."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
     untagged_trails: Literal["include", "exclude"] = "include"
     force_refresh: bool = False
     dem_version: str | None = None
 
 
+class QueryParams(BaseModel):
+    """Query-job parameters beyond the area (App Story 2.1). Field names/types
+    mirror the subset of `steeproute` CLI flags `cli_adapter.params_schema`
+    exposes on the form (excludes area/output/verbosity, which the App owns).
+
+    Every field defaults to `None` — "unset, use the App's actual default" —
+    so this model never hand-duplicates a default value; `cli_adapter.
+    params_schema.resolve_query_defaults()` is the single place that resolves
+    `None` to the quality-demo value (AGENTS.md) or the CLI's own default, and
+    `cli_adapter.argv.build_query_argv` is the only consumer of that
+    resolution. `extra="forbid"` — see `SetupParams`."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    theta: float | None = None
+    min_climb_slope: float | None = None
+    difficulty_cap: Literal["T1", "T2", "T3", "T4", "T5", "T6"] | None = None
+    l_connector: float | None = None
+    min_climb_ground_length: float | None = None
+    elevation_smoothing: float | None = None
+    elevation_deadband: float | None = None
+    j_max: float | None = None
+    start_at_junction: bool | None = None
+    max_descent_slope: float | None = None
+    n: int | None = None
+    area_cap: float | None = None
+    untagged_trails: Literal["include", "exclude"] | None = None
+    seed: int | None = None
+    iter_budget: int | None = None
+    time_budget: float | None = None
+    stagnation_iters: int | None = None
+    workers: int | None = None
+    merge_interval: int | None = None
+    progress_interval: float | None = None
+    osm_age_warn_days: int | None = None
+
+
 class JobCreate(BaseModel):
-    """`POST /jobs` request body. `params` is validated against `SetupParams`;
-    an invalid/missing `area`, `kind`, or param fails FastAPI/pydantic validation
-    (422)."""
+    """`POST /jobs` request body. `params` is validated against `SetupParams`
+    (kind=setup) or `QueryParams` (kind=query); an invalid/missing `area`,
+    `kind`, or param fails FastAPI/pydantic validation (422).
+
+    The `kind`→params-model dispatch happens in `_coerce_params` (mode=`before`,
+    so it runs ahead of pydantic's own `SetupParams | QueryParams` union
+    resolution): the raw `params` dict is parsed against whichever model
+    matches the sibling `kind` field, so a mismatched or malformed body for the
+    given kind fails 422 rather than being silently coerced into the wrong
+    model or accepted with fields ignored."""
 
     kind: JobKind
     area: AreaSpec
-    params: SetupParams = Field(default_factory=SetupParams)
+    params: SetupParams | QueryParams = Field(default_factory=SetupParams)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_params(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        raw = cast("dict[str, Any]", data)
+        model = QueryParams if raw.get("kind") == JobKind.QUERY else SetupParams
+        raw_params: Any = raw.get("params")
+        params_obj: SetupParams | QueryParams
+        if raw_params is None:
+            params_obj = model()
+        elif isinstance(raw_params, dict):
+            params_obj = model.model_validate(raw_params)
+        else:
+            params_obj = raw_params
+        return {**raw, "params": params_obj}
 
 
 class JobRecord(BaseModel):

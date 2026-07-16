@@ -46,6 +46,19 @@
         </div>
         <p id="picker-status" class="picker-status" role="status"></p>
       </aside>
+
+      <!-- S2 Config form (Story 2.1): a panel over the map, opened by "Configure
+           query" over a green (built) selection. Rendered from the introspected
+           `GET /params/query-schema` — config-form.js hand-lists no flags. -->
+      <section id="config-form" class="config-form" hidden>
+        <h2 class="config-form-title">Configure query</h2>
+        <form id="config-form-fields" class="config-form-fields"></form>
+        <div class="config-form-actions">
+          <button class="primary-btn" type="submit" form="config-form-fields">Queue query</button>
+          <button id="config-cancel-btn" class="primary-btn secondary" type="button">Cancel</button>
+        </div>
+        <p id="config-status" class="picker-status" role="status"></p>
+      </section>
     </main>
 
     <script src="/vendor/leaflet-1.9.4.min.js"></script>
