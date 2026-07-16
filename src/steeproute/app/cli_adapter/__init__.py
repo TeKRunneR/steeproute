@@ -28,6 +28,7 @@ from steeproute.app.cli_adapter.params_schema import (
 from steeproute.app.cli_adapter.progress_parse import (
     QueryProgressParser,
     SetupProgressParser,
+    parse_summary_objective,
     progress_parser_for,
 )
 from steeproute.app.cli_adapter.regions import list_regions, resolve_area
@@ -39,6 +40,7 @@ __all__ = [
     "build_query_argv",
     "build_setup_argv",
     "list_regions",
+    "parse_summary_objective",
     "progress_parser_for",
     "query_params_schema",
     "resolve_area",

@@ -322,6 +322,109 @@ body {
   font-size: 0.95rem;
 }
 
+/* --- S4 Run library (Story 3.1) ----------------------------------------- */
+
+.runs-title {
+  font-size: 1.4rem;
+  margin: 0 0 1rem;
+}
+
+.runs-empty {
+  color: #52606d;
+  font-size: 0.95rem;
+}
+
+.runs-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.run-card {
+  background: #ffffff;
+  border: 1px solid #cbd2d9;
+  border-left: 4px solid #cbd2d9;
+  border-radius: 6px;
+  padding: 0.9rem 1.1rem;
+}
+
+/* A colored left rail keys each card to its lifecycle state at a glance. */
+.run-card--running {
+  border-left-color: #2b6cb0;
+}
+.run-card--queued {
+  border-left-color: #b08a2b;
+}
+.run-card--done {
+  border-left-color: #3a923f;
+}
+.run-card--failed {
+  border-left-color: #b8433a;
+}
+.run-card--stopped {
+  border-left-color: #7b8794;
+}
+
+.run-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+.run-card-title {
+  font-weight: 600;
+  font-size: 1.05rem;
+  flex: 1;
+}
+
+.run-card-status {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #52606d;
+}
+
+.status-running {
+  color: #2b6cb0;
+}
+.status-done {
+  color: #3a923f;
+}
+.status-failed {
+  color: #b8433a;
+}
+
+.run-card-meta {
+  color: #52606d;
+  font-size: 0.85rem;
+  margin-top: 0.3rem;
+  font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+}
+
+.run-card-metric {
+  font-size: 0.9rem;
+  margin-top: 0.35rem;
+}
+
+.run-card-actions {
+  display: flex;
+  gap: 1rem;
+  margin-top: 0.6rem;
+}
+
+.run-card-action {
+  color: #2b6cb0;
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+
+.run-card-action:hover {
+  text-decoration: underline;
+}
+
 /* --- S5 Result view (Story 2.3) ----------------------------------------- */
 
 /* Full-bleed: the report iframe fills everything below the header + selector. */

@@ -172,6 +172,11 @@ class JobRecord(BaseModel):
     finished_at: str | None = None
     exit_code: int | None = None
     result_dir: str | None = None
+    # The finished query's run-summary `total_objective` (App Story 3.1),
+    # captured by the worker at completion so the run-library card shows a
+    # done query's cost without re-parsing route JSON. `None` for setup jobs,
+    # non-terminal jobs, and a query that produced no routes.
+    result_objective: float | None = None
     failure_reason: str | None = None
     stdout_tail: list[str] = Field(default_factory=list)
     stderr_tail: list[str] = Field(default_factory=list)

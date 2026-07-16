@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>steeproute · runs</title>
+    <link rel="stylesheet" href="/static/css/app.css" />
+  </head>
+  <body>
+    <!-- Global chrome: duplicated per page (buildless, no templating — accepted
+         for an N=1 tool). live-indicator.js targets #live-indicator here too. -->
+    <header class="app-header">
+      <a class="app-name" href="/">steeproute</a>
+      <nav class="app-nav">
+        <a href="/">Map</a>
+        <a href="/runs">Runs</a>
+      </nav>
+      <span id="live-indicator" class="live-indicator"></span>
+    </header>
+
+    <main class="app-main runs-main">
+      <h1 class="runs-title">Runs</h1>
+      <!-- runs.js fetches GET /jobs, orders running → queued → history, and fills
+           this list; the empty-state shows until (and unless) a card is added. -->
+      <p id="runs-empty" class="runs-empty" hidden>No runs yet.</p>
+      <ul id="runs-list" class="runs-list"></ul>
+    </main>
+
+    <script type="module" src="/static/js/live-indicator.js"></script>
+    <script type="module" src="/static/js/runs.js"></script>
+  </body>
+</html>

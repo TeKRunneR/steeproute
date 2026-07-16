@@ -28,7 +28,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-07-16  # app-2-3 (view the resulting routes) → done; app-epic-2 complete
+last_updated: 2026-07-16  # app-3-1 (run library list) → done
 
 project: bmad-test
 project_key: NOKEY
@@ -173,7 +173,7 @@ development_status:
   app-2-2-query-flavour-progress-grasp-and-non-solve-stages: done
   app-2-3-view-the-resulting-routes: done
 
-  app-epic-3: backlog        # Browse, revisit, and re-run past runs
-  app-3-1-run-library-list: backlog
+  app-epic-3: in-progress        # Browse, revisit, and re-run past runs
+  app-3-1-run-library-list: done
   app-3-2-cancel-queued-and-re-run-with-tweaks: backlog
   app-3-3-restart-recovery: backlog

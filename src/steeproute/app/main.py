@@ -47,12 +47,21 @@ def index() -> FileResponse:
     return FileResponse(_STATIC_DIR / "index.html")
 
 
+@router.get("/runs", include_in_schema=False)
+def run_library() -> FileResponse:
+    """Serve the S4 Run-library page (Story 3.1): one list of all jobs, ordered
+    running → queued → history. No path param — distinct from `/runs/{job_id}`
+    below, so no route conflict. The page's JS fetches `GET /jobs` and renders
+    the cards; the backend adds no new list endpoint."""
+    return FileResponse(_STATIC_DIR / "runs.html")
+
+
 @router.get("/runs/{job_id}", include_in_schema=False)
 def run_watch() -> FileResponse:
     """Serve the S3 Run-watch page (Story 1.5). UI lives under `/runs*`, the JSON
     API under `/jobs*`; the page's JS reads the `{job_id}` back out of the URL
-    (the handler needs no param). The `/runs` run-library list (no id) lands in
-    Story 3.1 — no route conflict."""
+    (the handler needs no param). The `/runs` run-library list (no id) is the
+    route above — no conflict (a bare `/runs` never matches `/runs/{job_id}`)."""
     return FileResponse(_STATIC_DIR / "run-watch.html")
 
 

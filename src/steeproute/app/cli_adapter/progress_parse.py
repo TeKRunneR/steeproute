@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import re
 from collections import deque
+from collections.abc import Iterable
 from typing import final, override
 
 from steeproute.app.models import GraspProgress, JobKind, Phase, ProgressModel
@@ -69,6 +70,14 @@ _GRASP_SINGLE = re.compile(
     r"^progress: iter=(?P<iter>\d+) best_objective=(?P<cost>-?\d+(?:\.\d+)?) "
     r"elapsed=(?P<elapsed>\d+(?:\.\d+)?)s"
 )
+# Run-summary objective line (FR22): `total_objective: <%.1f>`. This is the
+# honest final figure for a finished query — the merged result across workers,
+# unlike the GRASP `progress:` frames' `best_worker_objective`, which understates
+# it for parallel runs. It has no `ProgressModel` field (it rides in `log_tail`
+# during streaming); `parse_summary_objective` recovers it from the persisted
+# stdout tail for the run-library card metric (App Story 3.1).
+_SUMMARY_OBJECTIVE = re.compile(r"^total_objective: (?P<objective>-?\d+(?:\.\d+)?)$")
+
 # C2 parallel GRASP: `progress: workers=<r>/<t> iters=<int>
 # best_worker_objective=<%.1f> elapsed=<%.1f>s`. `best_worker_objective` is the
 # leading worker's running sum and understates the merged result (the honest
@@ -207,3 +216,20 @@ def progress_parser_for(kind: JobKind) -> SetupProgressParser | QueryProgressPar
     if kind is JobKind.SETUP:
         return SetupProgressParser()
     return QueryProgressParser()
+
+
+def parse_summary_objective(lines: Iterable[str]) -> float | None:
+    """The finished query's `total_objective` from its run summary, or `None`.
+
+    The run summary is the last block a query prints (FR22), so the worker's
+    bounded stdout tail always contains it on a `done` query — the App Story 3.1
+    run-library card reads the objective from there rather than re-parsing route
+    JSON sidecars. Returns `None` when no `total_objective:` line is present (a
+    setup job, a query that produced no routes, or an older record), so the card
+    can degrade gracefully. Scans last-to-first so a stray earlier match can't
+    shadow the summary's (there is only ever one, but the tail is short)."""
+    for line in reversed(list(lines)):
+        match = _SUMMARY_OBJECTIVE.match(line.strip())
+        if match is not None:
+            return float(match.group("objective"))
+    return None

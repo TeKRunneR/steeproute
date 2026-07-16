@@ -581,3 +581,80 @@ def test_result_view_page_and_js_served() -> None:
     assert 'id="route-selector"' in body
     assert "result.js" in body
     assert client.get("/static/js/result.js").status_code == 200
+
+
+# --- Story 3.1: run library list ---------------------------------------------
+
+# Fake query CLI: emit a minimal run summary (with total_objective), exit 0 — so
+# the worker's done-query path captures result_objective from the stdout tail.
+# 8421.5 is exactly representable, so downstream assertions compare it directly.
+_FAKE_CLI_QUERY_SUMMARY = textwrap.dedent(
+    """
+    print("stage: validate-render ...")
+    print("stage: validate-render: 0.20 s")
+    print("--- Run summary ---")
+    print("routes_returned: 3/5")
+    print("total_objective: 8421.5")
+    print("validation_failures: 0")
+    print("convergence_status: converged")
+    """
+).strip()
+
+
+def _query_summary_client(tmp_path: pathlib.Path) -> TestClient:
+    fake_cli = tmp_path / "fake_query_cli.py"
+    fake_cli.write_text(_FAKE_CLI_QUERY_SUMMARY, encoding="utf-8")
+    app = create_app(
+        store_root=tmp_path / "jobs",
+        build_argv=_make_sleeper_build_argv(fake_cli),  # argv has no exit arg → exits 0
+    )
+    return TestClient(app)
+
+
+def test_query_done_captures_result_objective(tmp_path: pathlib.Path) -> None:
+    # A done query records its summary total_objective so the run-library card
+    # can show the cost without re-parsing route JSON (App Story 3.1).
+    with _query_summary_client(tmp_path) as client:
+        resp = client.post("/jobs", json=_query_body())
+        assert resp.status_code == 201
+        final = _poll_until_terminal(client, resp.json()["id"])
+        assert final["status"] == "done"
+        assert final["result_objective"] == 8421.5
+
+
+def test_setup_done_has_no_result_objective(tmp_path: pathlib.Path) -> None:
+    # A setup job produces no route report → no cost metric (stays None).
+    with _lifecycle_client(tmp_path, exit_code=0) as client:
+        resp = client.post("/jobs", json=_setup_body())
+        final = _poll_until_terminal(client, resp.json()["id"])
+        assert final["status"] == "done"
+        assert final["result_objective"] is None
+
+
+def test_failed_query_has_no_result_objective(tmp_path: pathlib.Path) -> None:
+    # A non-zero exit is failed, not done — the objective capture is skipped, so
+    # the card falls back to the exit code (never a stale/partial cost).
+    with _lifecycle_client(tmp_path, exit_code=1) as client:
+        resp = client.post("/jobs", json=_query_body())
+        final = _poll_until_terminal(client, resp.json()["id"])
+        assert final["status"] == "failed"
+        assert final["result_objective"] is None
+
+
+def test_run_library_page_and_js_served() -> None:
+    client = _client()
+    page = client.get("/runs")  # no id — the library list, not run-watch
+    assert page.status_code == 200
+    body = page.text
+    assert 'id="runs-list"' in body
+    assert "runs.js" in body
+    assert 'id="live-indicator"' in body  # global chrome present
+    assert client.get("/static/js/runs.js").status_code == 200
+
+
+def test_runs_bare_path_distinct_from_run_watch() -> None:
+    # `/runs` serves the library (runs-list); `/runs/{id}` serves run-watch
+    # (job-identity) — the bare path must not collide with the id route.
+    client = _client()
+    assert 'id="runs-list"' in client.get("/runs").text
+    assert 'id="job-identity"' in client.get("/runs/some-id").text

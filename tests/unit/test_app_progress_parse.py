@@ -17,6 +17,7 @@ import pytest
 from steeproute.app.cli_adapter import (
     QueryProgressParser,
     SetupProgressParser,
+    parse_summary_objective,
     progress_parser_for,
 )
 from steeproute.app.cli_adapter.progress_parse import QUERY_STAGES, SETUP_STAGES
@@ -267,3 +268,40 @@ def test_query_workers4_fixture_parallel_end_to_end() -> None:
     assert final.stage_index == 6
     assert final.stage_name == "validate-render"
     assert final.grasp is None
+
+
+# --- parse_summary_objective: run-library card metric (App Story 3.1) --------
+
+
+def test_summary_objective_parsed_from_line() -> None:
+    assert parse_summary_objective(["total_objective: 10670.1"]) == pytest.approx(10670.1)
+
+
+def test_summary_objective_none_when_absent() -> None:
+    # A setup cache-miss tail (no summary) → no objective to show; card degrades.
+    lines = _FIXTURE.read_text(encoding="utf-8").splitlines()
+    assert parse_summary_objective(lines) is None
+
+
+def test_summary_objective_from_workers1_fixture_is_merged_total_not_worker_best() -> None:
+    # The honest figure is the summary's total_objective (9719.6 here), NOT any
+    # `best_worker_objective` progress frame — that is the whole reason the card
+    # reads the summary rather than the last GRASP frame.
+    lines = (_FIXTURES / "query_workers1.stdout.txt").read_text(encoding="utf-8").splitlines()
+    assert parse_summary_objective(lines) == pytest.approx(9719.6)
+
+
+def test_summary_objective_from_workers4_fixture_exceeds_last_worker_frame() -> None:
+    lines = (_FIXTURES / "query_workers4.stdout.txt").read_text(encoding="utf-8").splitlines()
+    # 10670.1 (merged total) > 10118.8 (last best_worker_objective frame).
+    assert parse_summary_objective(lines) == pytest.approx(10670.1)
+
+
+def test_summary_objective_ignores_partial_or_similar_lines() -> None:
+    # A `progress:` frame carrying `objective`-like tokens must not be mistaken
+    # for the summary line (anchored `^total_objective: <num>$` only).
+    lines = [
+        "progress: iter=1 best_objective=277.1 elapsed=0.0s eta=30s stagnation=0",
+        "routes_returned: 0/5",
+    ]
+    assert parse_summary_objective(lines) is None

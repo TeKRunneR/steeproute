@@ -30,7 +30,12 @@ from collections import deque
 from collections.abc import Awaitable, Callable
 from typing import final
 
-from steeproute.app.cli_adapter import build_query_argv, build_setup_argv, progress_parser_for
+from steeproute.app.cli_adapter import (
+    build_query_argv,
+    build_setup_argv,
+    parse_summary_objective,
+    progress_parser_for,
+)
 from steeproute.app.models import (
     JobKind,
     JobRecord,
@@ -266,6 +271,12 @@ class Worker:
             else:
                 record.exit_code = exit_code
                 record.status = JobStatus.DONE if exit_code == 0 else JobStatus.FAILED
+            if record.kind is JobKind.QUERY and record.status is JobStatus.DONE:
+                # A done query's run summary (FR22) is its last stdout block, so
+                # the bounded tail carries `total_objective` — capture it once
+                # here for the run-library card (App Story 3.1); `None` if the
+                # query returned no routes. Only cli_adapter parses stdout.
+                record.result_objective = parse_summary_objective(stdout_tail)
             self._store.update(record)
             self._publish_status(record)
         except asyncio.CancelledError:
