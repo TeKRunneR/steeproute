@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import pathlib
 from collections import deque
 from collections.abc import Awaitable, Callable
@@ -103,10 +104,18 @@ Spawn = Callable[[list[str]], Awaitable["asyncio.subprocess.Process"]]
 
 
 async def _default_spawn(argv: list[str]) -> asyncio.subprocess.Process:
+    # Force the child's stdout unbuffered so progress lines stream live over SSE.
+    # The CLIs render progress with plain `print(...)` (no `flush=True`), and
+    # Python block-buffers stdout when it is a pipe rather than a TTY — so without
+    # this the whole run's output arrives in one flush at process exit and the
+    # Run-watch log tail only updates when the job finishes. `PYTHONUNBUFFERED`
+    # reaches the Python interpreter the console-script launcher starts.
+    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
     return await asyncio.create_subprocess_exec(
         *argv,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=env,
     )
 
 
