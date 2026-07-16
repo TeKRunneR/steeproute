@@ -184,6 +184,11 @@ body {
 
 .config-form {
   position: absolute;
+  /* Above Leaflet's stacking: its map pane is z-index 400 and its control
+     container 1000, and none of the panel's ancestors trap them in a stacking
+     context — so without an explicit z-index the panel renders UNDER the map
+     tiles (invisible, and flickering into view only during a zoom transform). */
+  z-index: 1100;
   top: 1.25rem;
   right: calc(20rem + 1.25rem);
   width: 22rem;
