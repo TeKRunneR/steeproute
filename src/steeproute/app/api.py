@@ -3,9 +3,9 @@
 Thin by design: parse → store/enqueue → serialize. snake_case on the wire, no
 response envelope (the resource is returned directly; errors are FastAPI's
 default `{detail}` via `HTTPException`). Story 1.4 added the SSE progress stream
-(`GET /jobs/{id}/events`), Story 1.5 the hard-cancel `POST /jobs/{id}/stop`, and
-Story 1.6 the read-only `GET /regions` map overlay; `DELETE /jobs/{id}` (cancel
-queued) arrives with Story 3.2.
+(`GET /jobs/{id}/events`), Story 1.5 the hard-cancel `POST /jobs/{id}/stop`,
+Story 1.6 the read-only `GET /regions` map overlay, and Story 3.2 the cancel-queued
+`DELETE /jobs/{id}`.
 
 The store, queue, and SSE hub are created in `main.lifespan` and read off
 `app.state`.
@@ -18,7 +18,7 @@ import re
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 
@@ -159,6 +159,32 @@ def resolve_region(
 def get_job(job: Annotated[JobRecord, Depends(_require_job)]) -> JobRecord:
     """One job record, or 404 if there is no such job (via `_require_job`)."""
     return job
+
+
+@router.delete("/jobs/{job_id}", status_code=204)
+async def cancel_job(
+    job: Annotated[JobRecord, Depends(_require_job)], request: Request
+) -> Response:
+    """Cancel a queued job (architecture-app.md §Category 7): delete its record so
+    it leaves `GET /jobs` and never runs. 204 on success; 404 unknown id (via
+    `_require_job`); 409 if the job is not queued — a running job is cancelled with
+    Stop, a terminal job has nothing to cancel.
+
+    Cancel = deleting the store record, NOT queue surgery: the job id may still
+    sit in the worker's in-memory `asyncio.Queue`, but when the worker pops it
+    `store.get` returns `None` and it hits the skip-missing-record branch
+    (`queue.py`), so it never runs. `async` (like `stop_job`) so this runs on the
+    event loop: the handler and the worker's synchronous `queued → running`
+    transition never interleave, so a cancel either wins (job never runs) or the
+    worker already started it and this 409s — atomic without a lock.
+    """
+    if job.status is not JobStatus.QUEUED:
+        raise HTTPException(
+            status_code=409,
+            detail=f"job {job.id!r} is not queued (status {job.status.value!r})",
+        )
+    _store(request).delete(job.id)
+    return Response(status_code=204)
 
 
 def _viewable_result_dir(job: JobRecord) -> pathlib.Path:

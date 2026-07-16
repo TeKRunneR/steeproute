@@ -13,6 +13,7 @@ import {
   stopJob,
   openJobEvents,
   resultViewUrl,
+  rerunConfigUrl,
   jobLoadErrorMessage,
   ApiError,
 } from "./api.js";
@@ -85,15 +86,17 @@ function showFooter(status, exitCode) {
   if (elapsedTimer) clearInterval(elapsedTimer);
   footerEl.hidden = false;
   footerEl.innerHTML = "";
-  // A failed job shows its exit code + a Re-run affordance (prefill form is Epic
-  // 3 — this is a placeholder link for now); a stopped (hard-cancelled) job has
-  // no result (architecture-app.md §Category 7), so no View-routes there.
+  // A failed job shows its exit code + a Re-run affordance: for a query it opens
+  // the config form prefilled from this run's params (Story 3.2); a failed setup
+  // has no query form to prefill, so it just links to the map to rebuild. A
+  // stopped (hard-cancelled) job has no result (architecture-app.md §Category 7),
+  // so no View-routes there.
   if (status === "failed") {
     const code = exitCode != null ? ` (exit code ${exitCode})` : "";
     footerEl.append(document.createTextNode(`failed${code} · `));
     const rerun = document.createElement("a");
-    rerun.href = "/";
-    rerun.textContent = "Re-run with tweaks";
+    rerun.href = jobKind === "query" ? rerunConfigUrl(jobId) : "/";
+    rerun.textContent = jobKind === "query" ? "Re-run with tweaks" : "Back to map";
     footerEl.appendChild(rerun);
   } else if (status === "stopped") {
     footerEl.textContent = "stopped · no result";

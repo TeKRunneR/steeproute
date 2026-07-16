@@ -425,6 +425,33 @@ body {
   text-decoration: underline;
 }
 
+/* Cancel is a <button> (it calls DELETE, not a navigation) — strip the native
+   chrome so it reads like the sibling link actions (Story 3.2). */
+button.run-card-action {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+button.run-card-action:disabled {
+  color: #a0aec0;
+  cursor: default;
+  text-decoration: none;
+}
+
+.run-card-action--danger {
+  color: #c53030;
+}
+
+.runs-status {
+  margin: 0 0 0.8rem;
+  color: #c53030;
+  font-size: 0.9rem;
+}
+
 /* --- S5 Result view (Story 2.3) ----------------------------------------- */
 
 /* Full-bleed: the report iframe fills everything below the header + selector. */

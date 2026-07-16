@@ -10,7 +10,7 @@
 // km value comes from Leaflet's own `map.distance` (library geodesy), not a
 // hand-copied conversion.
 
-import { createJob, listRegions, resolveArea, runWatchUrl } from "./api.js";
+import { createJob, getJob, listRegions, resolveArea, runWatchUrl } from "./api.js";
 import { openConfigForm } from "./config-form.js";
 
 const DEFAULT_RADIUS_KM = 10;
@@ -160,4 +160,23 @@ async function loadRegions() {
   }
 }
 
+// Re-run with tweaks (Story 3.2): arriving as `/?rerun=<job_id>` opens the query
+// config form directly on the source run's stored area + params — bypassing the
+// map picker (the area is taken verbatim from the record; coverage isn't
+// re-checked here — a since-cleared cache just fails the query gracefully at run
+// time). The param is cleared afterward so a refresh doesn't re-trigger. Submit
+// mints a brand-new job (createJob), so the original run is untouched.
+async function handleRerun() {
+  const jobId = new URLSearchParams(location.search).get("rerun");
+  if (!jobId) return;
+  history.replaceState(null, "", location.pathname);
+  try {
+    const job = await getJob(jobId);
+    await openConfigForm(job.area, job.params);
+  } catch (err) {
+    statusEl.textContent = `Could not load run to re-run: ${err.message ?? err}`;
+  }
+}
+
 void loadRegions();
+void handleRerun();

@@ -5,14 +5,15 @@
 // endpoint — the ordering is a display regrouping here, not a server change).
 // Each card shows `kind · area-label`, center/radius, the created timestamp, the
 // status, and a status-appropriate metric (a done query's objective/cost, a
-// failed job's exit code). Only the navigational actions with a real
-// destination are wired — Watch (running) and View routes (done query); Cancel
-// (queued) and Re-run with tweaks (finished/failed) land in Story 3.2.
+// failed job's exit code). Actions are status-gated: Watch (running), View routes
+// (done query), Cancel (queued → DELETE, Story 3.2), and Re-run with tweaks
+// (done/failed query → prefilled config form, Story 3.2).
 
-import { listJobs, runWatchUrl, resultViewUrl } from "./api.js";
+import { listJobs, cancelJob, runWatchUrl, resultViewUrl, rerunConfigUrl, ApiError } from "./api.js";
 
 const listEl = document.getElementById("runs-list");
 const emptyEl = document.getElementById("runs-empty");
+const statusEl = document.getElementById("runs-status");
 
 const TERMINAL = ["done", "failed", "stopped"];
 
@@ -59,6 +60,43 @@ function addAction(container, href, label) {
   container.appendChild(link);
 }
 
+function addButton(container, label, className, onClick) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = `run-card-action ${className}`;
+  btn.textContent = label;
+  btn.addEventListener("click", onClick);
+  container.appendChild(btn);
+}
+
+/** Re-run with tweaks is offered on query runs only (done or failed): a setup
+ *  job has no query config form to prefill — a failed build is redone from the
+ *  map (deliberate two-step). */
+function offersRerun(job) {
+  return job.kind === "query" && (job.status === "done" || job.status === "failed");
+}
+
+/** Cancel a queued job, then reload the list so it reflects the server. On a
+ *  race (the worker just started it → 409, or it's already gone → 404) the reload
+ *  still shows the truth (the job as running, or gone). The status message goes
+ *  to `#runs-status`, which sits outside `#runs-list` so `load()`'s re-render
+ *  doesn't wipe it — otherwise a failed cancel would reload silently. */
+async function cancelAndReload(job, card) {
+  for (const b of card.querySelectorAll("button")) b.disabled = true;
+  try {
+    await cancelJob(job.id);
+    statusEl.hidden = true;
+    statusEl.textContent = "";
+  } catch (err) {
+    statusEl.textContent =
+      err instanceof ApiError && err.status === 409
+        ? "Too late to cancel — the job already started."
+        : `Could not cancel: ${err.message ?? err}`;
+    statusEl.hidden = false;
+  }
+  await load();
+}
+
 function renderCard(job) {
   const card = document.createElement("li");
   card.className = `run-card run-card--${job.status}`;
@@ -93,23 +131,28 @@ function renderCard(job) {
   if (job.status === "done" && job.kind === "query") {
     addAction(actions, resultViewUrl(job.id), "View routes");
   }
-  // Cancel (queued) + Re-run with tweaks (finished/failed) are Story 3.2.
+  if (offersRerun(job)) addAction(actions, rerunConfigUrl(job.id), "Re-run with tweaks");
+  if (job.status === "queued") {
+    addButton(actions, "Cancel", "run-card-action--danger", () => void cancelAndReload(job, card));
+  }
   if (actions.childElementCount > 0) card.appendChild(actions);
 
   return card;
 }
 
-async function init() {
+async function load() {
   let jobs;
   try {
     jobs = await listJobs();
   } catch {
+    listEl.replaceChildren();
     emptyEl.hidden = false;
     emptyEl.textContent = "Failed to load runs.";
     return;
   }
   const ordered = orderForLibrary(jobs);
   if (ordered.length === 0) {
+    listEl.replaceChildren();
     emptyEl.hidden = false;
     return;
   }
@@ -117,4 +160,4 @@ async function init() {
   listEl.replaceChildren(...ordered.map(renderCard));
 }
 
-void init();
+void load();

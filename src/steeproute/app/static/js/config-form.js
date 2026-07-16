@@ -14,6 +14,11 @@ const statusEl = document.getElementById("config-status");
 
 let schemaCache = null;
 let currentArea = null;
+// Re-run-with-tweaks prefill (Story 3.2): a prior run's stored `params` dict, or
+// null for a fresh "Configure query" open. A field takes its stored value when
+// that value is non-null, otherwise the schema (quality-demo) default — so a
+// re-run reproduces the run's effective config plus the user's explicit tweaks.
+let currentPrefill = null;
 
 async function loadSchema() {
   if (schemaCache === null) schemaCache = await getQuerySchema();
@@ -24,26 +29,34 @@ function fieldInputId(field) {
   return `qf-${field.name}`;
 }
 
+/** The value a field should show: the prefill's stored value when non-null,
+ *  otherwise the schema default (Story 3.2 re-run-with-tweaks). */
+function effectiveValue(field) {
+  const pv = currentPrefill?.[field.name];
+  return pv !== null && pv !== undefined ? pv : field.default;
+}
+
 function buildInput(field) {
+  const value = effectiveValue(field);
   let input;
   if (field.type === "bool") {
     input = document.createElement("input");
     input.type = "checkbox";
-    input.checked = Boolean(field.default);
+    input.checked = Boolean(value);
   } else if (field.type === "choice") {
     input = document.createElement("select");
     for (const choice of field.choices ?? []) {
       const opt = document.createElement("option");
       opt.value = choice;
       opt.textContent = choice;
-      if (choice === field.default) opt.selected = true;
+      if (choice === value) opt.selected = true;
       input.appendChild(opt);
     }
   } else {
     input = document.createElement("input");
     input.type = field.type === "string" ? "text" : "number";
     if (field.type === "float") input.step = "any";
-    if (field.default !== null && field.default !== undefined) input.value = field.default;
+    if (value !== null && value !== undefined) input.value = value;
   }
   input.id = fieldInputId(field);
   input.name = field.name;
@@ -105,16 +118,19 @@ function readParams(schema) {
   return params;
 }
 
-/** Open the panel for a picked (green/covered) area: `{center: [lat, lon],
- *  radius_km}`, matching `AreaSpec`. Re-renders the form from the schema every
- *  time (cheap; keeps prefill logic in one place for a later re-run-with-tweaks).
+/** Open the panel for an area (`{center: [lat, lon], radius_km}`, matching
+ *  `AreaSpec`). `prefill` is optional: a prior run's stored `params` dict for
+ *  re-run-with-tweaks (Story 3.2), or omitted for a fresh "Configure query"
+ *  (all fields show their quality-demo defaults). Re-renders the form from the
+ *  schema every time (cheap; keeps prefill logic in one place).
  *
  *  The panel is revealed only AFTER the fields are rendered — never before. The
  *  Queue button lives inside `#config-form` (hidden until then), so a submit
  *  can't fire against an empty form during the schema fetch and silently queue
  *  a job with default-only `params`. */
-export async function openConfigForm(area) {
+export async function openConfigForm(area, prefill = null) {
   currentArea = area;
+  currentPrefill = prefill;
   statusEl.textContent = "";
   try {
     await renderForm();

@@ -20,6 +20,9 @@
 
     <main class="app-main runs-main">
       <h1 class="runs-title">Runs</h1>
+      <!-- List-level status line (e.g. a failed cancel) — lives outside #runs-list
+           so it survives the re-render runs.js does after a cancel. -->
+      <p id="runs-status" class="runs-status" role="status" hidden></p>
       <!-- runs.js fetches GET /jobs, orders running → queued → history, and fills
            this list; the empty-state shows until (and unless) a card is added. -->
       <p id="runs-empty" class="runs-empty" hidden>No runs yet.</p>

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import shutil
 import uuid
 from typing import final
 
@@ -62,6 +63,17 @@ class JobStore:
     def update(self, record: JobRecord) -> None:
         """Re-persist an existing record (status transitions, exit code, tail)."""
         self._write_atomic(record)
+
+    def delete(self, job_id: str) -> None:
+        """Remove a job's entire directory (App Story 3.2 — cancel queued).
+
+        Deleting the record is what makes a cancelled job disappear from `list()`
+        (hence `GET /jobs` and the run library) and from any result serving. The
+        job id may still sit in the worker's in-memory queue; when the worker
+        pops it, `get` returns `None` and it hits the skip-missing-record branch
+        (queue.py) — so no `asyncio.Queue` surgery is needed here. Tolerant of an
+        already-absent dir (a double DELETE is a no-op)."""
+        shutil.rmtree(self._job_dir(job_id), ignore_errors=True)
 
     def get(self, job_id: str) -> JobRecord | None:
         """Load one record, or `None` if there is no such job."""

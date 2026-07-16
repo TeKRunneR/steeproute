@@ -270,6 +270,75 @@ def test_stop_unknown_job_returns_404(tmp_path: pathlib.Path) -> None:
         assert "detail" in resp.json()
 
 
+# --- Story 3.2: cancel a queued job (DELETE) ---------------------------------
+
+
+def test_delete_queued_job_returns_204_and_removes_it(tmp_path: pathlib.Path) -> None:
+    # Concurrency = 1: while the first job sleeps (running), a second stays queued.
+    with _sleeper_client(tmp_path) as client:
+        running = client.post("/jobs", json=_setup_body()).json()["id"]
+        queued = client.post("/jobs", json=_setup_body()).json()["id"]
+        _poll_until_status(client, running, "running")
+        assert client.get(f"/jobs/{queued}").json()["status"] == "queued"
+
+        resp = client.delete(f"/jobs/{queued}")
+        assert resp.status_code == 204
+        assert resp.content == b""  # 204 No Content, no body
+
+        # Gone from the registry and unreachable — it was cancelled, not run.
+        assert client.get(f"/jobs/{queued}").status_code == 404
+        assert [j["id"] for j in client.get("/jobs").json()] == [running]
+        # Clean up the running job so teardown is prompt.
+        client.post(f"/jobs/{running}/stop")
+
+
+def test_delete_running_job_returns_409(tmp_path: pathlib.Path) -> None:
+    # A running job is cancelled with Stop, not DELETE (architecture Category 7).
+    with _sleeper_client(tmp_path) as client:
+        running = client.post("/jobs", json=_setup_body()).json()["id"]
+        _poll_until_status(client, running, "running")
+        resp = client.delete(f"/jobs/{running}")
+        assert resp.status_code == 409
+        assert "detail" in resp.json()
+        assert client.get(f"/jobs/{running}").json()["status"] == "running"  # untouched
+        client.post(f"/jobs/{running}/stop")
+
+
+def test_delete_finished_job_returns_409(tmp_path: pathlib.Path) -> None:
+    # A terminal job has nothing to cancel → 409 (not 204), and stays in history.
+    with _lifecycle_client(tmp_path, exit_code=0) as client:
+        job_id = client.post("/jobs", json=_setup_body()).json()["id"]
+        _poll_until_terminal(client, job_id)
+        assert client.delete(f"/jobs/{job_id}").status_code == 409
+        assert client.get(f"/jobs/{job_id}").status_code == 200
+
+
+def test_delete_unknown_job_returns_404(tmp_path: pathlib.Path) -> None:
+    with _lifecycle_client(tmp_path, exit_code=0) as client:
+        resp = client.delete("/jobs/does-not-exist")
+        assert resp.status_code == 404
+        assert "detail" in resp.json()
+
+
+def test_cancelled_job_is_skipped_and_queue_keeps_serving(tmp_path: pathlib.Path) -> None:
+    # The cancelled (tombstoned) id lingers in the in-memory queue; the worker
+    # must pop it, skip it (no store record), and keep serving the next job — one
+    # cancelled job never stalls the queue (AC #1).
+    with _sleeper_client(tmp_path) as client:
+        running = client.post("/jobs", json=_setup_body()).json()["id"]
+        cancelled = client.post("/jobs", json=_setup_body()).json()["id"]
+        _poll_until_status(client, running, "running")
+        assert client.delete(f"/jobs/{cancelled}").status_code == 204
+
+        # Free the worker: it now pops the cancelled tombstone (skip) then the
+        # next real job. A third job reaching `running` proves the queue survived.
+        client.post(f"/jobs/{running}/stop")
+        nxt = client.post("/jobs", json=_setup_body()).json()["id"]
+        _poll_until_status(client, nxt, "running")
+        assert client.get(f"/jobs/{cancelled}").status_code == 404  # never resurrected
+        client.post(f"/jobs/{nxt}/stop")
+
+
 # --- Story 1.5: run-watch page + frontend modules served ---------------------
 
 

@@ -77,3 +77,23 @@ def test_write_is_atomic_no_temp_leftover(tmp_path: pathlib.Path) -> None:
 
 def test_empty_store_lists_nothing(tmp_path: pathlib.Path) -> None:
     assert JobStore(tmp_path).list() == []
+
+
+def test_delete_removes_dir_and_drops_from_list(tmp_path: pathlib.Path) -> None:
+    # Cancel-queued (App Story 3.2) deletes the per-job dir so the record leaves
+    # both `get` and `list()`; a queued id lingering in the worker's queue then
+    # hits the worker's skip-missing-record path (queue.py) and never runs.
+    store = JobStore(tmp_path)
+    store.create(_record("job-keep"))
+    store.create(_record("job-drop"))
+
+    store.delete("job-drop")
+
+    assert store.get("job-drop") is None
+    assert not (tmp_path / "job-drop").exists()
+    assert [r.id for r in store.list()] == ["job-keep"]
+
+
+def test_delete_missing_id_is_a_noop(tmp_path: pathlib.Path) -> None:
+    # Tolerant of an already-absent dir (e.g. a double DELETE) — no error.
+    JobStore(tmp_path).delete("never-existed")
