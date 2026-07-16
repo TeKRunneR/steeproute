@@ -5,8 +5,9 @@ One directory per job under the store root: `<root>/<job_id>/job.json`. Writes
 are atomic (temp-file in the same dir + `os.replace`), mirroring the CLI cache's
 discipline so a crash mid-write never surfaces a partial record. Alongside it,
 `progress.ndjson` is an **append-only** progress log (one `ProgressModel` per
-line) that powers the SSE snapshot-then-tail (Story 1.4). Boot-time restart
-recovery arrives in Story app-3-3.
+line) that powers the SSE snapshot-then-tail (Story 1.4). Story app-3-3 adds
+boot-time restart recovery (`recover_interrupted`): a job left `running` by an
+ungraceful kill is reconciled to `failed (interrupted)` on the next boot.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from typing import final
 
 import platformdirs
 
-from steeproute.app.models import JobRecord, ProgressModel
+from steeproute.app.models import JobRecord, JobStatus, ProgressModel, utcnow_iso
 
 _JOB_FILE = "job.json"
 _PROGRESS_FILE = "progress.ndjson"
@@ -74,6 +75,34 @@ class JobStore:
         (queue.py) — so no `asyncio.Queue` surgery is needed here. Tolerant of an
         already-absent dir (a double DELETE is a no-op)."""
         shutil.rmtree(self._job_dir(job_id), ignore_errors=True)
+
+    def recover_interrupted(self) -> list[str]:
+        """Reconcile crash-interrupted jobs on boot (App Story 3.3 — FR10).
+
+        An ungraceful kill (crash / OS shutdown / `kill -9`) leaves a job
+        persisted as `running` because the process died without running the
+        lifespan shutdown that would have marked it. This scan — called once at
+        boot, before the worker starts consuming the queue — flips every such
+        record to `failed` with `failure_reason="interrupted"` and a
+        `finished_at` stamp, so the run library never lies "running" after a
+        restart. The terminal state matches what the worker's graceful-shutdown
+        branch already writes (queue.py), so both paths look identical.
+
+        Only `running` records are touched — `queued` and terminal
+        (`done`/`failed`/`stopped`) ones are left exactly as they were, so a
+        second boot with no `running` jobs is a no-op (idempotent). Returns the
+        ids that were flipped, for the boot log."""
+        flipped: list[str] = []
+        for record in self.list():
+            if record.status is not JobStatus.RUNNING:
+                continue
+            record.status = JobStatus.FAILED
+            record.failure_reason = "interrupted"
+            if record.finished_at is None:
+                record.finished_at = utcnow_iso()
+            self.update(record)
+            flipped.append(record.id)
+        return flipped
 
     def get(self, job_id: str) -> JobRecord | None:
         """Load one record, or `None` if there is no such job."""

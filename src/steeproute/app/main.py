@@ -4,8 +4,9 @@ App Story 1.2 stood up the runnable skeleton (factory, static mounts, home page)
 App Story 1.3 hangs the job runner off it: a per-job JSON store and a single
 serial worker (concurrency = 1, architecture-app.md §Category 2) started in the
 `lifespan`, plus the `POST/GET /jobs` API. Story 1.4 added progress + SSE, 1.5 the
-run-watch UI + Stop, and 1.6 the map home + read-only `GET /regions` overlay; the
-run-library UI (Epic 3) comes later.
+run-watch UI + Stop, and 1.6 the map home + read-only `GET /regions` overlay. The
+run-library UI arrived in Epic 3; Story 3.3 adds boot reconciliation to the
+lifespan (interrupted `running` → `failed`, and the queue rebuilt from the store).
 
 Run it with `uv run steeproute-app` (single-worker uvicorn) or, for hot reload,
 `uv run fastapi dev src/steeproute/app/main.py`.
@@ -26,6 +27,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from steeproute.app.api import router as jobs_router
+from steeproute.app.models import JobStatus
 from steeproute.app.queue import BuildArgv, JobQueue, Worker, default_build_argv
 from steeproute.app.sse import ProgressHub
 from steeproute.app.store import JobStore, default_store_root
@@ -101,6 +103,22 @@ def _make_lifespan(
         app.state.job_worker = worker
         # Cache root for `GET /regions` (Story 1.6); `None` = the CLI default root.
         app.state.regions_cache_root = cache_root
+
+        # Boot reconciliation (Story 3.3), BEFORE the worker starts consuming the
+        # queue: (1) recovery — a job left `running` by an ungraceful kill is
+        # flipped to `failed (interrupted)` so the library never lies; (2) queue
+        # rebuild — the in-memory queue is empty on every boot, so re-enqueue the
+        # persisted `queued` jobs in creation order (store.list() is id-sorted)
+        # or they would never run. Sequenced before `create_task` so the worker
+        # never pops a stale `running` id and the resume order is deterministic.
+        interrupted = store.recover_interrupted()
+        if interrupted:
+            logger.info("restart recovery: %d interrupted job(s) → failed", len(interrupted))
+        requeued = [r.id for r in store.list() if r.status is JobStatus.QUEUED]
+        for job_id in requeued:
+            queue.enqueue(job_id)
+        if requeued:
+            logger.info("restart recovery: re-enqueued %d queued job(s)", len(requeued))
 
         task = asyncio.create_task(worker.run())
         logger.info("steeproute-app started; single-worker job queue running")

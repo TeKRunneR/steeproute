@@ -727,3 +727,70 @@ def test_runs_bare_path_distinct_from_run_watch() -> None:
     client = _client()
     assert 'id="runs-list"' in client.get("/runs").text
     assert 'id="job-identity"' in client.get("/runs/some-id").text
+
+
+# --- Story 3.3: restart recovery (boot reconciliation via the lifespan) -------
+
+# Fake CLI that records its run order — for the boot queue-rebuild test. argv:
+# <order_file> <job_id>. Appends its id then exits 0, so the order file shows the
+# sequence in which the re-enqueued jobs actually ran (concurrency = 1).
+_FAKE_CLI_ORDER = textwrap.dedent(
+    """
+    import sys
+    with open(sys.argv[1], "a", encoding="utf-8") as fh:
+        _ = fh.write(sys.argv[2] + "\\n")
+    print("done (fake)")
+    sys.exit(0)
+    """
+).strip()
+
+
+def _seed_status(store: JobStore, job_id: str, status: JobStatus) -> None:
+    """Persist a bare setup record in a given status directly on the store —
+    simulating what a pre-restart store looks like on disk (no worker)."""
+    store.create(
+        JobRecord(
+            id=job_id,
+            kind=JobKind.SETUP,
+            area=AreaSpec(center=(45.26, 5.788), radius_km=2.0),
+            params={},
+            status=status,
+            created_at=utcnow_iso(),
+        )
+    )
+
+
+def test_boot_recovers_interrupted_and_rebuilds_queue(tmp_path: pathlib.Path) -> None:
+    # Seed a store as if a crash left it: one `running` (interrupted), two
+    # `queued`, one `done`. Then boot the app on that store (the TestClient
+    # context runs the lifespan, hence the boot reconciliation).
+    store = JobStore(tmp_path / "jobs")
+    _seed_status(store, "01-running", JobStatus.RUNNING)
+    _seed_status(store, "02-queued", JobStatus.QUEUED)
+    _seed_status(store, "03-queued", JobStatus.QUEUED)
+    _seed_status(store, "04-done", JobStatus.DONE)
+
+    order_file = tmp_path / "run-order.txt"
+    fake_cli = tmp_path / "fake_order_cli.py"
+    fake_cli.write_text(_FAKE_CLI_ORDER, encoding="utf-8")
+
+    def build_argv(record: JobRecord) -> list[str]:
+        return [sys.executable, str(fake_cli), str(order_file), record.id]
+
+    app = create_app(store_root=tmp_path / "jobs", build_argv=build_argv)
+    with TestClient(app) as client:
+        # Recovery: the interrupted running job is now failed(interrupted), and
+        # was NOT re-enqueued (it is failed, not queued).
+        interrupted = client.get("/jobs/01-running").json()
+        assert interrupted["status"] == "failed"
+        assert interrupted["failure_reason"] == "interrupted"
+        assert interrupted["finished_at"] is not None
+        # The terminal `done` record is left untouched.
+        assert client.get("/jobs/04-done").json()["status"] == "done"
+        # Queue rebuild: the two persisted `queued` jobs resume and run to done
+        # (without the rebuild they would sit `queued` forever).
+        assert _poll_until_terminal(client, "02-queued")["status"] == "done"
+        assert _poll_until_terminal(client, "03-queued")["status"] == "done"
+
+    # ...and they ran in creation order (concurrency = 1, FIFO from list()).
+    assert order_file.read_text(encoding="utf-8").split() == ["02-queued", "03-queued"]

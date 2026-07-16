@@ -97,3 +97,63 @@ def test_delete_removes_dir_and_drops_from_list(tmp_path: pathlib.Path) -> None:
 def test_delete_missing_id_is_a_noop(tmp_path: pathlib.Path) -> None:
     # Tolerant of an already-absent dir (e.g. a double DELETE) — no error.
     JobStore(tmp_path).delete("never-existed")
+
+
+# --- App Story 3.3: restart recovery ----------------------------------------
+
+
+def test_recover_interrupted_flips_running_to_failed(tmp_path: pathlib.Path) -> None:
+    # A job persisted as `running` when the server was killed is reconciled on
+    # the next boot to `failed` + failure_reason="interrupted" + finished_at.
+    store = JobStore(tmp_path)
+    store.create(_record("job-run", status=JobStatus.RUNNING))
+
+    flipped = store.recover_interrupted()
+
+    assert flipped == ["job-run"]
+    loaded = store.get("job-run")
+    assert loaded is not None
+    assert loaded.status is JobStatus.FAILED
+    assert loaded.failure_reason == "interrupted"
+    assert loaded.finished_at is not None
+
+
+def test_recover_interrupted_leaves_queued_and_terminal_untouched(
+    tmp_path: pathlib.Path,
+) -> None:
+    # Only `running` records are reconciled; queued and terminal ones are left
+    # exactly as they were (no spurious flips).
+    store = JobStore(tmp_path)
+    expected = {
+        "01-queued": JobStatus.QUEUED,
+        "02-done": JobStatus.DONE,
+        "03-failed": JobStatus.FAILED,
+        "04-stopped": JobStatus.STOPPED,
+    }
+    for job_id, status in expected.items():
+        store.create(_record(job_id, status=status))
+
+    flipped = store.recover_interrupted()
+
+    assert flipped == []
+    for job_id, status in expected.items():
+        loaded = store.get(job_id)
+        assert loaded is not None
+        assert loaded.status is status
+
+
+def test_recover_interrupted_is_idempotent(tmp_path: pathlib.Path) -> None:
+    # A second boot with no `running` jobs is a no-op: the already-recovered
+    # failed(interrupted) job is not re-touched and no ids are returned.
+    store = JobStore(tmp_path)
+    store.create(_record("job-run", status=JobStatus.RUNNING))
+
+    assert store.recover_interrupted() == ["job-run"]
+    first = store.get("job-run")
+    assert first is not None
+
+    assert store.recover_interrupted() == []
+    second = store.get("job-run")
+    assert second is not None
+    assert second.status is JobStatus.FAILED
+    assert second.finished_at == first.finished_at  # not re-stamped
