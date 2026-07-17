@@ -24,6 +24,17 @@ const coverageEl = document.getElementById("sel-coverage");
 const buildBtn = document.getElementById("build-btn");
 const configureBtn = document.getElementById("configure-btn");
 const statusEl = document.getElementById("picker-status");
+const hintEl = document.getElementById("picker-hint");
+const modeControlEl = document.getElementById("mode-control");
+
+// Selection modes (Story 4.1 / FR11). Exclusive: the map click only drops a
+// center in area-pick; only in move-selection is the whole box draggable; only
+// in select-region are the green overlays clickable. Per-mode hint copy too.
+const MODE_HINTS = {
+  "area-pick": "Click the map to drop a center, then drag the handle to set the radius.",
+  "move-selection": "Drag the selection to reposition it — the radius stays the same.",
+  "select-region": "Click a green built region to select it for querying.",
+};
 
 // --- Map ---------------------------------------------------------------------
 const map = L.map("map").setView(GRENOBLE, 11);
@@ -46,11 +57,14 @@ let center = null; // {lat, lon}
 let radiusKm = DEFAULT_RADIUS_KM;
 let selectionRect = null;
 let handleMarker = null;
+let centerMarker = null; // move-selection drag handle; present only in that mode
+let mode = "area-pick";
 let resolveSeq = 0; // drop out-of-order resolve responses
 
 // A draggable HTML handle — a divIcon needs no marker-image asset (the vendored
 // Leaflet ships JS/CSS only, like the CLI report which uses no markers).
 const handleIcon = L.divIcon({ className: "map-handle", iconSize: [16, 16] });
+const moveIcon = L.divIcon({ className: "map-move-handle", iconSize: [18, 18] });
 
 function boundsToLatLngs(b) {
   return [
@@ -76,6 +90,8 @@ function applyResolution(res, { moveHandle }) {
   ).addTo(map);
 
   if (moveHandle && handleMarker) handleMarker.setLatLng([center.lat, res.bounds.east]);
+  // Keep the move handle (when present) snapped to the authoritative center.
+  if (centerMarker) centerMarker.setLatLng([center.lat, center.lon]);
 
   readoutEl.hidden = false;
   centerEl.textContent = `${center.lat.toFixed(4)}, ${center.lon.toFixed(4)}`;
@@ -113,22 +129,97 @@ function ensureHandle() {
   });
 }
 
+// The move-selection drag handle: a draggable center marker that translates the
+// whole selection. During the drag the existing (server-authored) rectangle is
+// shifted rigidly by the lat/lon delta — a pure translation, no km→deg derived
+// in JS — then on release the bbox + coverage re-resolve from the server so the
+// canonical geometry replaces the preview.
+function ensureCenterMarker() {
+  if (centerMarker || !center) return;
+  centerMarker = L.marker([center.lat, center.lon], {
+    icon: moveIcon,
+    draggable: true,
+  }).addTo(map);
+
+  let start = null; // {lat, lon, sw, ne} captured at dragstart
+  centerMarker.on("dragstart", () => {
+    const b = selectionRect ? selectionRect.getBounds() : null;
+    start = b ? { lat: center.lat, lon: center.lon, sw: b.getSouthWest(), ne: b.getNorthEast() } : null;
+  });
+  centerMarker.on("drag", () => {
+    if (!start) return;
+    const p = centerMarker.getLatLng();
+    const dLat = p.lat - start.lat;
+    const dLon = p.lng - start.lon;
+    selectionRect.setBounds([
+      [start.sw.lat + dLat, start.sw.lng + dLon],
+      [start.ne.lat + dLat, start.ne.lng + dLon],
+    ]);
+    if (handleMarker) handleMarker.setLatLng([p.lat, start.ne.lng + dLon]);
+  });
+  centerMarker.on("dragend", () => {
+    const p = centerMarker.getLatLng();
+    center = { lat: p.lat, lon: p.lng };
+    void resolveAndRender(radiusKm, { moveHandle: true }); // radius unchanged
+  });
+}
+
+function removeCenterMarker() {
+  if (!centerMarker) return;
+  centerMarker.remove();
+  centerMarker = null;
+}
+
+// Apply the interaction rules for the active mode. Exclusive by construction:
+// the radius handle drags only in area-pick; the move handle exists only in
+// move-selection; region overlays get the pointer cursor only in select-region.
+function applyModeInteractivity() {
+  if (handleMarker) {
+    if (mode === "area-pick") handleMarker.dragging.enable();
+    else handleMarker.dragging.disable();
+  }
+  if (mode === "move-selection") ensureCenterMarker();
+  else removeCenterMarker();
+  map.getContainer().classList.toggle("select-region-active", mode === "select-region");
+  hintEl.textContent = MODE_HINTS[mode];
+}
+
 function drawRegions(regions) {
   for (const r of regions) {
-    L.rectangle(boundsToLatLngs(r.bounds), {
+    const rect = L.rectangle(boundsToLatLngs(r.bounds), {
       className: "region-overlay",
       color: "#3a923f",
       weight: 2,
       fillOpacity: 0.12,
     }).addTo(map);
+    // select-region: snap the selection to this built region's exact geometry
+    // (server-authored) and let coverage re-resolve → "Configure query" enabled.
+    // Inert in the other modes (the mode guard returns early).
+    rect.on("click", (ev) => {
+      if (mode !== "select-region") return;
+      L.DomEvent.stopPropagation(ev); // don't also fall through to the map click
+      center = { lat: r.center[0], lon: r.center[1] };
+      ensureHandle();
+      handleMarker.setLatLng([center.lat, center.lon]);
+      applyModeInteractivity(); // keep the freshly-created handle non-draggable here
+      void resolveAndRender(r.radius_km, { moveHandle: true });
+    });
   }
 }
 
 map.on("click", (ev) => {
+  if (mode !== "area-pick") return; // only area-pick drops a new center
   center = { lat: ev.latlng.lat, lon: ev.latlng.lng };
   ensureHandle();
   handleMarker.setLatLng([center.lat, center.lon]);
+  applyModeInteractivity(); // handle is draggable in area-pick; no move marker
   void resolveAndRender(DEFAULT_RADIUS_KM, { moveHandle: true });
+});
+
+modeControlEl.addEventListener("change", (ev) => {
+  if (ev.target.name !== "map-mode") return;
+  mode = ev.target.value;
+  applyModeInteractivity();
 });
 
 buildBtn.addEventListener("click", async () => {

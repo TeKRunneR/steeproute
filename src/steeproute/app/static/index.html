@@ -25,6 +25,25 @@
       <div id="map" class="map"></div>
       <aside class="picker-panel">
         <h1 class="picker-title">Pick an area</h1>
+        <!-- Selection modes (Story 4.1 / FR11): area-pick is the default and
+             behaves exactly as Epic 1; move-selection drags the whole box;
+             select-region snaps to a built (green) region. Modes are exclusive
+             so no interaction does double duty. -->
+        <fieldset id="mode-control" class="mode-control">
+          <legend class="mode-control-legend">Mode</legend>
+          <label>
+            <input type="radio" name="map-mode" value="area-pick" checked />
+            Pick area
+          </label>
+          <label>
+            <input type="radio" name="map-mode" value="move-selection" />
+            Move selection
+          </label>
+          <label>
+            <input type="radio" name="map-mode" value="select-region" />
+            Select region
+          </label>
+        </fieldset>
         <p id="picker-hint" class="picker-hint">
           Click the map to drop a center, then drag the handle to set the radius.
         </p>

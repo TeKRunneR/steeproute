@@ -21,10 +21,12 @@ import pathlib
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from importlib.resources import files
+from typing import Any, override
 
 from fastapi import APIRouter, FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import Response
 
 from steeproute.app.api import router as jobs_router
 from steeproute.app.models import JobStatus
@@ -44,9 +46,34 @@ _VENDOR_ASSETS_DIR: pathlib.Path = pathlib.Path(str(files("steeproute"))) / "tem
 router = APIRouter()
 
 
+# The frontend is buildless: asset filenames carry no content hash, so a browser
+# that cached `map-home.js` (etc.) in a prior session can serve it stale on the
+# next load — new HTML + old JS, which silently breaks a shipped frontend change.
+# `no-cache` forces revalidation every load; the ETag/Last-Modified StaticFiles
+# already sends makes an unchanged file a cheap 304, so only a genuine change
+# re-downloads. Applied to the app's own churning assets and HTML pages; the
+# immutable vendored Leaflet bundle keeps normal caching.
+_NO_CACHE = "no-cache"
+
+
+class _NoCacheStaticFiles(StaticFiles):
+    """`StaticFiles` that revalidates every request (see `_NO_CACHE` rationale)."""
+
+    @override
+    async def get_response(self, path: str, scope: Any) -> Response:
+        response = await super().get_response(path, scope)
+        response.headers.setdefault("cache-control", _NO_CACHE)
+        return response
+
+
+def _page(name: str) -> FileResponse:
+    """Serve a frontend HTML shell with revalidate-every-load caching."""
+    return FileResponse(_STATIC_DIR / name, headers={"cache-control": _NO_CACHE})
+
+
 @router.get("/", include_in_schema=False)
 def index() -> FileResponse:
-    return FileResponse(_STATIC_DIR / "index.html")
+    return _page("index.html")
 
 
 @router.get("/runs", include_in_schema=False)
@@ -55,7 +82,7 @@ def run_library() -> FileResponse:
     running → queued → history. No path param — distinct from `/runs/{job_id}`
     below, so no route conflict. The page's JS fetches `GET /jobs` and renders
     the cards; the backend adds no new list endpoint."""
-    return FileResponse(_STATIC_DIR / "runs.html")
+    return _page("runs.html")
 
 
 @router.get("/runs/{job_id}", include_in_schema=False)
@@ -64,7 +91,7 @@ def run_watch() -> FileResponse:
     API under `/jobs*`; the page's JS reads the `{job_id}` back out of the URL
     (the handler needs no param). The `/runs` run-library list (no id) is the
     route above — no conflict (a bare `/runs` never matches `/runs/{job_id}`)."""
-    return FileResponse(_STATIC_DIR / "run-watch.html")
+    return _page("run-watch.html")
 
 
 @router.get("/runs/{job_id}/result", include_in_schema=False)
@@ -73,7 +100,7 @@ def result_view() -> FileResponse:
     existing CLI `route-<i>.html` report(s). Distinct extra path segment from
     `/runs/{job_id}` above — no route conflict; the page's JS reads the id from
     the URL and fetches `/jobs/{id}/routes` + `/jobs/{id}/result/<file>`."""
-    return FileResponse(_STATIC_DIR / "result.html")
+    return _page("result.html")
 
 
 def _make_lifespan(
@@ -150,8 +177,11 @@ def create_app(
     app.include_router(jobs_router)
 
     # Frontend assets (CSS/JS) and the reused Leaflet bundle. Kept on distinct
-    # prefixes; the home page references `/static/...` and `/vendor/...`.
-    app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+    # prefixes; the home page references `/static/...` and `/vendor/...`. The
+    # app's own assets are served no-cache (revalidate each load) so a changed,
+    # non-hashed file is never masked by a stale browser copy; the immutable
+    # vendored Leaflet bundle keeps ordinary caching.
+    app.mount("/static", _NoCacheStaticFiles(directory=_STATIC_DIR), name="static")
     app.mount("/vendor", StaticFiles(directory=_VENDOR_ASSETS_DIR), name="vendor")
 
     return app

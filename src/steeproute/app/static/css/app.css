@@ -110,6 +110,33 @@ body {
   margin: 0 0 1rem;
 }
 
+/* Selection-mode control (Story 4.1). */
+.mode-control {
+  border: 1px solid #cbd2d9;
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem 0.6rem;
+  margin: 0 0 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.mode-control-legend {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #7b8794;
+  padding: 0 0.3rem;
+}
+
+.mode-control label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
 .selection-readout {
   margin: 0 0 1rem;
   font-size: 0.9rem;
@@ -178,6 +205,23 @@ body {
   border: 2px solid #fff;
   box-shadow: 0 0 0 1px #2b6cb0;
   cursor: ew-resize;
+}
+
+/* Draggable center handle for move-selection mode (Story 4.1) — a distinct
+   divIcon so it reads as "grab the whole box", present only in that mode. */
+.map-move-handle {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  background: #b08a2b;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px #b08a2b;
+  cursor: move;
+}
+
+/* In select-region mode the green built-region overlays are the click target. */
+.map.select-region-active .region-overlay {
+  cursor: pointer;
 }
 
 /* --- S2 Config form (Story 2.1) ----------------------------------------- */

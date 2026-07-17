@@ -520,8 +520,22 @@ def test_home_page_renders_map_and_actions() -> None:
     assert 'id="build-btn"' in body
     assert 'id="configure-btn"' in body
     assert "map-home.js" in body
+    # Selection-mode control (Story 4.1): the three modes are always present.
+    assert 'id="mode-control"' in body
+    for value in ("area-pick", "move-selection", "select-region"):
+        assert f'value="{value}"' in body
     # Global chrome still present on the reworked home page.
     assert 'id="live-indicator"' in body
+
+
+def test_frontend_assets_served_no_cache() -> None:
+    # Buildless assets carry no content hash, so the app must forbid stale
+    # browser copies (a cached old map-home.js silently breaks a shipped change).
+    client = _client()
+    assert client.get("/").headers["cache-control"] == "no-cache"
+    assert client.get("/static/js/map-home.js").headers["cache-control"] == "no-cache"
+    # The immutable vendored Leaflet bundle keeps ordinary caching (no override).
+    assert "cache-control" not in client.get("/vendor/leaflet-1.9.4.min.js").headers
 
 
 # --- Story 2.3: result view (view the resulting routes) ----------------------
