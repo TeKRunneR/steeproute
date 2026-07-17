@@ -13,6 +13,8 @@ The store, queue, and SSE hub are created in `main.lifespan` and read off
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import pathlib
 import re
 from collections.abc import AsyncIterator
@@ -23,8 +25,10 @@ from fastapi.responses import FileResponse
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 
 from steeproute.app.cli_adapter import SchemaField, list_regions, query_params_schema, resolve_area
+from steeproute.app.geocode import GeocodeFn
 from steeproute.app.models import (
     AreaResolution,
+    AreaSpec,
     JobCreate,
     JobKind,
     JobRecord,
@@ -37,6 +41,8 @@ from steeproute.app.models import (
 from steeproute.app.queue import JobQueue, Worker
 from steeproute.app.sse import ProgressEvent, ProgressHub
 from steeproute.app.store import JobStore
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -71,6 +77,30 @@ def _regions_cache_root(request: Request) -> pathlib.Path | None:
     return getattr(request.app.state, "regions_cache_root", None)
 
 
+def _geocoder(request: Request) -> GeocodeFn | None:
+    """The run-label reverse geocoder, or `None` when labelling is disabled (App
+    Story 4.3). Production wires the real `reverse_geocode`; tests inject a stub or
+    leave it unset. `getattr` default guards the case where the lifespan hasn't run."""
+    return getattr(request.app.state, "geocoder", None)
+
+
+async def _resolve_area_label(geocoder: GeocodeFn | None, area: AreaSpec) -> str | None:
+    """Best-effort town/place label for a job's center, or `None`.
+
+    Runs the (blocking) geocoder off the event loop via `asyncio.to_thread` so it
+    never stalls the single worker or open SSE streams, and swallows any error the
+    geocoder didn't already absorb — labelling can never fail, delay past the
+    geocoder's own short timeout, or block job creation (FR5 fire-and-forget)."""
+    if geocoder is None:
+        return None
+    lat, lon = area.center
+    try:
+        return await asyncio.to_thread(geocoder, lat, lon)
+    except Exception as exc:  # noqa: BLE001 — best-effort: a label is never worth failing a job
+        logger.debug("run-label geocode failed for (%s, %s): %s", lat, lon, exc)
+        return None
+
+
 def _require_job(job_id: str, request: Request) -> JobRecord:
     """Dependency: resolve a job or 404 *before* a streaming response starts."""
     record = _store(request).get(job_id)
@@ -95,12 +125,19 @@ async def create_job(body: JobCreate, request: Request) -> JobRecord:
     is already validated against the kind-matching model (`SetupParams` or
     `QueryParams`) by `JobCreate`'s own kind-dispatch, so a malformed or
     mismatched body has already failed 422 before this handler runs.
+
+    A best-effort `area_label` is reverse-geocoded from the center (App Story 4.3)
+    and stamped on the record before it is persisted, so the run library shows a
+    place name from the first render. The lookup is offline-safe and off-loop: a
+    failure/absence leaves `area_label=None` and never blocks the 201/enqueue.
     """
+    area_label = await _resolve_area_label(_geocoder(request), body.area)
     record = JobRecord(
         id=new_job_id(),
         kind=body.kind,
         area=body.area,
         params=body.params.model_dump(),
+        area_label=area_label,
         status=JobStatus.QUEUED,
         created_at=utcnow_iso(),
     )

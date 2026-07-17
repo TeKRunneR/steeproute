@@ -28,7 +28,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-07-17  # app-4-2-config-form-overhaul → done; app-epic-4 in-progress (4.3 remains backlog)
+last_updated: 2026-07-17  # app-4-3-recognizable-runs → done; app-epic-4 complete
 
 project: bmad-test
 project_key: NOKEY
@@ -178,7 +178,7 @@ development_status:
   app-3-2-cancel-queued-and-re-run-with-tweaks: done
   app-3-3-restart-recovery: done
 
-  app-epic-4: in-progress        # App UX refinements (correct-course 2026-07-17)
+  app-epic-4: done        # App UX refinements (correct-course 2026-07-17)
   app-4-1-map-selection-modes: done
   app-4-2-config-form-overhaul-flat-numbers-defaults: done
-  app-4-3-recognizable-runs-town-label-and-params-view: backlog
+  app-4-3-recognizable-runs-town-label-and-params-view: done

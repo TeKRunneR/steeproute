@@ -166,6 +166,12 @@ class JobRecord(BaseModel):
     kind: JobKind
     area: AreaSpec
     params: dict[str, Any] = Field(default_factory=dict)
+    # A human place label for the run — a nearby town/place name best-effort
+    # reverse-geocoded from `area.center` at creation (App Story 4.3, `app.geocode`).
+    # `None` when geocoding is disabled, offline, or found no place; the run
+    # library then falls back to the coordinate display. Additive: a `job.json`
+    # written before this field existed loads with `area_label=None`.
+    area_label: str | None = None
     status: JobStatus
     created_at: str
     started_at: str | None = None

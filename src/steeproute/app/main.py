@@ -29,6 +29,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
 
 from steeproute.app.api import router as jobs_router
+from steeproute.app.geocode import GeocodeFn, reverse_geocode
 from steeproute.app.models import JobStatus
 from steeproute.app.queue import BuildArgv, JobQueue, Worker, default_build_argv
 from steeproute.app.sse import ProgressHub
@@ -108,13 +109,19 @@ def _make_lifespan(
     store_root: pathlib.Path | None,
     build_argv: BuildArgv | None,
     cache_root: pathlib.Path | None,
+    geocode: GeocodeFn | None,
 ):
     """Build the lifespan that owns the job runner.
 
-    `store_root`, `build_argv`, and `cache_root` are injectable so tests use a tmp
-    store, a fake subprocess command, and a crafted cache; production passes none
-    and gets the real defaults (`cache_root=None` → the CLI's default cache root
-    that `steeproute-setup` writes to, per `cli_adapter.argv`).
+    `store_root`, `build_argv`, `cache_root`, and `geocode` are injectable so tests
+    use a tmp store, a fake subprocess command, a crafted cache, and a no-network
+    geocoder stub; production passes none for the first three (real defaults) and
+    the real `reverse_geocode` for the last (`cache_root=None` → the CLI's default
+    cache root that `steeproute-setup` writes to, per `cli_adapter.argv`).
+
+    `geocode=None` disables run labelling entirely (no network call) — the
+    offline-safe default, so a factory built without it (e.g. an existing test)
+    never touches the network; `create_job` then leaves `area_label` unset.
     """
 
     @asynccontextmanager
@@ -130,6 +137,9 @@ def _make_lifespan(
         app.state.job_worker = worker
         # Cache root for `GET /regions` (Story 1.6); `None` = the CLI default root.
         app.state.regions_cache_root = cache_root
+        # Reverse geocoder for run labels (Story 4.3); `None` = labelling disabled
+        # (no outbound call). `create_job` reads this off app.state.
+        app.state.geocoder = geocode
 
         # Boot reconciliation (Story 3.3), BEFORE the worker starts consuming the
         # queue: (1) recovery — a job left `running` by an ungraceful kill is
@@ -165,12 +175,18 @@ def create_app(
     store_root: pathlib.Path | None = None,
     build_argv: BuildArgv | None = None,
     cache_root: pathlib.Path | None = None,
+    geocode: GeocodeFn | None = None,
 ) -> FastAPI:
-    """Build the FastAPI application (factory, so tests get isolated instances)."""
+    """Build the FastAPI application (factory, so tests get isolated instances).
+
+    `geocode` defaults to `None` (labelling disabled — no network); the production
+    module-level `app` below wires the real `reverse_geocode`. Tests that need a
+    label inject a deterministic stub instead of hitting Nominatim.
+    """
     app = FastAPI(
         title="steeproute",
         lifespan=_make_lifespan(
-            store_root=store_root, build_argv=build_argv, cache_root=cache_root
+            store_root=store_root, build_argv=build_argv, cache_root=cache_root, geocode=geocode
         ),
     )
     app.include_router(router)
@@ -187,8 +203,10 @@ def create_app(
     return app
 
 
-# Module-level app for `fastapi dev src/steeproute/app/main.py`.
-app = create_app()
+# Module-level app for `fastapi dev src/steeproute/app/main.py` and the
+# `steeproute-app` entry point. Production wires the real reverse geocoder (run
+# labels); the factory's own default is off (no network) so tests stay offline.
+app = create_app(geocode=reverse_geocode)
 
 
 def run() -> None:

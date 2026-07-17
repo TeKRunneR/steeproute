@@ -3,13 +3,16 @@
 // One list of every job, ordered running → queued (in order) → history (newest
 // first), rendered from the existing creation-ordered `GET /jobs` (no new
 // endpoint — the ordering is a display regrouping here, not a server change).
-// Each card shows `kind · area-label`, center/radius, the created timestamp, the
-// status, and a status-appropriate metric (a done query's objective/cost, a
-// failed job's exit code). Actions are status-gated: Watch (running), View routes
-// (done query), Cancel (queued → DELETE, Story 3.2), and Re-run with tweaks
-// (done/failed query → prefilled config form, Story 3.2).
+// Each card LEADS with the run's human `area_label` (a reverse-geocoded town/
+// place name, Story 4.3), falling back to `kind · r{radius}` when unlabelled;
+// center/radius/timestamp are secondary detail, plus a status-appropriate metric
+// (a done query's objective/cost, a failed job's exit code) and — for query runs
+// only — a click-to-reveal view of the stored params (Story 4.3). Actions are
+// status-gated: Watch (running), View routes (done query), Cancel (queued →
+// DELETE, Story 3.2), and Re-run with tweaks (done/failed query, Story 3.2).
 
 import { listJobs, cancelJob, runWatchUrl, resultViewUrl, rerunConfigUrl, ApiError } from "./api.js";
+import { groupThousands } from "./format.js";
 
 const listEl = document.getElementById("runs-list");
 const emptyEl = document.getElementById("runs-empty");
@@ -26,17 +29,52 @@ function orderForLibrary(jobs) {
   return [...running, ...queued, ...history];
 }
 
-function areaLabel(job) {
+/** The card's lead identifier: the human town/place label when present, else
+ *  today's `kind · r{radius}` fallback (Story 4.3 — a run with no `area_label`,
+ *  i.e. geocoding disabled/offline/no place, is never worse off than before). */
+function cardTitle(job) {
   const radius = job.area?.radius_km;
+  if (job.area_label) return `${job.kind} · ${job.area_label}`;
   return `${job.kind} · r${radius ?? "?"}`;
 }
 
+/** Secondary detail: the raw center/radius (now that the label leads) + timestamp. */
 function metaText(job) {
   const [lat, lon] = job.area?.center ?? [];
   const radius = job.area?.radius_km;
   const center = lat != null && lon != null ? `${lat}, ${lon}` : "?";
   const when = job.created_at ? new Date(job.created_at).toLocaleString() : "?";
   return `center ${center} · radius ${radius ?? "?"} km · ${when}`;
+}
+
+/** Display a stored param value: booleans as on/off, long numbers space-grouped
+ *  (Story 4.2's `format.js`, matching the config form), null/unset as an em dash. */
+function formatParamValue(value) {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "boolean") return value ? "on" : "off";
+  if (typeof value === "number" && Math.abs(value) >= 1000) return groupThousands(value);
+  return String(value);
+}
+
+/** A click-to-reveal (native <details>) view of a query run's full stored params
+ *  (Story 4.3). Data is already on the job record (`job.params`) — no new fetch. */
+function buildParamsView(job) {
+  const details = document.createElement("details");
+  details.className = "run-card-params";
+  const summary = document.createElement("summary");
+  summary.textContent = "Parameters";
+  details.appendChild(summary);
+  const dl = document.createElement("dl");
+  dl.className = "run-card-params-list";
+  for (const [name, value] of Object.entries(job.params ?? {})) {
+    const dt = document.createElement("dt");
+    dt.textContent = name.replaceAll("_", " ");
+    const dd = document.createElement("dd");
+    dd.textContent = formatParamValue(value);
+    dl.append(dt, dd);
+  }
+  details.appendChild(dl);
+  return details;
 }
 
 /** The status-appropriate metric line, or "" when there is none to show. */
@@ -105,7 +143,7 @@ function renderCard(job) {
   head.className = "run-card-head";
   const title = document.createElement("span");
   title.className = "run-card-title";
-  title.textContent = areaLabel(job);
+  title.textContent = cardTitle(job);
   const status = document.createElement("span");
   status.className = `run-card-status status-${job.status}`;
   status.textContent = job.status;
@@ -123,6 +161,11 @@ function renderCard(job) {
     metricEl.className = "run-card-metric";
     metricEl.textContent = metric;
     card.appendChild(metricEl);
+  }
+
+  // Query runs expose their stored config on demand; setup params are trivial.
+  if (job.kind === "query" && job.params && Object.keys(job.params).length > 0) {
+    card.appendChild(buildParamsView(job));
   }
 
   const actions = document.createElement("div");

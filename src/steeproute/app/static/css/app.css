@@ -442,6 +442,36 @@ body {
   margin-top: 0.35rem;
 }
 
+/* Query-run params reveal (Story 4.3): a native <details> so the toggle needs no
+   JS. Collapsed by default — the card stays scannable; the config is on demand. */
+.run-card-params {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.run-card-params > summary {
+  cursor: pointer;
+  color: #2b6cb0;
+  width: fit-content;
+}
+
+.run-card-params-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.15rem 1rem;
+  margin: 0.5rem 0 0;
+  color: #3e4c59;
+  font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+}
+
+.run-card-params-list dt {
+  color: #52606d;
+}
+
+.run-card-params-list dd {
+  margin: 0;
+}
+
 .run-card-actions {
   display: flex;
   gap: 1rem;

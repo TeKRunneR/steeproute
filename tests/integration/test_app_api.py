@@ -31,6 +31,7 @@ import networkx as nx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from steeproute.app.geocode import GeocodeFn
 from steeproute.app.main import create_app
 from steeproute.app.models import AreaSpec, JobKind, JobRecord, JobStatus, new_job_id, utcnow_iso
 from steeproute.app.store import JobStore
@@ -224,6 +225,57 @@ def test_bad_area_rejected_422(tmp_path: pathlib.Path) -> None:
         # Missing radius_km → pydantic validation error.
         body = {"kind": "setup", "area": {"center": [45.26, 5.788]}}
         assert client.post("/jobs", json=body).status_code == 422
+
+
+# --- Story 4.3: area_label reverse-geocode -----------------------------------
+
+
+def _labelled_client(tmp_path: pathlib.Path, geocode: GeocodeFn) -> TestClient:
+    """A lifecycle client (exit 0) with an injected reverse-geocoder stub, so the
+    `area_label` stamping path runs fully offline (no Nominatim call)."""
+    fake_cli = tmp_path / "fake_cli.py"
+    fake_cli.write_text(_FAKE_CLI, encoding="utf-8")
+    app = create_app(
+        store_root=tmp_path / "jobs",
+        build_argv=_make_fake_build_argv(fake_cli, 0),
+        geocode=geocode,
+    )
+    return TestClient(app)
+
+
+def test_area_label_stamped_from_geocoder(tmp_path: pathlib.Path) -> None:
+    seen: list[tuple[float, float]] = []
+
+    def _geocode(lat: float, lon: float) -> str | None:
+        seen.append((lat, lon))
+        return "Chamrousse"
+
+    with _labelled_client(tmp_path, _geocode) as client:
+        body = client.post("/jobs", json=_setup_body()).json()
+        assert body["area_label"] == "Chamrousse"
+        # Center passed through as (lat, lon) — not transposed.
+        assert seen == [(45.26, 5.788)]
+        # Persisted, so the run library reads the label straight off GET /jobs.
+        assert client.get(f"/jobs/{body['id']}").json()["area_label"] == "Chamrousse"
+
+
+def test_area_label_none_when_geocoder_raises(tmp_path: pathlib.Path) -> None:
+    def _boom(_lat: float, _lon: float) -> str | None:
+        raise RuntimeError("geocoder exploded")
+
+    with _labelled_client(tmp_path, _boom) as client:
+        resp = client.post("/jobs", json=_setup_body())
+        # A raising geocoder never blocks or errors the job: still 201, label unset.
+        assert resp.status_code == 201
+        assert resp.json()["area_label"] is None
+
+
+def test_area_label_none_when_labelling_disabled(tmp_path: pathlib.Path) -> None:
+    # No geocoder injected (the offline-safe default) → no label, job still created.
+    with _lifecycle_client(tmp_path, exit_code=0) as client:
+        body = client.post("/jobs", json=_setup_body())
+        assert body.status_code == 201
+        assert body.json()["area_label"] is None
 
 
 # --- Story 1.5: hard-cancel Stop ---------------------------------------------
