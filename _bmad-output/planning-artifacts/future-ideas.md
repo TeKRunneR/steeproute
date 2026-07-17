@@ -84,3 +84,16 @@ subprocess + per-job JSON + `GET /jobs`) → (3) progress plumbing (classifier �
 SSE) → (4) frontend run+watch (config form → live progress → return-to-progress)
 → (5) map picker + cached-region overlay + build button → (6) run library
 (list / open via iframe / re-run-with-tweaks).
+
+# App UX improvements
+
+**Promoted 2026-07-17:** these four items were pulled into App Epic 4 via
+correct-course (`sprint-change-proposal-2026-07-17-app-ux-improvements.md`) —
+now three stories (the config-form items were merged): 4.1 map selection modes,
+4.2 config-form overhaul (flat layout + space-grouped numbers + corrected
+defaults), 4.3 recognizable runs (town label + params view). See `epics-app.md`.
+
+* On the map I need several different selection modes: 1) select existing region (so that I can easily select a region that was already built, and run a query on it); 2) move the area picker square: right now I can only click a new spot to move it. Both should be separate modes, so that in the "area pick" mode (which is the only current mode), I can still click any point to define a new area.
+* Almost all query parameters are actually always important, so the "advanced" section of the query parameter pane is useless. This pane should always open with all parameters.
+* On the runs screen, right now it's almost impossible to remember which runs were done where, as GPS coords just aren't explicit for a human user. I need something else: maybe a screenshot of the area, or a name of a town close to the center of the area, if that's easily to determine ==> this is for both setups and queries. For queries specifically, I want to be able to view all query parameters, maybe not at all times, but something I can click to show them at least.
+* In query parameters, long numbers (like 1M for iter budget) are difficult to parse. Something that separates thousands better would be good (avoiding commas, I'm French so for us commas can be confusing as they're commonly used as decimal separators). Also, not really a UX thing, but while I'm here: set the default max descent slope to 0.4, and have "Start at junction" checked by default.

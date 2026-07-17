@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "steeproute-app",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "steeproute-app"],
+      "port": 8000
+    }
+  ]
+}

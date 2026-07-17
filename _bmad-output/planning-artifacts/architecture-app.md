@@ -351,6 +351,13 @@ Rationale: Categories 6 and 9 knowingly bind to CLI internals; confining them to
 one package makes a CLI change a one-file blast radius and keeps the rest of the
 App testable against the adapter's typed interface, not real subprocesses.
 
+> **Post-v1 note (App Epic 4, 2026-07-17).** The town-label reverse-geocode
+> (Story 4.3) is a *new outbound seam* — an external HTTP call to a geocoder
+> (Nominatim), not CLI coupling — so it lives in its own module (`app/geocode.py`),
+> **not** in `cli_adapter`, which stays strictly the CLI boundary. It is
+> best-effort/offline-safe (failure → no label, never a blocked job) and its
+> result is stored as `area_label` on the job record at creation.
+
 ### JSON & data-format conventions
 
 - **snake_case everywhere** — Python fields AND JSON on the wire. No camelCase

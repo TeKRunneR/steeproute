@@ -46,6 +46,11 @@ def test_quality_demo_defaults_override_cli_defaults() -> None:
     # > cap, and area is never negative) — a large no-op ceiling instead.
     assert fields["area_cap"].default == 100_000.0
     assert fields["workers"].default == 4
+    # Steep-route-tool defaults corrected in Story app-4-2: the CLI ships these
+    # off/false, but this tool's whole point is steep routes, so the App defaults
+    # the descent cap on (0.4) and start-at-junction on.
+    assert fields["max_descent_slope"].default == 0.4
+    assert fields["start_at_junction"].default is True
 
 
 def test_unmentioned_fields_keep_cli_default() -> None:
@@ -64,13 +69,10 @@ def test_field_types_match_click_option_kinds() -> None:
     assert fields["start_at_junction"].type == "bool"
 
 
-def test_basic_advanced_grouping() -> None:
-    fields = _schema_by_name()
-    assert fields["theta"].group == "basic"
-    assert fields["difficulty_cap"].group == "basic"
-    assert fields["n"].group == "basic"
-    assert fields["seed"].group == "basic"
-    assert fields["workers"].group == "advanced"
+def test_schema_field_carries_no_grouping_metadata() -> None:
+    # The form is flat (Story app-4-2): SchemaField exposes no basic/advanced
+    # grouping, so it stays a pure introspection of the CLI's click options.
+    assert not hasattr(_schema_by_name()["theta"], "group")
 
 
 def test_schema_field_names_are_real_query_cli_params() -> None:

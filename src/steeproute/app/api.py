@@ -118,9 +118,9 @@ def list_jobs(request: Request) -> list[JobRecord]:
 @router.get("/params/query-schema")
 def get_query_params_schema() -> list[SchemaField]:
     """The introspected query-form schema (App Story 2.1, architecture-app.md
-    §Category 9): field name/type/default/choices/help/basic-or-advanced group,
-    derived from `steeproute.cli.query`'s click command — never hand-duplicated.
-    `config-form.js` renders the basic/advanced form directly from this; no
+    §Category 9): field name/type/default/choices/help, derived from
+    `steeproute.cli.query`'s click command — never hand-duplicated.
+    `config-form.js` renders the flat form directly from this (Story app-4-2); no
     other file hand-lists query flags.
     """
     return query_params_schema()

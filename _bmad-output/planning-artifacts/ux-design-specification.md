@@ -9,6 +9,17 @@ scope_note: 'Lean pass for an N=1 thin CLI wrapper — screen inventory + key fl
 **Author:** Yann
 **Date:** 2026-07-14
 
+> **Post-v1 update (2026-07-17, App Epic 4).** Hands-on use of the shipped app
+> drove four refinements (correct-course
+> [sprint-change-proposal-2026-07-17-app-ux-improvements.md](sprint-change-proposal-2026-07-17-app-ux-improvements.md)),
+> reflected inline below: **S1** gains three explicit selection modes (area-pick
+> default / move-selection / select-region — click a built region to query it
+> directly); **S2** drops the basic/advanced split (all flags always visible) and
+> uses space-grouped numbers with `max_descent_slope=0.4` + `start_at_junction`
+> on by default; **S4** run cards lead with a reverse-geocoded town label and add
+> a click-to-reveal query-params view. This decides the Cluster-D "run-card
+> fields" question previously left open in §4/§5.
+
 > **Scope of this document.** steeproute's App is a thin web UI over two existing
 > CLIs (`setup` + `query`). Its design was settled in the
 > [brainstorming session](../brainstorming/brainstorming-session-2026-07-14-1437.md);
@@ -245,9 +256,11 @@ single-user local tool, need not cover:
 - Emotional-response / brand / inspiration exploration.
 - S1 (map picker) and S2 (config form) wireframes — conventional patterns
   (Leaflet click-to-pin + a collapsible form); no ambiguity worth a diagram.
-- Final resolution of the Cluster D open questions (offer-vs-block on uncached,
-  run-card fields, queue reorder/cancel) — flagged inline where they touch a flow,
-  to be decided when the implementation reaches them.
+- Final resolution of the remaining Cluster D open questions (offer-vs-block on
+  uncached, queue reorder/cancel) — flagged inline where they touch a flow, to be
+  decided when the implementation reaches them. (The "run-card fields" question is
+  now decided — App Epic 4: town label + params view; see the post-v1 update note
+  at the top.)
 
 ---
 

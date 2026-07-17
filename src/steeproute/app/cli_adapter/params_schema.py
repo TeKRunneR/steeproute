@@ -50,6 +50,12 @@ _EXCLUDED_FIELDS: frozenset[str] = frozenset(
 # `--area-cap 0` would reject every selection. 100_000 km² (~178 km radius) is
 # large enough to be a no-op for this personal-tool use case while still
 # catching an obvious typo.
+#
+# `max_descent_slope` (0.4) and `start_at_junction` (on) are steep-route-tool
+# defaults corrected in Story app-4-2: the CLI ships them off/false, but the
+# whole point of this tool is steep routes, so the App defaults them on. These
+# override the CLI's None/False through the same `resolve_query_defaults` seam
+# `build_query_argv` reads, so no argv.py change is needed.
 _QUALITY_DEFAULTS: dict[str, Any] = {
     "iter_budget": 1_000_000,
     "stagnation_iters": 200_000,
@@ -58,23 +64,24 @@ _QUALITY_DEFAULTS: dict[str, Any] = {
     "j_max": 0.0,
     "area_cap": 100_000.0,
     "workers": 4,
+    "max_descent_slope": 0.4,
+    "start_at_junction": True,
 }
-
-# Basic row = the common knobs a user tunes first; everything else is
-# advanced. Click carries no such metadata — this grouping is a UI judgment
-# call, not derived (Story app-2-1 Dev Notes).
-_BASIC_FIELDS: frozenset[str] = frozenset({"theta", "difficulty_cap", "n", "seed"})
 
 
 @dataclasses.dataclass(frozen=True)
 class SchemaField:
-    """One form field, derived from a click.Option — never hand-duplicated."""
+    """One form field, derived from a click.Option — never hand-duplicated.
+
+    The form is flat (Story app-4-2): every field renders in one always-visible
+    list, so there is no basic/advanced grouping metadata — the schema stays a
+    pure introspection of the CLI's click options.
+    """
 
     name: str
     type: FieldType
     default: Any
     help: str | None
-    group: Literal["basic", "advanced"]
     choices: tuple[str, ...] | None = None
 
 
@@ -112,7 +119,6 @@ def query_params_schema() -> list[SchemaField]:
                 type=_field_type(param),
                 default=_QUALITY_DEFAULTS.get(name, param.default),
                 help=param.help,
-                group="basic" if name in _BASIC_FIELDS else "advanced",
                 choices=choices,
             )
         )

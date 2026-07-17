@@ -268,17 +268,6 @@ body {
   text-transform: capitalize;
 }
 
-.config-advanced {
-  margin-top: 0.75rem;
-}
-
-.config-advanced summary {
-  cursor: pointer;
-  font-size: 0.9rem;
-  color: #2b6cb0;
-  margin-bottom: 0.5rem;
-}
-
 .config-form-actions {
   display: flex;
   gap: 0.6rem;

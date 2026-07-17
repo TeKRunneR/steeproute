@@ -1,11 +1,15 @@
-// S2 Config form (App Story 2.1) — a schema-driven basic/advanced panel over
-// the map, opened from map-home when "Configure query" is enabled. Rendered
-// entirely from `GET /params/query-schema` (architecture-app.md §Category 9):
-// this file hand-lists no query flag names, types, or defaults — the schema
-// is the single source of truth for both this form and the App's `argv`
-// build (`cli_adapter.params_schema` / `cli_adapter.argv.build_query_argv`).
+// S2 Config form (App Story 2.1; flat layout in Story app-4-2) — a schema-driven
+// panel over the map, opened from map-home when "Configure query" is enabled.
+// Rendered entirely from `GET /params/query-schema` (architecture-app.md
+// §Category 9): this file hand-lists no query flag names, types, or defaults —
+// the schema is the single source of truth for both this form and the App's
+// `argv` build (`cli_adapter.params_schema` / `cli_adapter.argv.build_query_argv`).
+// Every field renders in one always-visible list (no basic/advanced collapse):
+// nearly every query flag matters for this tool, so hiding most behind a toggle
+// only added a click.
 
 import { createJob, getQuerySchema, runWatchUrl } from "./api.js";
+import { groupThousands, stripGrouping } from "./format.js";
 
 const panelEl = document.getElementById("config-form");
 const fieldsFormEl = document.getElementById("config-form-fields");
@@ -36,6 +40,19 @@ function effectiveValue(field) {
   return pv !== null && pv !== undefined ? pv : field.default;
 }
 
+/** Long numeric fields (iter budget, stagnation iters, area cap) get space
+ *  thousands separators for readability (Story app-4-2 / FR14). A default with
+ *  magnitude >= 1000 is the "long" signal — a self-contained display heuristic,
+ *  not a hand-listed flag set, so it tracks the schema. Small numbers (theta, n,
+ *  workers…) stay ordinary number inputs with their native spinner. */
+function isGroupedNumberField(field) {
+  return (
+    (field.type === "int" || field.type === "float") &&
+    typeof field.default === "number" &&
+    Math.abs(field.default) >= 1000
+  );
+}
+
 function buildInput(field) {
   const value = effectiveValue(field);
   let input;
@@ -52,6 +69,17 @@ function buildInput(field) {
       if (choice === value) opt.selected = true;
       input.appendChild(opt);
     }
+  } else if (isGroupedNumberField(field)) {
+    // Space-grouped text input: native number inputs render no separator, so a
+    // long value must be a text field. Grouping is display-only — `readParams`
+    // strips it back to a plain number before it reaches the wire / argv.
+    input = document.createElement("input");
+    input.type = "text";
+    input.inputMode = "numeric";
+    if (value !== null && value !== undefined) input.value = groupThousands(value);
+    input.addEventListener("blur", () => {
+      input.value = groupThousands(stripGrouping(input.value));
+    });
   } else {
     input = document.createElement("input");
     input.type = field.type === "string" ? "text" : "number";
@@ -86,36 +114,41 @@ function buildGroup(fields) {
 async function renderForm() {
   fieldsFormEl.innerHTML = "";
   const schema = await loadSchema();
-  const basic = schema.filter((f) => f.group === "basic");
-  const advanced = schema.filter((f) => f.group === "advanced");
-
-  fieldsFormEl.appendChild(buildGroup(basic));
-
-  const details = document.createElement("details");
-  details.className = "config-advanced";
-  const summary = document.createElement("summary");
-  summary.textContent = "Advanced";
-  details.appendChild(summary);
-  details.appendChild(buildGroup(advanced));
-  fieldsFormEl.appendChild(details);
+  // Flat form (Story app-4-2): every field in one always-visible list, in the
+  // schema's introspection order (i.e. the CLI's option declaration order).
+  fieldsFormEl.appendChild(buildGroup(schema));
 }
 
+/** Read every input into a params dict. Returns `{ params, invalid }`; `invalid`
+ *  names any numeric field whose text isn't a clean number, so the submit handler
+ *  can block rather than silently queue a wrong value. */
 function readParams(schema) {
   const params = {};
+  const invalid = [];
   for (const field of schema) {
     const input = document.getElementById(fieldInputId(field));
     if (!input) continue;
     if (field.type === "bool") {
       params[field.name] = input.checked;
-    } else if (field.type === "int") {
-      params[field.name] = input.value === "" ? null : Number.parseInt(input.value, 10);
-    } else if (field.type === "float") {
-      params[field.name] = input.value === "" ? null : Number.parseFloat(input.value);
+    } else if (field.type === "int" || field.type === "float") {
+      // Strip display grouping, then parse with `Number` (NOT parseInt/parseFloat):
+      // `Number` rejects a mistyped separator or stray char as NaN, whereas
+      // `parseInt("1,000", 10)` truncates to 1 — a valid-looking wrong value that
+      // would silently queue e.g. a 1-iteration solve. An empty field stays unset
+      // (null → schema default); a non-numeric entry is flagged, not coerced.
+      const plain = stripGrouping(input.value);
+      if (plain === "") {
+        params[field.name] = null;
+      } else {
+        const n = Number(plain);
+        if (Number.isNaN(n)) invalid.push(field.name);
+        else params[field.name] = n;
+      }
     } else {
       params[field.name] = input.value === "" ? null : input.value;
     }
   }
-  return params;
+  return { params, invalid };
 }
 
 /** Open the panel for an area (`{center: [lat, lon], radius_km}`, matching
@@ -158,7 +191,14 @@ fieldsFormEl.addEventListener("submit", (ev) => {
   }
   void (async () => {
     const schema = await loadSchema();
-    const params = readParams(schema);
+    const { params, invalid } = readParams(schema);
+    if (invalid.length > 0) {
+      // Block instead of silently reverting a mistyped number to its default.
+      statusEl.textContent = `Enter a valid number for: ${invalid
+        .map((name) => name.replaceAll("_", " "))
+        .join(", ")}`;
+      return;
+    }
     statusEl.textContent = "Queuing query…";
     try {
       const job = await createJob({ kind: "query", area: currentArea, params });

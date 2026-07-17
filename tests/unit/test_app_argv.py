@@ -132,25 +132,30 @@ def test_query_argv_seed_included_when_set() -> None:
     assert argv[argv.index("--seed") + 1] == "42"
 
 
-def test_query_argv_max_descent_slope_omitted_when_unset() -> None:
+def test_query_argv_max_descent_slope_defaults_to_quality_value() -> None:
+    # Story app-4-2 corrected the App default to 0.4 (on), so an all-unset
+    # QueryParams now emits the descent cap — the CLI's own default is None (off),
+    # but this is a steep-route tool.
     argv = _query_argv(AreaSpec(center=(1.0, 2.0), radius_km=1.0), QueryParams())
-    assert "--max-descent-slope" not in argv
+    assert argv[argv.index("--max-descent-slope") + 1] == "0.4"
 
 
 def test_query_argv_max_descent_slope_included_when_set() -> None:
     argv = _query_argv(
-        AreaSpec(center=(1.0, 2.0), radius_km=1.0), QueryParams(max_descent_slope=0.4)
+        AreaSpec(center=(1.0, 2.0), radius_km=1.0), QueryParams(max_descent_slope=0.25)
     )
-    assert argv[argv.index("--max-descent-slope") + 1] == "0.4"
+    assert argv[argv.index("--max-descent-slope") + 1] == "0.25"
 
 
-def test_query_argv_start_at_junction_flag_only_when_true() -> None:
-    off = _query_argv(AreaSpec(center=(1.0, 2.0), radius_km=1.0), QueryParams())
-    assert "--start-at-junction" not in off
-    on = _query_argv(
+def test_query_argv_start_at_junction_defaults_on() -> None:
+    # Story app-4-2: the App defaults start-at-junction on (CLI ships it off), so
+    # an unset QueryParams still emits the flag.
+    default = _query_argv(AreaSpec(center=(1.0, 2.0), radius_km=1.0), QueryParams())
+    assert "--start-at-junction" in default
+    explicit = _query_argv(
         AreaSpec(center=(1.0, 2.0), radius_km=1.0), QueryParams(start_at_junction=True)
     )
-    assert "--start-at-junction" in on
+    assert "--start-at-junction" in explicit
 
 
 def test_query_argv_executable_defaults_to_resolved_console_script() -> None:

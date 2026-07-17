@@ -507,10 +507,14 @@ def test_query_params_schema_endpoint(tmp_path: pathlib.Path) -> None:
             "version",
         ):
             assert excluded not in fields
-        # Quality-demo overrides are what the form actually prefills.
+        # Quality-demo overrides are what the form actually prefills, including
+        # the steep-route-tool defaults corrected in Story app-4-2.
         assert fields["iter_budget"]["default"] == 1_000_000
         assert fields["difficulty_cap"]["default"] == "T4"
-        assert fields["theta"]["group"] == "basic"
+        assert fields["max_descent_slope"]["default"] == 0.4
+        assert fields["start_at_junction"]["default"] is True
+        # The form is flat (Story app-4-2): no basic/advanced grouping on the wire.
+        assert "group" not in fields["theta"]
 
 
 def test_home_page_renders_map_and_actions() -> None:
