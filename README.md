@@ -1,10 +1,14 @@
 # steeproute
 
-steeproute finds steep loop routes for hiking and trail running. You give it a center
+steeproute finds steep routes for hiking and trail running. You give it a center
 point and a radius: `steeproute-setup` builds the local trail network from OpenStreetMap
 and an auto-downloaded elevation model, and `steeproute` searches that network with a
-GRASP optimizer for distinct loops that maximize sustained steepness, writing each as a
+GRASP optimizer for distinct routes that maximize sustained steepness, writing each as a
 self-contained HTML report with an interactive map and elevation profile.
+
+The routes are point-to-point **exploration aids, not ready-to-run loops** — they show
+*where the vertical lives* in an area (often with awkward trailheads or long chained
+climbs), and you sketch your actual outing from them.
 
 **Coverage:** trail data comes from OpenStreetMap (available for most of the world);
 elevation is downloaded from the IGN RGE ALTI service, which covers **France**. There is
@@ -23,9 +27,13 @@ anywhere in France. It is a personal project.
   ratio on a tiny controlled instance as a *regression* signal — it does **not** generalize
   to a claim of optimality on real-scale queries. A run returns strong loops it found, not
   a proof that none better exist.
-- **Memory.** Runs comfortably on a commodity 16 GB laptop — the gallery regions peaked
-  around 0.8 GB of working set per query. Memory pressure scales with prepared-area size,
-  not search effort.
+- **Memory.** Peak working set scales with two levers: the **prepared-area size** (a
+  larger area is a larger in-memory graph) and **`--workers`** — each parallel GRASP
+  worker holds its own copy of the search graph, so peak roughly grows with the worker
+  count. A single-worker small-area query stays in the hundreds of MB; the large-area
+  gallery runs (radius 16–20 km) with `--workers 4` peaked in the 3–3.5 GB range.
+  Developed on a 32 GB laptop; if memory is tight, lower `--workers` or shrink the area —
+  both cut peak.
 - **Platform.** Developed and tested on Windows. Linux is expected to work but is not
   actively tested; macOS is not a v1 commitment.
 
@@ -63,6 +71,8 @@ than the setup radius so the queried area sits fully inside the prepared one.
 | `--center` / `--radius` | area center `lat,lon` and radius in km | your area |
 | `--theta` | route-level average-slope floor every route must clear | `0.20` — this *is* the steepness bar; raise it for steeper routes, lower it to admit gentler ones |
 | `--difficulty-cap` | SAC hiking-scale ceiling for eligible trails | `T4` (the `T3` default filters out a lot of steep alpine terrain) |
+| `--start-at-junction` | require each route to start at a road/trail junction (a realistic trailhead) rather than mid-trail | off by default; turn it on for routes you'd actually set off on from a path |
+| `--max-descent-slope` | cap how steeply a route may *descend* (windowed, uphill-measured slope) while still allowing steep climbs | `0.4` keeps descents runnable instead of cliff-like; off by default |
 | `--iter-budget` / `--stagnation-iters` | GRASP search budget / stop after this many iterations with no improvement | `200000` / `10000` — GRASP needs a large budget to converge; it usually stops on stagnation well before the cap |
 | `--elevation-deadband` | drop up/down wiggles smaller than N metres when summing D+/D− | `1` (removes elevation-model noise from the climb totals) |
 | `--n` / `--j-max` | how many routes to return / max segment overlap allowed between them (`0` = fully disjoint) | `3` / `0` |
@@ -86,17 +96,18 @@ job at a time) and everything stays on your machine.
 
 ## Gallery
 
-Three Grenoble-area examples, each one `steeproute` generation using the parameters
-above. The thumbnails are the **top route (route 1)** of each generation — every region
+Three Grenoble-area examples, each a full `steeproute` run with `--start-at-junction
+--max-descent-slope 0.4` and a large parallel search budget (`--workers 4`, ~1M
+iterations). The thumbnails are the **top route (route 1)** of each run — every region
 returned three routes; the full set is under
 [`docs/examples/`](docs/examples/), and [docs/examples/README.md](docs/examples/README.md)
 lists the exact commands to reproduce them.
 
 | Region | Map (route 1) | Elevation profile |
 |---|---|---|
-| **Chamrousse** — Belledonne massif<br>6 km radius · top of 3 routes · ~7 s query<br>route 1: 10.7 km, +1018 m, 26% avg slope<br>[Open report ▸](docs/examples/chamrousse/route-1.html) | [![Chamrousse map](docs/examples/chamrousse/route-1-map.png)](docs/examples/chamrousse/route-1.html) | ![Chamrousse elevation profile](docs/examples/chamrousse/route-1-profile.png) |
-| **Saint-Nizier-du-Moucherotte** — Vercors edge above Grenoble<br>6.5 km radius · top of 3 routes · ~32 s query<br>route 1: 7.5 km, +1042 m, 24% avg slope<br>[Open report ▸](docs/examples/saint-nizier/route-1.html) | [![Saint-Nizier map](docs/examples/saint-nizier/route-1-map.png)](docs/examples/saint-nizier/route-1.html) | ![Saint-Nizier elevation profile](docs/examples/saint-nizier/route-1-profile.png) |
-| **Col de Porte / Charmant Som** — Chartreuse<br>6 km radius · top of 3 routes · ~7 s query<br>route 1: 11.0 km, +1390 m, 22% avg slope<br>[Open report ▸](docs/examples/col-de-porte/route-1.html) | [![Col de Porte map](docs/examples/col-de-porte/route-1-map.png)](docs/examples/col-de-porte/route-1.html) | ![Col de Porte elevation profile](docs/examples/col-de-porte/route-1-profile.png) |
+| **Chartreuse** — Chartreuse massif north of Grenoble<br>16 km radius · top of 3 routes · ~84 s query (`--workers 4`)<br>route 1: 12.0 km, +1787 m, 20% avg slope<br>[Open report ▸](docs/examples/chartreuse/route-1.html) | [![Chartreuse map](docs/examples/chartreuse/route-1-map.png)](docs/examples/chartreuse/route-1.html) | ![Chartreuse elevation profile](docs/examples/chartreuse/route-1-profile.png) |
+| **Vercors** — Vercors massif southwest of Grenoble<br>20 km radius · top of 3 routes · ~84 s query (`--workers 4`)<br>route 1: 12.2 km, +2058 m, 22% avg slope<br>[Open report ▸](docs/examples/vercors/route-1.html) | [![Vercors map](docs/examples/vercors/route-1-map.png)](docs/examples/vercors/route-1.html) | ![Vercors elevation profile](docs/examples/vercors/route-1-profile.png) |
+| **South Belledonne** — southern Belledonne massif<br>11 km radius · top of 3 routes · ~50 s query (`--workers 4`)<br>route 1: 18.0 km, +2454 m, 20% avg slope<br>[Open report ▸](docs/examples/south-belledonne/route-1.html) | [![South Belledonne map](docs/examples/south-belledonne/route-1-map.png)](docs/examples/south-belledonne/route-1.html) | ![South Belledonne elevation profile](docs/examples/south-belledonne/route-1-profile.png) |
 
 > The reports are self-contained HTML — GitHub shows the source, so download and open
 > them locally (or clone the repo) for the interactive map and hover-linked profile.
