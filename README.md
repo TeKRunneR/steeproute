@@ -38,9 +38,10 @@ git clone https://github.com/yfontana/steeproute && cd steeproute
 uv sync
 ```
 
-It has two commands. **Setup** downloads and caches the trail network + elevation for an
-area; **query** searches a prepared area and writes reports. For example, for the
-Chamrousse area in the Belledonne massif:
+The core workflow is two CLI commands. **Setup** downloads and caches the trail network +
+elevation for an area; **query** searches a prepared area and writes reports. (There is
+also a local [web app](#web-app) that wraps the same workflow behind a map.) For example,
+for the Chamrousse area in the Belledonne massif:
 
 ```sh
 # 1. Prepare the area (OSM trails + IGN elevation, cached on disk).
@@ -66,8 +67,22 @@ than the setup radius so the queried area sits fully inside the prepared one.
 | `--elevation-deadband` | drop up/down wiggles smaller than N metres when summing D+/D− | `1` (removes elevation-model noise from the climb totals) |
 | `--n` / `--j-max` | how many routes to return / max segment overlap allowed between them (`0` = fully disjoint) | `3` / `0` |
 | `--seed` | fixes GRASP's randomness so a run is reproducible | any integer |
+| `--workers` | run independent GRASP restarts across CPU cores | `1` (default, single-process and byte-identical); set to your core count for a stronger search in the same wall-clock. `N>1` is reproducible per `(seed, workers)` but differs by design from single-process |
 
 See `uv run steeproute --help` and `uv run steeproute-setup --help` for the full set.
+
+## Web app
+
+steeproute also ships a local web app that wraps the same setup + query workflow behind a
+map. Pick an area by drawing on the map, configure and launch a query, watch progress
+live, and browse past runs and their routes.
+
+```sh
+uv run steeproute-app
+```
+
+Then open <http://127.0.0.1:8000>. It runs a single background worker (one setup or query
+job at a time) and everything stays on your machine.
 
 ## Gallery
 
@@ -148,8 +163,8 @@ uv run pytest tests/benchmarks -m benchmark --benchmark-autosave  # pin the new 
 ```
 
 Baselines live in `.benchmarks/` and are committed — but they are **machine-local**: numbers are
-only comparable across runs on the same machine. The pre-optimization baseline (Epic 11, 2026-07-03)
-is the reference point every Phase-3 optimization is judged against.
+only comparable across runs on the same machine. Save a fresh baseline before an optimization and
+compare after; the original pre-optimization reference is the Epic 11 capture (2026-07-03).
 
 * * *
 
