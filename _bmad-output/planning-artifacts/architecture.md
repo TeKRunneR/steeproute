@@ -265,6 +265,22 @@ Exact file names within `pipeline/` and `solver/` are placeholders; adjust durin
 
 **Post-review hardening: per-tile retry + fail-fast cancellation (2026-07-07).** Code review of Story 14.3 found the pool's failure path was worse than the sequential code it replaced: (1) a *transient* failure (timeout, reset, HTTP 429/5xx, truncated read) on any one tile failed the entire fetch immediately, with no retry — the sequential path had the same gap, but concurrency raises the odds of hitting it once per batch instead of once per tile; (2) on any terminal failure, `with ThreadPoolExecutor(...)` exit (`shutdown(wait=True)`, the default) drains every **already-queued** tile before propagating the error — worse than sequential, since it fires requests for tiles no one will use, against a server that just showed distress. Fix: `_fetch_tile` now retries transient failures up to `_TILE_MAX_ATTEMPTS` (default 3) with exponential backoff + full jitter before mapping to `DataSourceUnavailableError`; deterministic failures (bad content-type, wrong byte count) still fail immediately, unretried. `_fetch_mosaic`'s `as_completed` loop now shuts the pool down with `cancel_futures=True` on any exception (including `KeyboardInterrupt`), dropping not-yet-started tiles instead of draining them — only the ≤ `max_workers` tiles already in flight finish. `_HTTP_TIMEOUT_S` dropped from 120 s to 30 s per attempt now that retries backstop transient blips (worst case for a dead tile: ~30 s × 3 + backoff ≈ 100 s, versus the old single 120 s hang). The retry count, backoff base, and per-request timeout are overridable via `STEEPROUTE_DEM_FETCH_RETRIES` / `STEEPROUTE_DEM_FETCH_BACKOFF_S` / `STEEPROUTE_DEM_HTTP_TIMEOUT_S` (malformed values log a warning and fall back to the default rather than crashing at import) — these are process-local tuning knobs for `steeproute-setup`'s own network behavior, not inter-CLI configuration (Cat 7's "no env vars" decision is scoped to state shared *between* `steeproute` and `steeproute-setup`, which this isn't).
 
+**Rotated-rectangle search areas (Epic 15, correct-course 2026-07-24).** The area
+generalizes from a centered square to a **rotated rectangle** (center + two
+half-extents + a bearing angle; square/axis-aligned rectangle are the
+`angle=0`/equal-extents cases). For non-square areas, setup stage 1 fetches via
+`osmnx.graph_from_polygon(rotated_ring)` instead of `graph_from_point(dist_type="bbox")`
+— reusing osmnx's existing `truncate_graph_polygon` path (the bbox mode already
+goes bbox→polygon→truncate internally), so it is a natural extension, not a new
+mechanism. The rotated ring's corners are computed in a local `cos(lat)` km frame
+(approximation-grade; flat-earth is sub-percent at range scale) and converted back
+to WGS84. **Payoff:** the per-vertex CPU stages (5, 3–4, 7) scale with the area
+retained after polygon truncation, so trimming off-axis valley shrinks the
+dominant setup cost proportionally; Overpass and DEM tile fetch remain driven by
+the axis-aligned bounding box of the rotated box (bbox-oriented sources), so those
+shrink less. The square path (`--center/--radius`) is byte-identical to pre-Epic-15
+(no golden rebake).
+
 **Edge-attribute contract (3c):** every edge in the pipeline graph carries:
 
 - `geometry` — `shapely.LineString`
@@ -312,6 +328,19 @@ Structured stage inputs/outputs (beyond simple tuples) use dataclasses declared 
 One SHA256 over canonical JSON of the above → the entry's `<cache-key-hash>`.
 
 **Area canonicalization for hashing:** center/radius mode rounds to (6-decimal lat/lon, 3-decimal radius_km) before hashing, so floating-point noise doesn't produce phantom misses.
+
+**Rotated-rectangle area mode (Epic 15, 2026-07-24).** `_canonicalize_area`
+dispatches on an area `mode`: alongside the existing `"center_radius"` there is a
+rotated-rectangle mode encoding center + half-extents + angle (rounded on the same
+principle). Two areas differing only in angle or an extent produce different cache
+keys. Adding the fields is a `manifest.json`/index **schema-version bump** — the
+`area` block gains extents + angle and pre-existing entries re-prepare once (same
+invalidation pattern as Stories 13.2/14.2; no compat shim). Containment (4e) tests
+the rotated polygon via `shapely.contains`, which is orientation-agnostic; the
+watch item is the **bbox-envelope shortcuts** (`area_bbox_wgs84`, `bounds.geojson`
+derivation, the report overlay) that treat `polygon.bounds` as "the region" — a
+rotated box's envelope is larger, so these are audited to avoid over-reporting
+coverage or drawing an oversized overlay.
 
 **OSM extract date:** recorded in `manifest.json` as the timestamp of setup's OSM download. Not part of the cache key (would invalidate every run — `osmnx` always fetches live). Freshness handled via `steeproute-setup --force-refresh` (rebuilds the entry regardless of key match).
 
@@ -367,6 +396,12 @@ Ctrl-C mid-write leaves `.tmp/` orphans; readers ignore entries without `manifes
 - **5c**: `numpy.random.Generator` seeded explicitly (no ambient state).
 - **5d**: Top-N + Jaccard distinctness is a separate `TopNTracker` component, orthogonal to the GRASP loop.
 - **5e**: Four termination conditions — iter-budget, time-budget, **stagnation**, KeyboardInterrupt. `convergence_status` takes three values in reports: `converged` / `budget-exhausted` / `interrupted`.
+
+**Box shape does not reach the solver (Epic 15 note, 2026-07-24).** The solver,
+validator, climb detection, and contraction are geometry-blind — the contracted
+graph *is* the search area (setup's polygon fetch already bounded it), so the
+rotated-rectangle generalization (Epic 15) touches none of Category 5. No
+`Area`/angle parameter enters `SolverParams` or `solver/`.
 
 **Parallelism (5a):** GRASP iterations are embarrassingly parallel in principle, but the PRD's 10-minute budget is a design target, not an SLO. Single-process v1 keeps code, tests, and interrupt handling simple; the iteration loop is shaped as `for seed_i in seeds: run_iteration(seed_i)`, trivially convertible to `ProcessPoolExecutor` later. If measurement shows insufficient iteration count in budget, parallelism becomes a follow-on story.
 

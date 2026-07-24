@@ -180,8 +180,8 @@ Not applicable — CLI-only project, no UI. UX Design spec deliberately omitted 
 
 | FR | Primary epic | Notes |
 |---|---|---|
-| FR1 (area via center/radius) | Epic 1 | Area flag surface + custom click type |
-| FR2 (area-cap rejection) | Epic 1 | Validation at CLI layer; `BadCLIArgError` path |
+| FR1 (area: rectangle, opt. rotated) | Epic 1 (square) / Epic 15 (rotated rect) | Area flag surface + custom click type; rotated model + `graph_from_polygon` in Epic 15 |
+| FR2 (area-cap rejection) | Epic 1 (initial) / Epic 15 (true area) | Validation at CLI layer; `BadCLIArgError` path; true rectangle area (not disk proxy) in Epic 15 |
 | FR3 (route-level slope floor θ) | Epic 1 (flag) / Epic 3 (initial) / Epic 4 (corrected to route-level) | Flag in `cli/_shared.py`; route-level `(D+ + D−)/length` floor enforced at solve + validate |
 | FR3b (climb-detection slope) | Epic 4 (flag) / Epic 3 (climb detection) | New `--min-climb-slope`; running-avg `d_plus/length` in `detect_climbs` |
 | FR4 (difficulty cap SAC) | Epic 1 (flag) / Epic 3 (enforcement) | Enforced per-edge in validator + pipeline filter |
@@ -190,7 +190,7 @@ Not applicable — CLI-only project, no UI. UX Design spec deliberately omitted 
 | FR7 (J_max pairwise overlap) | Epic 1 (flag) / Epic 3 (enforcement) | Enforced by TopNTracker |
 | FR8 (N result count) | Epic 1 (flag) / Epic 3 (enforcement) | TopNTracker capacity |
 | FR9 (untagged trails policy) | Epic 1 (flag) / Epic 2 (enforcement) | Enforced in pipeline stage 2 (trail filter) |
-| FR10 (vertical-effort objective + strict containment) | Epic 3 | GRASP + climb-graph construction |
+| FR10 (vertical-effort objective + strict containment) | Epic 3 / Epic 15 (rotated containment) | GRASP + climb-graph construction; `shapely.contains` on rotated polygon in Epic 15 |
 | FR11 (top-N distinctness) | Epic 3 | TopNTracker |
 | FR12 (graceful degradation) | Epic 7 | Run summary messaging + distinctness-tracker output |
 | FR13 (progress emission) | Epic 7 | `ProgressEvent` + throttled callback + CLI renderer |
@@ -511,3 +511,117 @@ measurement (not extrapolation)
 S5 custom parser, Q4 array-contract (schema v3), and per-stage multiprocess parallelization — routing
 whichever are justified through a follow-on correct-course, or recording a reasoned stop
 **And** no production code changes in this story
+
+## Epic 15: Rotated-Rectangle Search Areas
+
+Generalizes the search area from a centered square to a **rotated rectangle** so it can hug a
+diagonally-oriented range (Belledonne runs SW–NE) and keep off-axis **valley** out of the expensive,
+cache-once setup phase — where a north-aligned box would otherwise force full pre-processing of wedges
+the solver's `--theta` slope floor rejects anyway. Axis-aligned rectangle and square are the `angle=0` /
+equal-extents cases of one unified model — no separate rectangle increment. The solver, validator, climb
+detection, and contraction are **geometry-blind and untouched** (the graph *is* the box); the change
+lives in the `Area` model, setup fetch, cache key/schema, coverage, CLI flags, validation, and the
+render overlay. **Payoff is honest and scoped:** the dominant setup cost is the per-vertex CPU stages
+(Epic 14: elevation sampling/resampling/smoothing/metrics), which scale with the area *retained after
+truncation to the rotated polygon* and shrink proportionally; OSM (Overpass) and DEM tile fetch are
+bbox-oriented sources driven by the rotated box's axis-aligned bounding box, so they shrink less — large
+win on the CPU-bound majority, partial win on ingestion. **Backward-compat guardrail:** existing
+`--center/--radius` runs stay byte-identical (no golden rebake); the rotated shape gets its own
+regression golden (per the AGENTS.md solver/golden policy). Arbitrary free-form polygons remain out of
+scope. Inserted via correct-course 2026-07-24 (`sprint-change-proposal-2026-07-24-rotated-rectangle-areas.md`);
+no epic renumber.
+
+**FRs covered:** FR1 (generalized to rotated rectangle), FR2 (true-area cap), FR10 (rotated containment).
+Supports the whole-range ambition behind NFR1/NFR2 by trimming pre-processed area.
+
+### Story 15.1: Generalize the Area model and geometry helpers
+
+As a developer,
+I want the `Area` type and its polygon/bbox helpers to represent a rotated rectangle (square and
+axis-aligned rectangle as special cases),
+So that all downstream geometry derives from one model with no squareness assumption.
+
+**Acceptance Criteria:**
+
+**Given** an `Area` with center + half-extents + rotation angle,
+**When** its polygon is derived,
+**Then** corners are computed in a local `cos(lat)` km frame, rotated, and converted back to WGS84; and
+`angle=0` with equal extents reproduces today's square ring exactly.
+
+**Given** any `Area`,
+**When** the axis-aligned-envelope helper is called,
+**Then** it returns the true min/max of the (possibly rotated) polygon and is named/documented as an
+*envelope* (over-approximation), not "the region".
+
+**Given** the square shorthand (a single radius),
+**When** an `Area` is built from it,
+**Then** it maps to equal half-extents at `angle=0` and is indistinguishable from a v1 `Area` downstream.
+
+**Given** the geometry helpers,
+**When** unit-tested,
+**Then** rotation is verified against known corner coordinates and the degree-space-skew case is covered.
+
+### Story 15.2: Rotated-aware setup fetch, cache schema, and coverage
+
+As a user,
+I want setup to fetch and cache exactly the rotated rectangle and queries to resolve coverage against it,
+So that off-axis valley is never pre-processed and cached areas are keyed correctly.
+
+**Acceptance Criteria:**
+
+**Given** a rotated `Area`,
+**When** setup fetches OSM,
+**Then** it uses `osmnx.graph_from_polygon` over the rotated ring (reusing osmnx's existing
+`truncate_graph_polygon` path), and the cached graph contains only edges within the rotated rectangle.
+
+**Given** the cache key,
+**When** an `Area` is canonicalized,
+**Then** a new area **mode** encodes center + half-extents + angle (rounded, alongside the existing
+`center_radius` mode), and two areas differing only in angle or extent produce different keys.
+
+**Given** the manifest/index schema,
+**When** the new fields are added,
+**Then** the schema version is bumped and pre-existing entries re-prepare once (existing invalidation
+semantics; no compat shim).
+
+**Given** a query area,
+**When** coverage is checked,
+**Then** containment tests the rotated polygon via `shapely.contains`, the partial-coverage / "try a
+bigger area" messaging is corrected off the scalar-radius assumption, and every bbox-envelope shortcut
+(`area_bbox_wgs84` et al.) is audited so coverage does not over-report.
+
+**Given** an existing square entry prepared after the migration,
+**When** it is queried,
+**Then** results are unchanged from v1.
+
+### Story 15.3: CLI flag surface, validation, and render overlay
+
+As a user,
+I want CLI flags to specify a rotated rectangle (with radius still meaning a square) and the report
+overlay to draw the true box,
+So that the capability is usable and honestly visualized.
+
+**Acceptance Criteria:**
+
+**Given** the `steeproute-setup` and `steeproute` CLIs,
+**When** area flags are parsed,
+**Then** a rotated rectangle can be specified (width / height / angle) and `--radius` still produces a
+centered square; both CLIs accept the identical area surface (FR23).
+
+**Given** the area-cap check,
+**When** it validates,
+**Then** it uses the true rectangle area (`width × height`), rejecting oversize boxes with a descriptive
+`BadCLIArgError` (exit 2).
+
+**Given** a rendered report,
+**When** the search-area overlay draws,
+**Then** it draws the rotated rectangle, not an axis-aligned proxy.
+
+**Given** the regression suite,
+**When** it runs,
+**Then** existing square goldens pass untouched (no rebake) and at least one rotated-rectangle golden is
+added.
+
+**Given** the docs,
+**When** updated,
+**Then** the quality-demo params note and README area examples reflect the new flag surface.

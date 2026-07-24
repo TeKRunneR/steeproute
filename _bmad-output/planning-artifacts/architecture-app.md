@@ -358,6 +358,16 @@ App testable against the adapter's typed interface, not real subprocesses.
 > best-effort/offline-safe (failure → no label, never a blocked job) and its
 > result is stored as `area_label` on the job record at creation.
 
+> **Post-v1 note (App Epic 5, 2026-07-24).** Rotated-rectangle areas (CLI Epic 15)
+> touch two `cli_adapter` seams: seam 1 (**argv**) emits the new area flags
+> (width/height/angle; a square still emits `--radius`), and seam 2
+> (**`GET /regions`**) generalizes `RegionBounds` to carry a built region's true
+> (possibly rotated) polygon. Seam 3 (**`params_schema`**) is unaffected — area
+> fields are excluded from the introspected form because the map owns them. `AreaSpec`
+> (`app/models.py`) gains extents + angle. Watch item: any axis-aligned envelope
+> `GET /regions` still exposes must be documented as an over-approximation
+> (envelope-leak audit, mirrored from CLI Epic 15). Depends on CLI Epic 15.
+
 ### JSON & data-format conventions
 
 - **snake_case everywhere** — Python fields AND JSON on the wire. No camelCase

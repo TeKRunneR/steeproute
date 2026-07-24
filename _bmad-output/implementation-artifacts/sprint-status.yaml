@@ -28,7 +28,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-07-17  # app-4-3-recognizable-runs → done; app-epic-4 complete
+last_updated: 2026-07-24  # correct-course: added epic-15 (CLI) + app-epic-5 (rotated-rectangle areas)
 
 project: bmad-test
 project_key: NOKEY
@@ -182,3 +182,17 @@ development_status:
   app-4-1-map-selection-modes: done
   app-4-2-config-form-overhaul-flat-numbers-defaults: done
   app-4-3-recognizable-runs-town-label-and-params-view: done
+
+  # ---------------------------------------------------------------------------
+  # Rotated-rectangle search areas (correct-course 2026-07-24). CLI Epic 15
+  # (engine) lands first; App Epic 5 (picker) depends on it. See
+  # sprint-change-proposal-2026-07-24-rotated-rectangle-areas.md.
+  # ---------------------------------------------------------------------------
+  epic-15: backlog        # Rotated-Rectangle Search Areas (CLI engine)
+  15-1-generalize-area-model-and-geometry-helpers: backlog
+  15-2-rotated-setup-fetch-cache-schema-and-coverage: backlog
+  15-3-cli-flag-surface-validation-and-render-overlay: backlog
+
+  app-epic-5: backlog     # Rotated-Rectangle Map Selection (depends on epic-15)
+  app-5-1-rotated-areaspec-argv-and-regions-plumbing: backlog
+  app-5-2-map-picker-rotation-and-dimension-handles: backlog

@@ -481,8 +481,8 @@ These are load-bearing for portfolio credibility. A feature-lean v1 is defensibl
 
 ### Area Specification & Invocation
 
-- **FR1**: User can specify a search area via center point and radius.
-- **FR2**: System rejects search areas exceeding the configured area-size cap with a descriptive error.
+- **FR1**: User can specify a search area as a rectangle — a center point plus width and height — optionally rotated by a bearing angle so the box can align to a diagonally-oriented feature (e.g. a mountain range). A single radius remains a shorthand for a centered, axis-aligned square (the `angle = 0`, equal-extents case). Arbitrary (free-form) polygons are out of v1 scope. *(Generalized from center+radius via correct-course 2026-07-24 — Epic 15.)*
+- **FR2**: System rejects search areas exceeding the configured area-size cap with a descriptive error, using the rectangle's true area (`width × height`), not a radius-derived proxy.
 
 ### Route Search & Solver
 
@@ -494,7 +494,7 @@ These are load-bearing for portfolio credibility. A feature-lean v1 is defensibl
 - **FR7**: User can configure the pairwise segment-overlap ceiling for top-N distinctness.
 - **FR8**: User can configure the target result count.
 - **FR9**: User can configure the policy for untagged OSM trails (include or exclude).
-- **FR10**: System searches for routes maximizing total vertical effort (D+ + D−) subject to the configured constraints, with returned routes strictly contained within the specified search area (soft containment deferred to Phase 2).
+- **FR10**: System searches for routes maximizing total vertical effort (D+ + D−) subject to the configured constraints, with returned routes strictly contained within the specified search area — containment tested against the (possibly rotated) rectangle polygon (soft containment deferred to Phase 2).
 - **FR11**: System returns up to N distinct routes, where distinctness is defined by a pairwise segment-overlap ceiling measured on the undirected base-trail-segment identity (the same identity as the FR5 reuse limit — two routes differing only in the direction they walk a shared trail are not counted as distinct).
 - **FR12**: System gracefully returns fewer than N routes with a clear explanation when the distinctness constraint cannot be satisfied.
 

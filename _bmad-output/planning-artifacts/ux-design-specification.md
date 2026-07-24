@@ -20,6 +20,15 @@ scope_note: 'Lean pass for an N=1 thin CLI wrapper — screen inventory + key fl
 > a click-to-reveal query-params view. This decides the Cluster-D "run-card
 > fields" question previously left open in §4/§5.
 
+> **Post-v1 update (2026-07-24, App Epic 5).** S1's area-pick mode gains a second
+> dimension handle and a rotation handle so the search box can be a **rotated
+> rectangle** aligned to a diagonal range (correct-course
+> [sprint-change-proposal-2026-07-24-rotated-rectangle-areas.md](sprint-change-proposal-2026-07-24-rotated-rectangle-areas.md);
+> exposes CLI Epic 15). Selection and built-region overlays render as true
+> polygons (`L.polygon`) rather than axis-aligned rectangles; a single
+> radius/square stays expressible. Still a conventional Leaflet picker — no
+> wireframe warranted.
+
 > **Scope of this document.** steeproute's App is a thin web UI over two existing
 > CLIs (`setup` + `query`). Its design was settled in the
 > [brainstorming session](../brainstorming/brainstorming-session-2026-07-14-1437.md);

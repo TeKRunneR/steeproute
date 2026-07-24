@@ -97,3 +97,13 @@ defaults), 4.3 recognizable runs (town label + params view). See `epics-app.md`.
 * Almost all query parameters are actually always important, so the "advanced" section of the query parameter pane is useless. This pane should always open with all parameters.
 * On the runs screen, right now it's almost impossible to remember which runs were done where, as GPS coords just aren't explicit for a human user. I need something else: maybe a screenshot of the area, or a name of a town close to the center of the area, if that's easily to determine ==> this is for both setups and queries. For queries specifically, I want to be able to view all query parameters, maybe not at all times, but something I can click to show them at least.
 * In query parameters, long numbers (like 1M for iter budget) are difficult to parse. Something that separates thousands better would be good (avoiding commas, I'm French so for us commas can be confusing as they're commonly used as decimal separators). Also, not really a UX thing, but while I'm here: set the default max descent slope to 0.4, and have "Start at junction" checked by default.
+
+# Non-square search areas
+
+**Promoted 2026-07-24:** rotated-rectangle search areas pulled into **CLI Epic 15**
+(Rotated-Rectangle Search Areas) + **App Epic 5** (Rotated-Rectangle Map Selection)
+via correct-course (`sprint-change-proposal-2026-07-24-rotated-rectangle-areas.md`).
+Motivation: hug a diagonally-oriented range (Belledonne SW–NE) so off-axis valley
+stays out of the expensive setup phase. One unified model — axis-aligned rectangle
+and square are the `angle=0`/equal-extents cases. Arbitrary free-form polygons
+remain **out of scope** (per-query map-drawing cost not justified).

@@ -41,6 +41,10 @@ FR12: Flat config form — the query config form exposes ALL parameters at once 
 FR13: Recognizable runs — each run carries a human area label (a nearby town/place name reverse-geocoded from the center, stored on the job record), shown on its run-library card for both setup and query jobs; a query card additionally exposes its full stored parameter set on demand (click to reveal).
 FR14: Readable numbers — long numeric values (e.g. iter budget) render with space thousands separators (never commas — French decimal collision) in both the config form inputs and the run-library parameter display.
 
+_Post-v1 refinement (App Epic 5, correct-course 2026-07-24):_
+
+FR15: Rotated-rectangle map selection — the map picker can define and edit a rotated rectangle (center + width + height + rotation angle), pass it through `AreaSpec` → argv to setup/query jobs, and render built rotated regions as their true polygons. Depends on CLI Epic 15 (the engine). Arbitrary free-form polygons remain out of scope.
+
 ### NonFunctional Requirements
 
 NFR1: Concurrency = 1 — a single-worker serial queue is a hard constraint (the solver saturates all cores; cross-run thread-safety is unintended), not a simplification.
@@ -83,6 +87,10 @@ UX-DR1 (revised): S1 Map home gains three explicit selection modes (FR11); area-
 UX-DR2 (revised): S2 Config form drops the collapsible advanced section — all flags render in one always-visible list (FR12). Quality-demo defaults now include `max_descent_slope=0.4` and `start_at_junction` on.
 UX-DR4 (revised): S4 run cards lead with the town label (FR13) instead of raw coordinates as the primary identifier; coordinates remain as secondary detail. Query cards add a click-to-reveal parameter view (FR14 grouping applies). This resolves the Cluster-D "run-card fields" open question the UX spec left deferred.
 
+_Post-v1 revision (App Epic 5, correct-course 2026-07-24):_
+
+UX-DR1 (revised again): S1 area-pick mode gains a second dimension handle and a rotation handle so the selection can be a rotated rectangle (FR15); the selection and built-region overlays render as `L.polygon` true polygons rather than axis-aligned `L.rectangle`. A single radius/square remains expressible. Move-selection translates the rotated box rigidly; select-region snaps to a built region's exact rotated geometry.
+
 ### FR Coverage Map
 
 - FR1 (map + cache overlay) → Epic 1
@@ -99,6 +107,7 @@ UX-DR4 (revised): S4 run cards lead with the town label (FR13) instead of raw co
 - FR12 (flat config form) → Epic 4
 - FR13 (recognizable runs) → Epic 4
 - FR14 (readable numbers) → Epic 4
+- FR15 (rotated-rectangle map selection) → Epic 5
 
 _NFRs are cross-cutting: NFR1 concurrency=1 & NFR2 long-jobs land in Epic 1's worker + SSE; NFR3 single-user/no-auth, NFR4 CLI-honest progress, NFR5 thinness apply across all epics._
 _UX-DRs: UX-DR1/DR3/DR6 → Epic 1; UX-DR2/DR5 → Epic 2; UX-DR4 → Epic 3._
@@ -120,6 +129,10 @@ The job registry is rendered directly as one run library (running → queued →
 ### Epic 4: App UX refinements
 Post-v1 refinements from hands-on use of the finished app: switchable map selection modes (incl. click-to-query a built region), a flat all-flags config form with readable space-grouped numbers and corrected steep-route defaults, and human-recognizable runs (town label + a query-params view). Additive on the delivered App Epics 1–3; no rollback. (correct-course 2026-07-17)
 **FRs covered:** FR11, FR12, FR13, FR14
+
+### Epic 5: Rotated-Rectangle Map Selection
+Exposes CLI Epic 15's rotated-rectangle search areas in the map picker: a second dimension handle and a rotation handle on area-pick, move-selection and select-region generalized to rotated geometry, the new shape plumbed through `AreaSpec` → argv, and built regions rendered as their true (possibly rotated) polygons. Depends on CLI Epic 15 (the engine must accept the shape first). Additive on App Epics 1–4; no rollback. (correct-course 2026-07-24)
+**FRs covered:** FR15
 
 ## Epic 1: Pick and build a region from the map
 
@@ -487,3 +500,62 @@ today's coordinate display.
 **When** I click to reveal its parameters,
 **Then** the full stored `params` set is shown, with long numbers grouped via
 Story 4.2's format helper.
+
+## Epic 5: Rotated-Rectangle Map Selection
+
+Exposes CLI Epic 15's rotated-rectangle areas in the map picker. Depends on CLI
+Epic 15 — the CLI must accept the shape (new area flags) before the App can emit
+it. Additive on App Epics 1–4; no shipped behavior is rolled back. The change is
+two-seamed: (1) the `cli_adapter` argv seam + the `GET /regions` region seam
+learn the rotated shape (a `cli_adapter` change, in scope for that boundary); (2)
+the buildless frontend picker (`js/map-home.js`) gains dimension + rotation
+handles and renders true polygons. Watch item mirrored from CLI Epic 15: the
+**envelope-leak audit** applies App-side too — `RegionBounds` currently ships an
+axis-aligned bbox that over-reports a rotated region.
+
+### Story 5.1: Rotated AreaSpec, argv, and regions plumbing
+
+As a user,
+I want a rotated area chosen on the map to reach the CLI and built rotated regions
+to come back with their true shape,
+So that the App can drive CLI Epic 15 end-to-end.
+
+**Acceptance Criteria:**
+
+**Given** a rotated area from the picker,
+**When** a job is created,
+**Then** `AreaSpec` carries center + width + height + angle and `cli_adapter.argv`
+builds the CLI Epic 15 flags; a square still emits `--radius` for backward compat.
+
+**Given** `GET /regions`,
+**When** a built rotated region is returned,
+**Then** it carries its true polygon (`RegionBounds` generalized), and any
+axis-aligned envelope it also exposes is documented as an over-approximation
+(App-side envelope-leak audit).
+
+**Given** the argv and regions seams,
+**When** unit-tested,
+**Then** rotated and square areas round-trip correctly through `cli_adapter`.
+
+### Story 5.2: Map picker rotation and dimension handles
+
+As a user,
+I want to draw, move, and pick rotated rectangles on the map,
+So that I can align the search box to a diagonal range without leaving the app.
+
+**Acceptance Criteria:**
+
+**Given** area-pick mode,
+**When** I edit the selection,
+**Then** I can set two dimensions and a rotation angle; the box renders as an
+`L.polygon`; a centered square is still expressible.
+
+**Given** move-selection mode,
+**When** I drag the selection,
+**Then** the rotated box translates rigidly (shape and angle unchanged) and
+coverage re-resolves from the server on release.
+
+**Given** select-region mode,
+**When** I click a built (green) rotated region,
+**Then** the selection snaps to that region's exact rotated geometry (from
+`GET /regions`) and "Configure query" becomes enabled directly.
