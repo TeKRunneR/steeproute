@@ -35,7 +35,7 @@ anywhere in France. It is a personal project.
   Developed on a 32 GB laptop; if memory is tight, lower `--workers` or shrink the area —
   both cut peak.
 - **Platform.** Developed and tested on Windows. Linux is expected to work but is not
-  actively tested; macOS is not a v1 commitment.
+  actively tested.
 
 ## Quickstart
 
@@ -71,9 +71,9 @@ than the setup radius so the queried area sits fully inside the prepared one.
 | `--center` / `--radius` | area center `lat,lon` and radius in km | your area |
 | `--theta` | route-level average-slope floor every route must clear | `0.20` — this *is* the steepness bar; raise it for steeper routes, lower it to admit gentler ones |
 | `--difficulty-cap` | SAC hiking-scale ceiling for eligible trails | `T4` (the `T3` default filters out a lot of steep alpine terrain) |
-| `--start-at-junction` | require each route to start at a road/trail junction (a realistic trailhead) rather than mid-trail | off by default; turn it on for routes you'd actually set off on from a path |
+| `--start-at-junction` | require each route to start at a road/trail junction (a realistic trailhead) rather than mid-trail | off by default; turn it on for routes you'd actually set off on from a road |
 | `--max-descent-slope` | cap how steeply a route may *descend* (windowed, uphill-measured slope) while still allowing steep climbs | `0.4` keeps descents runnable instead of cliff-like; off by default |
-| `--iter-budget` / `--stagnation-iters` | GRASP search budget / stop after this many iterations with no improvement | `200000` / `10000` — GRASP needs a large budget to converge; it usually stops on stagnation well before the cap |
+| `--iter-budget` / `--stagnation-iters` | GRASP search budget / stop after this many iterations with no improvement | `1000000` / `200000` — GRASP needs a large budget to converge. Higher value means longer execution, but higher likelihood of convergence. The value required for convergence depends on area size and steep trail density. 1M iterations are usually enough to at least get close to convergence on a radius 20 area with fairly dense trails. |
 | `--elevation-deadband` | drop up/down wiggles smaller than N metres when summing D+/D− | `1` (removes elevation-model noise from the climb totals) |
 | `--n` / `--j-max` | how many routes to return / max segment overlap allowed between them (`0` = fully disjoint) | `3` / `0` |
 | `--seed` | fixes GRASP's randomness so a run is reproducible | any integer |
@@ -105,9 +105,9 @@ lists the exact commands to reproduce them.
 
 | Region | Map (route 1) | Elevation profile |
 |---|---|---|
-| **Chartreuse** — Chartreuse massif north of Grenoble<br>16 km radius · top of 3 routes · ~84 s query (`--workers 4`)<br>route 1: 12.0 km, +1787 m, 20% avg slope<br>[Open report ▸](docs/examples/chartreuse/route-1.html) | [![Chartreuse map](docs/examples/chartreuse/route-1-map.png)](docs/examples/chartreuse/route-1.html) | ![Chartreuse elevation profile](docs/examples/chartreuse/route-1-profile.png) |
-| **Vercors** — Vercors massif southwest of Grenoble<br>20 km radius · top of 3 routes · ~84 s query (`--workers 4`)<br>route 1: 12.2 km, +2058 m, 22% avg slope<br>[Open report ▸](docs/examples/vercors/route-1.html) | [![Vercors map](docs/examples/vercors/route-1-map.png)](docs/examples/vercors/route-1.html) | ![Vercors elevation profile](docs/examples/vercors/route-1-profile.png) |
-| **South Belledonne** — southern Belledonne massif<br>11 km radius · top of 3 routes · ~50 s query (`--workers 4`)<br>route 1: 18.0 km, +2454 m, 20% avg slope<br>[Open report ▸](docs/examples/south-belledonne/route-1.html) | [![South Belledonne map](docs/examples/south-belledonne/route-1-map.png)](docs/examples/south-belledonne/route-1.html) | ![South Belledonne elevation profile](docs/examples/south-belledonne/route-1-profile.png) |
+| **Chartreuse** — Chartreuse massif north of Grenoble<br>16 km radius · top of 3 routes · ~84 s query (`--workers 4`)<br>route 1: 12.0 km, +1787 m, -625m, 20% avg slope<br>[Open report ▸](docs/examples/chartreuse/route-1.html) | [![Chartreuse map](docs/examples/chartreuse/route-1-map.png)](docs/examples/chartreuse/route-1.html) | ![Chartreuse elevation profile](docs/examples/chartreuse/route-1-profile.png) |
+| **Vercors** — Vercors massif southwest of Grenoble<br>20 km radius · top of 3 routes · ~84 s query (`--workers 4`)<br>route 1: 12.2 km, +2058 m, -627m, 22% avg slope<br>[Open report ▸](docs/examples/vercors/route-1.html) | [![Vercors map](docs/examples/vercors/route-1-map.png)](docs/examples/vercors/route-1.html) | ![Vercors elevation profile](docs/examples/vercors/route-1-profile.png) |
+| **South Belledonne** — southern Belledonne massif<br>11 km radius · top of 3 routes · ~50 s query (`--workers 4`)<br>route 1: 18.0 km, +2454 m, -1217m, 20% avg slope<br>[Open report ▸](docs/examples/south-belledonne/route-1.html) | [![South Belledonne map](docs/examples/south-belledonne/route-1-map.png)](docs/examples/south-belledonne/route-1.html) | ![South Belledonne elevation profile](docs/examples/south-belledonne/route-1-profile.png) |
 
 > The reports are self-contained HTML — GitHub shows the source, so download and open
 > them locally (or clone the repo) for the interactive map and hover-linked profile.
