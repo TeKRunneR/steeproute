@@ -43,11 +43,24 @@ cargo-behind-corporate-proxy spike before any commitment).
 `research/steeproute-next-optimization-pass-handoff-2026-07-05.md` promoted to Epic 14 via
 correct-course 2026-07-06 (`sprint-change-proposal-2026-07-06-setup-solver-scaling.md`).
 
-**Deferred to post-probe correct-course (2026-07-06):** three deep levers from that same handoff are
+**Deferred to post-probe correct-course (2026-07-06):** three deep levers from that same handoff were
 intentionally NOT in Epic 14 — the custom Overpass-JSON→graph parser (S5-deep), the schema-v3
-numpy-array edge contract (Q4), and per-stage multiprocess parallelization (§7 step 6). Each is gated
-on the Epic 14 r50 probe (Story 14.6) supplying the residual costs that justify it; pickup routes
-through its own correct-course.
+numpy-array edge contract (Q4), and per-stage multiprocess parallelization (§7 step 6). Each was gated
+on the Epic 14 r50 probe (Story 14.6) supplying the residual costs that justify it.
+
+**Promoted / re-scoped 2026-07-24:** a fresh measured end-to-end review
+(`research/steeproute-performance-review-gpt-5-6-2026-07-24.md`, ref commit `4380970`, r20) resolved
+the parked Story 14.6 what-next decision. Its full findings — query orchestration (proven
+byte-identical 80→67 s), setup owned-data + smoothing/resampling fusion, an in-place osmnx
+largest-component/consume adapter, the geometry-optional schema-v3 cache (**this is deferred item Q4**,
+now promoted), solver static-context + pure-Python loop wins, and the shared-memory-array solver state
+(the deferred structural fix, `research/steeproute-shared-memory-array-solver-design-2026-07-08.md`,
+now promoted) — were pulled into **Epic 16 (Ownership-Oriented Performance Pass)** via correct-course
+(`sprint-change-proposal-2026-07-24-ownership-oriented-performance.md`). The review's Batch C
+in-place osmnx adapter is explicitly **not** the S5-deep custom parser. Still deferred and NOT in
+Epic 16 (this review does not cover them): the **S5-deep custom Overpass→graph parser** and
+**per-stage multiprocess pipeline parallelization** — each still routes through a future
+correct-course, now scoped from Epic 16's Story 16.7 residuals rather than 14.6.
 
 ## App
 Make a thin web UI over the two existing CLIs (setup + solver): pick a center

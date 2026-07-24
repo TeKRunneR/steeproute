@@ -28,7 +28,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-07-24  # correct-course: added epic-15 (CLI) + app-epic-5 (rotated-rectangle areas)
+last_updated: 2026-07-24  # correct-course: added epic-16 (ownership-oriented performance pass); earlier same-day: epic-15 (CLI) + app-epic-5 (rotated-rectangle areas)
 
 project: bmad-test
 project_key: NOKEY
@@ -196,3 +196,19 @@ development_status:
   app-epic-5: backlog     # Rotated-Rectangle Map Selection (depends on epic-15)
   app-5-1-rotated-areaspec-argv-and-regions-plumbing: backlog
   app-5-2-map-picker-rotation-and-dimension-handles: backlog
+
+  # ---------------------------------------------------------------------------
+  # Ownership-oriented performance pass (correct-course 2026-07-24, from
+  # research/steeproute-performance-review-gpt-5-6-2026-07-24.md). Independent of
+  # epic-15/app-epic-5 — sequence in any order. 16.1 is the proven byte-identical
+  # win; 16.6 is the design-only structural fix (POC-gated). See
+  # sprint-change-proposal-2026-07-24-ownership-oriented-performance.md.
+  # ---------------------------------------------------------------------------
+  epic-16: backlog        # Ownership-Oriented Performance Pass
+  16-1-query-orchestration-owned-filter-lean-contracted-graph-validation-context: backlog
+  16-2-setup-owned-data-cleanup-and-smoothing-resampling-fusion: backlog
+  16-3-geometry-optional-query-load-and-schema-v3-cache: backlog
+  16-4-osmnx-in-place-component-consume-ingestion-adapter: backlog
+  16-5-solver-static-context-reuse-and-pure-python-loop-cleanup: backlog
+  16-6-shared-memory-array-solver-state: backlog
+  16-7-r20-r50-re-measure-and-what-next-close-out: backlog

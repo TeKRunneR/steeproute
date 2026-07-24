@@ -217,8 +217,8 @@ Not applicable — CLI-only project, no UI. UX Design spec deliberately omitted 
 
 **NFR coverage:**
 
-- NFR1 (compute budget ≤10min design target): Epic 7 — time-budget termination, stagnation, progress reporting surfaces elapsed; Epic 11 makes the target measurable (benchmark baselines + per-stage timing); Epic 12 raises solver throughput against those baselines; Epic 13 attacks the query-side share that dominates large-area whole-execution wall-clock post-Epic-12; Epic 14 extends the target toward large areas (r50 / whole-range) — vectorizing setup CPU stages and adding multi-core GRASP
-- NFR2 (16 GB memory envelope): Epic 8 — validated during gallery generation; documented if notable
+- NFR1 (compute budget ≤10min design target): Epic 7 — time-budget termination, stagnation, progress reporting surfaces elapsed; Epic 11 makes the target measurable (benchmark baselines + per-stage timing); Epic 12 raises solver throughput against those baselines; Epic 13 attacks the query-side share that dominates large-area whole-execution wall-clock post-Epic-12; Epic 14 extends the target toward large areas (r50 / whole-range) — vectorizing setup CPU stages and adding multi-core GRASP; Epic 16 attacks the next tier — object-graph churn and repeated derivation of immutable state (owned query filter, lean contracted graph, setup owned-data reuse, in-place osmnx ingestion, shared solver state), with the strongest wins byte-identical
+- NFR2 (16 GB memory envelope): Epic 8 — validated during gallery generation; documented if notable; Epic 16 reduces query peak RSS (owned-graph reuse + lean contracted graph cut it 2.67→2.05 GB) and worker steady memory (shared solver state)
 - NFR3 (Ctrl-C preserves output + cache valid): Epic 7
 - NFR4 (seeded determinism, edge-set level): Epic 3
 - NFR5 (atomic cache writes): Epic 2
@@ -625,3 +625,215 @@ added.
 **Given** the docs,
 **When** updated,
 **Then** the quality-demo params note and README area examples reflect the new flag surface.
+
+## Epic 16: Ownership-Oriented Performance Pass
+
+This epic works the measured end-to-end review in
+`research/steeproute-performance-review-gpt-5-6-2026-07-24.md` (reference commit `4380970`, r20
+reference workload: center 45.260,5.788, 20 km half-side). Its thesis is **ownership**: the largest
+remaining wins are not more NumPy math but ceasing to copy/rebuild immutable graph state — don't copy
+a graph the caller has finished with, don't rebuild a graph merely to strip two attributes, don't
+re-derive graph-wide sets per route or per worker, don't reconstruct cache data no query consumer
+reads. It is also the resumption the parked Story 14.6 anticipated ("revisit via correct-course when
+resumed") — a fresh measured review that resolves what-next, anchored at r20 rather than the
+originally-imagined r50 probe. Per the 2026-07-24 correct-course decision the **full review is
+promoted**, including the two items previously gated to a post-probe correct-course that this review
+now supplies evidence for: the schema-v3 geometry-optional cache contract (deferred "Q4", Story 16.3)
+and the shared-memory-array solver state (the deferred structural fix,
+`research/steeproute-shared-memory-array-solver-design-2026-07-08.md`, Story 16.6). Two deferred
+levers remain **out of scope** — the custom Overpass→graph parser (S5-deep, which this review's
+Batch C explicitly is *not*) and per-stage multiprocess pipeline parallelization — neither is
+addressed by this review; their pickup still routes through a future correct-course.
+
+**Confidence is tiered and the stories say so.** Batch A (16.1) is **proven** — a real-CLI
+80.02 → 67.33 s (−15.9%) result with SHA-256-identical output across all 20 files and peak RSS
+2.67 → 2.05 GB (−23.4%). Batch B/C (16.2–16.4) have measured isolated components but their acceptance
+numbers must come from real-stage replays, not component extrapolation. The shared-array rewrite
+(16.6) is a **design, not a measured implementation**, and carries an explicit POC / bit-identity
+gate before it can become a default. Bit-identity is the default guardrail throughout;
+cache-content-changing stories batch their regeneration to pay one invalidation event; `--workers 1`
+behavior stays byte-identical and any golden change is a **single documented rebake, never silent**
+(AGENTS.md golden policy). Inserted via correct-course 2026-07-24
+(`sprint-change-proposal-2026-07-24-ownership-oriented-performance.md`); no epic renumber.
+
+**FRs covered:** none new — performance work on existing behavior. Supports NFR1 (whole-execution
+wall-clock; extends the ≤10-min design target toward r50) and NFR2 (query peak-RSS reduction);
+preserves NFR4 (seeded determinism; `--workers 1` default leaves the existing contract unchanged).
+
+### Story 16.1: Query orchestration batch — owned filter, lean contracted graph, one validation context
+
+As a user,
+I want the query to stop duplicating graph state it already owns — rebuilding the graph to filter it,
+rebuilding it again to strip two attributes, and rescanning it once per route to validate,
+So that whole-query wall-clock and peak memory drop with byte-identical output.
+
+**Acceptance Criteria:**
+
+**Given** the query-side `filter_trails` rebuilds a full graph from kept nodes/edges,
+`run_parallel_grasp` builds a second "lean" graph via `solver_graph_view` solely to drop `geometry` /
+`vertices_resampled`, and `_validate_edges` recomputes `non_exempt_base_segment_ids` (a full
+~327k-edge scan) once per returned route
+**When** (1a) the query filters the already-operationalized graph in place via an explicit consuming
+variant (public copying default preserved for tests/external callers), (1b) the contracted graph is
+made lean at construction — or stripped in the CLI immediately after — so `solver_graph_view` is
+skipped when the graph advertises the lean contract, and (1c) a single validation context (non-exempt
+IDs + base-segment map + per-route metrics) is built once in `validate` and passed to every route/set
+check, with `validate_route`'s standalone API preserved by building a context when none is supplied
+**Then** output is byte-identical to the pre-epic path on the exact r20 command and committed fixtures
+(SHA-256 over all HTML + JSON), the full suite including regression goldens passes untouched, and
+rendering/validation semantics are unchanged (renderer expands routes against
+`operational_graph` / `vertices_resampled`; validator reads only metrics/tags)
+**And** CLI-reported total, external process wall, and peak RSS are recorded before/after on r20
+(review anchors: ~80.0 → 67.3 s CLI, ~2.67 → 2.05 GB peak RSS — reproduce the shape, do not promise
+the exact number across machines)
+
+### Story 16.2: Setup owned-data cleanup + smoothing/resampling fusion (one content-hash batch)
+
+As a user,
+I want setup to stop copying graphs it is about to discard and stop rebuilding an intermediate graph
+between smoothing and resampling,
+So that setup CPU and peak memory drop, landed as one cache-invalidation cycle.
+
+**Acceptance Criteria:**
+
+**Given** elevation sampling copies the whole graph (~5.4 s @ r20) and extracts per-edge geometry via
+per-edge concatenation (~3.8 s vs ~1.5 s with the bulk Shapely coordinate API), smoothing builds a
+327k-edge intermediate graph that resampling immediately flattens again (~7.4 s / ~7.8 s of profiled
+rebuild), and `_graph_to_payload` copies the whole graph before popping geometry at cache write
+(~5.4 s)
+**When** a consuming/internal path is added to each (public `inplace=False`/copying default
+preserved): `sample_elevation` consumes the owned graph and uses one
+`shapely.get_coordinates(..., return_index=True)` call (retaining the current rasterio row/col logic
+and first-bad-edge error ordering); smoothing → resampling are fused so coordinates stay flat across
+both stages and the graph is built once (`_collect_linestrings` → smooth → resample →
+`_build_from_flat`, preserving current operation order); and cache write pops geometry from the owned
+graph — all co-landed as a **single** content-hash change with one fixture regen
+**Then** coordinates, sampled elevations, and edge metrics are bit-equal to the old paths on the
+`grenoble_small` fixture (verified before deleting old code), or where a compensated-`sum` site
+prevents it, one documented rebake batched with this story; the full suite including goldens passes;
+public API purity is preserved at the stage-function boundaries
+**And** per-stage benchmarks are added before the change and measured drops (elevation, smoothing,
+resampling, cache write) are recorded in the close-out from a **real setup replay**, not
+isolated-component extrapolation
+
+### Story 16.3: Geometry-optional query load and schema-v3 cache (promoted Q4)
+
+As a user,
+I want the query to stop reconstructing per-edge geometry it never reads and, where proven safe, the
+cache to stop storing post-stage-5 geometry at all,
+So that query load and cache size drop.
+
+**Acceptance Criteria:**
+
+**Given** the schema-v2 payload stores ~2.86 M geometry coordinates (~47 MB) inline and `read_entry`
+rebuilds ~327k `LineString`s on load (~0.9 s), yet query stages 6–9, contraction, solver, validator,
+and output all read `vertices_resampled` and metrics/tags — never the reconstructed `geometry`
+**When** (option 1) `read_entry` accepts `with_geometry=False` on the query path to skip
+reconstruction immediately, and (option 3, only after proving no supported query/render consumer reads
+post-stage-5 geometry) a schema v3 omits geometry from the query-consumed cache entirely — coordinated
+with 16.2 so the schema bump and fixture regen are **one** event if they land together
+**Then** the query-loaded graph is content-identical for every consumer that runs (same
+nodes/edges/attrs/`vertices_resampled`/metrics), the full suite including goldens passes, and setup
+still produces geometry where it is genuinely needed during preparation
+**And** measured `read_entry` time (and, for schema v3, on-disk entry size) drops on the r20 entry are
+recorded; architecture Category 4c (on-disk format) records the decision, and the reversal of Story
+13.2's reconstruction assumption is noted — the query does not need reconstructed geometry, so the
+*assumption*, not the earlier measurement, is what changed
+
+### Story 16.4: osmnx in-place component / consume ingestion adapter
+
+As a user,
+I want osmnx's largest-component and truncate/simplify steps to stop double-traversing and copying
+graphs that are owned intermediates,
+So that warm setup ingestion CPU drops with a bit-identical graph.
+
+**Acceptance Criteria:**
+
+**Given** osmnx 2.1.0's `largest_component` traverses the graph twice and copies the retained
+component (~33.6 s across two calls @ r20 warm), and `truncate_graph_polygon` / `simplify_graph` each
+begin with a full copy of what is, inside the `graph_from_point/polygon` pipeline, an owned temporary
+**When** a version-guarded ingestion adapter computes the largest weakly-connected component in one
+traversal and removes rejected nodes from the owned graph in place (and, where measured to help,
+consumes the truncation/simplification inputs) — scoped as a tightly version-pinned adapter around
+osmnx's lower-level calls, or upstreamed, **never** an unscoped permanent monkeypatch
+**Then** a Story-14.5-style exact old/new diff harness on the cached r20 Overpass response gates the
+change: node IDs, edge `(u,v,key)` IDs, relevant attrs, geometry coordinate sequences, and iteration
+order must all match; the real graph retains the same node/edge counts (131,793 / 327,911 in the POC);
+goldens pass untouched (no rebake expected — graph identity)
+**And** warm-ingestion wall-clock and peak RSS are recorded (review anchor: ~132 → 99 s warm
+`osm_load`); the osmnx version pin and the private-API risk are documented, and Category 4c is noted
+only if on-disk content changes
+
+### Story 16.5: Solver static-context reuse + pure-Python loop cleanup
+
+As a user,
+I want each worker / migration round to stop rebuilding immutable solver state and the hot loop to
+stop doing discardable work,
+So that solver startup and per-iteration cost drop with exactly equal solutions.
+
+**Acceptance Criteria:**
+
+**Given** every new `GraspSolver` rebuilds `base_segment_id_map`, `non_exempt_base_segment_ids`, and
+the sorted/junction node pool (adjacency is already cached across rounds), and the hot loop sums an
+objective `run` discards, allocates a Jaccard union set, and re-sorts held-route edge IDs on every
+`_worst_held`
+**When** a `SolverStaticContext` (node pool, segment map, non-exempt IDs, adjacency) is built once and
+reused across migration rounds within each worker (and the parent's segment map is reused for
+validation), and the five pure-Python loop changes land and are **benchmarked separately** so each
+earns its recorded gain: drop the discarded objective sum, exact `j_max==0` (`frozenset.isdisjoint`)
+and `j_max==1` fast paths, Jaccard union computed as `|a|+|b|-|∩|` without allocating a union set, and
+cached per-solution sort keys
+**Then** solutions are exactly equal (`list[Solution]` equality) to the pre-change path across all
+quality-gate seeds and the real fixture — not merely equal objective totals; the canonical
+`_route_slope_ok(prefix)` gate is **retained** (Python 3.13 `sum` uses compensated summation, so the
+manual cumulative arrays are not generally bit-identical — do not remove the gate on the strength of
+Story 12.2's prose)
+**And** single-process 100k-iter throughput is recorded (review anchor: ~13.58 → 11.43 s, −15.8%) and
+the four-worker end-to-end effect is measured at close-out
+
+### Story 16.6: Shared-memory array solver state (structural, POC-gated)
+
+As a developer,
+I want one canonical solver state built in the parent and read directly by workers,
+So that O(workers) adjacency / object-graph construction and O(workers × graph) steady memory stop
+scaling with worker count.
+
+**Acceptance Criteria:**
+
+**Given** each of N workers independently unpickles its own graph and builds identical adjacency
+(cProfile attributes adjacency construction on par with useful search at modest budgets), prior
+measurement shows throughput flattening and OOM at higher worker counts on the object graph, and this
+story starts from a **design** (`research/steeproute-shared-memory-array-solver-design-2026-07-08.md`),
+not a measured implementation
+**When** the design is implemented in staged order: first place the ~73 MB pickled lean-graph blob in
+shared memory, passing only a descriptor to worker initializers (avoids copying the same bytes through
+N spawn pipes); then build one canonical CSR-style solver state in the parent that workers read
+directly
+**Then** the array path is proven **bit-identical** to the current object-worker path before it
+becomes a default: `--workers 1` stays exactly today's behavior, and for N>1 the array implementation
+is compared against the current worker implementation over all quality-gate seeds and the real fixture
+(full solution comparison, not final-objective totals); goldens and NFR4 untouched
+**And** worker startup (spawn + state transfer) and peak RSS vs the object path are measured and
+recorded; architecture Category 5a is updated; if r50 is no longer a target when this is picked up,
+the story records that and stops after the measured shared-blob step
+
+### Story 16.7: r20/r50 re-measure and what-next close-out
+
+As a developer,
+I want a consolidated before/after across setup + query and a fresh phase split,
+So that the epic's end-to-end effect is recorded from measurement and any residual deep work is scoped
+from evidence.
+
+**Acceptance Criteria:**
+
+**Given** Stories 16.1–16.6 have landed with per-story / per-stage benchmarks
+**When** I capture a consolidated real r20 setup + query trace (stage lines, CLI-reported and external
+process wall, peak RSS) against the review's r20 anchors (setup 299.28 s; query 80.02 s CLI /
+90.82 s external / 2.67 GB peak RSS) and, if r50 is still a target, one real r50 setup + query run
+**Then** a findings update in `_bmad-output/planning-artifacts/research/` records the new phase splits
+and cumulative effect, honestly separating demonstrated combined wins (query batch −12.69 s CLI; warm
+ingestion −32.85 s) from components not yet proven as combined stage results
+**And** the document closes with an explicit, evidence-based recommendation on the still-deferred deep
+levers — the custom Overpass parser (S5-deep) and per-stage multiprocess pipeline parallelization —
+routing whichever are justified through a follow-on correct-course, or recording a reasoned stop
+**And** no production code changes in this story
