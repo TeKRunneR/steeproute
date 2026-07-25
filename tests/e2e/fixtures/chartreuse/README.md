@@ -35,3 +35,12 @@ original v1 raw-graph pickle — graph content unchanged), so it is still sensit
 networkx/Python upgrades — the regression test surfaces any incompatibility. Any golden
 change must be committed with an explicit rationale (see the README "Development notes"
 section).
+
+**Manifest migrated to schema v3 in place (Story 15.2, 2026-07-25.)** The rotated-rectangle
+`area` block bumped `manifest.json`'s `schema_version` 2 → 3, and `Manifest.from_dict`
+rejects any non-current version — so without this the pinned golden would fail at exit 2.
+Because this cache cannot be rebuilt offline (and a live rebuild would fetch different
+OSM/DEM data and force a golden rebake), only `schema_version` was edited: a square's
+`area` block is byte-identical across v2 and v3, and `graph.pkl` was not touched. Same
+in-place-conversion approach Story 13.2 used for the v1 → v2 payload change. Verified: the
+golden passes unchanged, **no rebake**.

@@ -280,14 +280,28 @@ def _assert_non_empty(
     Reached when OSM responded successfully but the area contained no trail
     edges under the current `untagged_policy`. Without this guard, downstream
     stages divide by zero (stage 7's `avg_gradient`) with no edge context.
+
+    The area is described by its actual shape (Story 15.2 envelope audit) — a
+    rotated box reports its extents and bearing rather than the inert
+    `radius_km=0`, which would read as a nonsense empty area. A square reports
+    `radius_km=<half-side>` exactly as before.
     """
     if graph.number_of_edges() == 0:
+        half_width_km, half_height_km = area.half_extents_km
+        shape = (
+            f"radius_km={half_width_km:g}"
+            if area.is_square
+            else (
+                f"half_extents_km=({half_width_km:g}, {half_height_km:g}), "
+                f"angle_deg={area.angle_deg:g}"
+            )
+        )
         raise PipelineContractError(
             f"Pipeline produced zero edges for area "
-            f"(center={area.center}, radius_km={area.radius_km:g}) under "
+            f"(center={area.center}, {shape}) under "
             f"untagged_policy={untagged_policy!r}.",
             detail=(
-                "Widen --radius, switch --untagged-trails (include/exclude), "
+                "Widen the search area, switch --untagged-trails (include/exclude), "
                 "or pick an area with more recorded trails."
             ),
         )

@@ -118,6 +118,13 @@ def validate_area_size(radius_km: float, area_cap_km2: float) -> None:
     Used by cli/query.py only; cli/setup.py has no --area-cap flag (per Architecture
     §FR mapping; setup is "prepare what you'll later query", cap enforcement is
     sufficient at query time).
+
+    **Envelope-leak audit (Story 15.2), deferred to Story 15.3 which owns the area
+    flag surface.** The `π·r²` disk figure is a proxy, not the box's real footprint;
+    FR2 as revised calls for the **true** rectangle area (`width × height`, i.e.
+    `cache._area_km2`). Takes a scalar radius rather than an `Area`, so it cannot
+    see a rotated box at all — safe only because no CLI path constructs one until
+    15.3.
     """
     area_km2 = math.pi * radius_km * radius_km
     if area_km2 > area_cap_km2:

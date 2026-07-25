@@ -282,13 +282,30 @@ def _padded_bbox(area: Area) -> tuple[float, float, float, float]:  # pyright: i
 
     Retained as the canonical area→bbox derivation for the offline/live DEM tests
     (`test_dem_download` / `test_dem_live`) that fetch a raster for a nominal area.
-    The production setup path sizes the DEM from `graph_dem_bounds` instead.
+    The production setup path sizes the DEM from `graph_dem_bounds` instead — which
+    reads the *post-truncation* graph geometry, so a rotated area's DEM already
+    shrinks to the box's real footprint with no change needed here.
+
+    Sizes off the effective half-extents, not `radius_km` (Story 15.2 envelope
+    audit): a rotated area's `radius_km` is an inert `0.0`, which would have made
+    this return a padding-only box. For a rotated box the two axes get *different*
+    half-extents — the true axis-aligned envelope is
+    `hw·|cos θ| + hh·|sin θ|` east/west and `hw·|sin θ| + hh·|cos θ|`
+    north/south (the per-axis maxima of `cache._area_to_polygon`'s rotated
+    corners). `max(hw, hh)` would **not** do: at hw=8, hh=3, θ=10° the real
+    east/west half-extent is ~8.40 km, so a uniform 8 km would clip the box the
+    DEM is supposed to cover. At `θ=0` both reduce to their own half-extent, so a
+    square is byte-identical to the pre-Epic-15 derivation.
     """
     lat, lon = area.center
-    half_side_m = area.radius_km * 1000.0 + _PADDING_M
-    half_lat_deg = half_side_m / _M_PER_DEG_LAT
+    half_width_km, half_height_km = area.half_extents_km
+    angle_rad = math.radians(area.angle_deg)
+    cos_a, sin_a = abs(math.cos(angle_rad)), abs(math.sin(angle_rad))
+    half_east_m = (half_width_km * cos_a + half_height_km * sin_a) * 1000.0 + _PADDING_M
+    half_north_m = (half_width_km * sin_a + half_height_km * cos_a) * 1000.0 + _PADDING_M
+    half_lat_deg = half_north_m / _M_PER_DEG_LAT
     m_per_deg_lon = _M_PER_DEG_LAT * math.cos(math.radians(lat))
-    half_lon_deg = half_side_m / m_per_deg_lon
+    half_lon_deg = half_east_m / m_per_deg_lon
     return (lon - half_lon_deg, lat - half_lat_deg, lon + half_lon_deg, lat + half_lat_deg)
 
 

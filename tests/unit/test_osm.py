@@ -9,9 +9,11 @@ import pathlib
 import networkx as nx
 import osmnx
 import pytest
+import requests
 import shapely
 
-from steeproute.errors import BadCLIArgError
+from steeproute.cache import area_polygon
+from steeproute.errors import BadCLIArgError, DataSourceUnavailableError
 from steeproute.models import Area
 from steeproute.pipeline.osm import (
     MINOR_ROAD_HIGHWAY_TAGS,
@@ -435,6 +437,165 @@ def test_osm_load_rejects_non_finite_center(bad_center: tuple[float, float]) -> 
     area = Area(center=bad_center, radius_km=2.0)
     with pytest.raises(BadCLIArgError, match="--center coordinates must be finite"):
         _ = osm_load(area)
+
+
+@pytest.mark.parametrize("bad_extent", [0.0, -1.0, float("nan"), float("inf")])
+def test_osm_load_rejects_bad_rotated_extents(bad_extent: float) -> None:
+    """Story 15.2: the fetch precondition guards the *effective* extents, not `radius_km`.
+
+    A rotated area carries an inert `radius_km=0.0`, so a `radius_km`-only guard
+    would both reject every valid rotated area and wave through a zero/NaN extent.
+    """
+    area = Area(
+        center=(45.119, 5.873),
+        radius_km=0.0,
+        half_width_km=bad_extent,
+        half_height_km=3.0,
+        angle_deg=45.0,
+    )
+    with pytest.raises(BadCLIArgError, match="--width"):
+        _ = osm_load(area)
+
+
+@pytest.mark.parametrize("bad_radius", [0.0, -1.0, float("nan")])
+def test_osm_load_names_radius_for_a_rotated_radius_shorthand_area(bad_radius: float) -> None:
+    """The bearing must not change which flag a size error is reported against.
+
+    A rotated *square* is a legitimate `--radius --angle` combination (no extents
+    supplied), so a bad radius there must still say `--radius` — gating the
+    shorthand branch on `angle_deg == 0.0` would have blamed `--width` for a flag
+    the user never typed.
+    """
+    area = Area(center=(45.119, 5.873), radius_km=bad_radius, angle_deg=30.0)
+    with pytest.raises(BadCLIArgError, match="--radius"):
+        _ = osm_load(area)
+
+
+@pytest.mark.parametrize("bad_angle", [float("nan"), float("inf"), float("-inf")])
+def test_osm_load_rejects_non_finite_angle_for_radius_shorthand(bad_angle: float) -> None:
+    """The angle is validated for every shape, not only when extents were supplied."""
+    area = Area(center=(45.119, 5.873), radius_km=2.0, angle_deg=bad_angle)
+    with pytest.raises(BadCLIArgError, match="--angle must be finite"):
+        _ = osm_load(area)
+
+
+@pytest.mark.parametrize("bad_angle", [float("nan"), float("inf"), float("-inf")])
+def test_osm_load_rejects_non_finite_angle(bad_angle: float) -> None:
+    """A non-finite bearing produces NaN corner coordinates → shapely garbage."""
+    area = Area(
+        center=(45.119, 5.873),
+        radius_km=0.0,
+        half_width_km=2.0,
+        half_height_km=3.0,
+        angle_deg=bad_angle,
+    )
+    with pytest.raises(BadCLIArgError, match="--angle must be finite"):
+        _ = osm_load(area)
+
+
+def _stub_osmnx_fetches(
+    monkeypatch: pytest.MonkeyPatch,
+    point_calls: list[dict[str, object]],
+    polygon_calls: list[shapely.Polygon],
+) -> None:
+    """Stub both osmnx fetch entry points, recording which one `osm_load` chose."""
+    monkeypatch.setattr("truststore.inject_into_ssl", lambda: None)
+
+    def _fake_graph_from_point(**kwargs: object) -> nx.MultiDiGraph:
+        point_calls.append(kwargs)
+        return nx.MultiDiGraph()
+
+    def _fake_graph_from_polygon(
+        polygon: shapely.Polygon, **_kwargs: object
+    ) -> nx.MultiDiGraph:
+        polygon_calls.append(polygon)
+        return nx.MultiDiGraph()
+
+    monkeypatch.setattr("osmnx.graph_from_point", _fake_graph_from_point)
+    monkeypatch.setattr("osmnx.graph_from_polygon", _fake_graph_from_polygon)
+
+
+def test_osm_load_square_area_still_fetches_via_graph_from_point(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Story 15.2 backward-compat guardrail: the square path is byte-identical.
+
+    `graph_from_point(dist_type="bbox")` derives its bbox with osmnx's own
+    `EARTH_RADIUS_M = 6_371_009` (~1/111.195 deg/km), whereas `_area_to_polygon`
+    uses `1/111`. Substituting our polygon here would widen the fetch by ~0.18%
+    and could admit or drop boundary edges — a silent golden rebake. So a square
+    area must keep reaching `graph_from_point`, never `graph_from_polygon`.
+    """
+    point_calls: list[dict[str, object]] = []
+    polygon_calls: list[shapely.Polygon] = []
+    _stub_osmnx_fetches(monkeypatch, point_calls, polygon_calls)
+
+    _ = osm_load(Area(center=(45.260, 5.788), radius_km=2.0))
+
+    assert polygon_calls == []
+    assert len(point_calls) == 1
+    assert point_calls[0]["center_point"] == (45.260, 5.788)
+    assert point_calls[0]["dist"] == 2000.0
+    assert point_calls[0]["dist_type"] == "bbox"
+
+
+@pytest.mark.parametrize(
+    "half_width_km,half_height_km,angle_deg",
+    [
+        (4.0, 2.0, 0.0),  # axis-aligned rectangle — non-square is enough to switch paths
+        (4.0, 2.0, 45.0),  # rotated rectangle
+        (2.0, 2.0, 30.0),  # rotated square (a diamond — genuinely not the v1 shape)
+    ],
+)
+def test_osm_load_non_square_area_fetches_via_graph_from_polygon(
+    monkeypatch: pytest.MonkeyPatch,
+    half_width_km: float,
+    half_height_km: float,
+    angle_deg: float,
+) -> None:
+    """AC #1: a non-square area fetches over the true ring so off-axis valley is excluded."""
+    point_calls: list[dict[str, object]] = []
+    polygon_calls: list[shapely.Polygon] = []
+    _stub_osmnx_fetches(monkeypatch, point_calls, polygon_calls)
+    area = Area(
+        center=(45.260, 5.788),
+        radius_km=0.0,
+        half_width_km=half_width_km,
+        half_height_km=half_height_km,
+        angle_deg=angle_deg,
+    )
+
+    _ = osm_load(area)
+
+    assert point_calls == []
+    assert len(polygon_calls) == 1
+    # The fetched ring is the *shared* area geometry — not a second derivation
+    # that could skew away from coverage / the bounds sidecar.
+    assert polygon_calls[0].equals(area_polygon(area))
+
+
+def test_osm_load_wraps_polygon_fetch_failure_as_source_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC #1: the rotated branch sits inside the same DataSourceUnavailableError wrap."""
+    monkeypatch.setattr("truststore.inject_into_ssl", lambda: None)
+
+    def _boom(_polygon: object, **_kwargs: object) -> nx.MultiDiGraph:
+        raise requests.exceptions.ConnectionError("overpass down")
+
+    monkeypatch.setattr("osmnx.graph_from_polygon", _boom)
+    area = Area(
+        center=(45.260, 5.788),
+        radius_km=0.0,
+        half_width_km=4.0,
+        half_height_km=2.0,
+        angle_deg=30.0,
+    )
+
+    with pytest.raises(DataSourceUnavailableError) as exc_info:
+        _ = osm_load(area)
+    assert exc_info.value.detail is not None
+    assert "graph_from_polygon" in exc_info.value.detail
 
 
 def test_osm_load_injects_truststore_before_fetch(

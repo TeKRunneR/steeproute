@@ -8,7 +8,7 @@
 (§Cat 4d). `write_entry` / `read_entry` / `rebuild_index` (Story 2.7) implement the `.tmp/`
 → `os.replace()` atomic pattern that guarantees a Ctrl-C mid-write cannot surface a partial
 entry. `check_coverage` (Story 2.10) is the FR24 query-side surface — strict `shapely.contains`
-against `index.json` entries with smallest-radius tiebreak; it opportunistically rebuilds the
+against `index.json` entries, preferring the smallest true footprint; it opportunistically rebuilds the
 index when a prior `write_entry` was interrupted between manifest commit and index rebuild
 (closes Story 2.7 D1). The package is the sole reader/writer of the cache directory
 (§Boundaries — Cache boundary), so all serialization concerns live here too. All JSON writes
@@ -26,7 +26,7 @@ import pathlib
 import pickle
 import shutil
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeIs
 
 import networkx as nx
 import numpy as np
@@ -46,12 +46,20 @@ _CACHE_KEY_HEX_LEN: int = 16
 # Decimal places used to round Area fields *before* hashing. Lat/lon at 6
 # decimals is ~11 cm at the equator — two orders of magnitude finer than OSM
 # tagging precision but coarse enough to absorb float-print noise. Radius_km
-# at 3 decimals = 1 m, well below the user-facing CLI granularity.
+# at 3 decimals = 1 m, well below the user-facing CLI granularity. The
+# half-extents round at the same precision (same unit, same reasoning); the
+# bearing at 3 decimals is ~0.02 m of corner displacement over a 10 km extent.
 _AREA_LAT_LON_DECIMALS: int = 6
 _AREA_RADIUS_KM_DECIMALS: int = 3
+_AREA_ANGLE_DEG_DECIMALS: int = 3
 
-# Sole Area mode in v1. A future polygon or named-region mode would dispatch here.
+# Area modes (Architecture §Cat 4b). `center_radius` is the v1 centered-square
+# shorthand and stays the wire shape for every square area — its `area` block is
+# byte-identical to pre-Epic-15, so square cache keys never moved.
+# `center_extents_angle` (Story 15.2) carries the generalized rotated rectangle.
+# A future named-region mode would dispatch the same way.
 _AREA_MODE_LITERAL: str = "center_radius"
+_AREA_MODE_ROTATED: str = "center_extents_angle"
 
 # Files whose byte content flows into the pipeline content hash. Architecture
 # §Cat 4b: changes here effectively invalidate all cached entries (the key
@@ -91,19 +99,28 @@ _OLD_DIR_SUFFIX: str = ".old"
 
 # `manifest.json` and `index.json` versions advance independently. Manifest v1
 # was the initial released schema (raw pickled graph); v2 switched `graph.pkl`
-# to the ragged-array payload (Story 13.2) — the manifest version is the sole
-# format signal, since `cache.py` is deliberately excluded from the pipeline
-# content hash and a format change must not shift cache keys. Bumping is a
-# coordinated change across both CLIs per Architecture
-# §Versioned-contract-surfaces; v1 entries re-prepare once via the existing
-# recovery paths (no compat shim).
-_MANIFEST_SCHEMA_VERSION: int = 2
+# to the ragged-array payload (Story 13.2); v3 generalized the `area` block to
+# the rotated rectangle (Story 15.2) — the manifest version is the sole format
+# signal, since `cache.py` is deliberately excluded from the pipeline content
+# hash and a format change must not shift cache keys. Bumping is a coordinated
+# change across both CLIs per Architecture §Versioned-contract-surfaces; older
+# entries re-prepare once via the existing recovery paths (no compat shim).
+#
+# `index.json` deliberately stays at v1 across the v3 manifest bump: it is
+# *derived* state (`rebuild_index` regenerates it from the manifests), a rotated
+# row is additive, and every pre-Story-15.2 row is a square that `_area_from_wire`
+# still reads correctly. Bumping it would only force a rebuild-and-rewrite.
+_MANIFEST_SCHEMA_VERSION: int = 3
 _INDEX_SCHEMA_VERSION: int = 1
 
 # Marker key + version stamped into the `graph.pkl` payload dict so a
-# hand-assembled or half-converted entry (v2 manifest over an old-format
+# hand-assembled or half-converted entry (a current manifest over an old-format
 # pickle) surfaces as `CacheCorruptedError` instead of leaking a raw graph.
-# Advances with `_MANIFEST_SCHEMA_VERSION` — the two describe one format.
+# Tracks the *graph payload* format only. It moved with the manifest version at
+# v2 because that bump WAS the payload change; the v3 manifest bump is confined
+# to the `area` block, so this deliberately stays at 2 — advancing it would
+# invalidate every on-disk pickle (and the four committed regression fixtures)
+# for a format that did not change.
 _GRAPH_PAYLOAD_MARKER: str = "steeproute_graph_payload"
 _GRAPH_PAYLOAD_VERSION: int = 2
 
@@ -152,17 +169,123 @@ def compute_cache_key(
     return sha256_canonical(canonical)[:_CACHE_KEY_HEX_LEN]
 
 
+def _area_dict(area: Area, *, rounded: bool) -> dict[str, object]:
+    """Build the `area` mapping for `area`, optionally rounded for hashing.
+
+    **One** shape dispatch and **one** field-name list serving both wire uses, so
+    the cache-key input and the on-disk block can never drift apart on which
+    fields a mode carries:
+
+    - `rounded=True` (`_canonicalize_area`) stabilizes the *hash* against
+      float-print noise.
+    - `rounded=False` (`_area_wire_dict`) records what was actually prepared.
+
+    A square emits the v1 `center_radius` block **byte-for-byte** (so existing
+    square cache keys and manifests are unchanged); any other rectangle emits
+    `center_extents_angle`, so two areas differing only in bearing or in one
+    extent land on different keys.
+
+    The square branch reads the *effective* half-extent, not `radius_km` — a
+    square spelled as equal explicit extents carries an inert `radius_km=0.0`,
+    and keying off that would collapse every such area onto one bogus entry.
+    """
+
+    def value(raw: float, decimals: int) -> float:
+        return round(float(raw), decimals) if rounded else float(raw)
+
+    lat, lon = area.center
+    half_width_km, half_height_km = area.half_extents_km
+    center = [value(lat, _AREA_LAT_LON_DECIMALS), value(lon, _AREA_LAT_LON_DECIMALS)]
+    if area.is_square:
+        return {
+            "mode": _AREA_MODE_LITERAL,
+            "center": center,
+            "radius_km": value(half_width_km, _AREA_RADIUS_KM_DECIMALS),
+        }
+    return {
+        "mode": _AREA_MODE_ROTATED,
+        "center": center,
+        "half_width_km": value(half_width_km, _AREA_RADIUS_KM_DECIMALS),
+        "half_height_km": value(half_height_km, _AREA_RADIUS_KM_DECIMALS),
+        "angle_deg": value(area.angle_deg, _AREA_ANGLE_DEG_DECIMALS),
+    }
+
+
 def _canonicalize_area(area: Area) -> dict[str, object]:
     """Round Area fields to the precisions encoded in the cache key."""
-    lat, lon = area.center
-    return {
-        "mode": _AREA_MODE_LITERAL,
-        "center": [
-            round(float(lat), _AREA_LAT_LON_DECIMALS),
-            round(float(lon), _AREA_LAT_LON_DECIMALS),
-        ],
-        "radius_km": round(float(area.radius_km), _AREA_RADIUS_KM_DECIMALS),
-    }
+    return _area_dict(area, rounded=True)
+
+
+def _area_wire_dict(area: Area) -> dict[str, object]:
+    """Render `area` as the on-disk `area` block for `manifest.json` / `index.json`.
+
+    Shared by `Manifest.to_dict` and `rebuild_index` so the two files can never
+    disagree about an area's shape.
+    """
+    return _area_dict(area, rounded=False)
+
+
+def _area_from_wire(payload: object) -> Area | None:
+    """Parse an on-disk `area` block back into an `Area`, or `None` if malformed.
+
+    Inverse of `_area_wire_dict`, shared by `Manifest.from_dict` (which turns
+    `None` into `CacheCorruptedError`) and `_read_indexed_entries` (which turns it
+    into a "rebuild me" signal). Structural validation only — value-range checks
+    (finiteness, positivity) are the caller's, because the two callers
+    deliberately differ in strictness there.
+
+    A missing `mode` is read as `center_radius`: `index.json` is derived state
+    whose pre-Story-15.2 rows are all squares, so an un-rebuilt index stays
+    readable instead of forcing a spurious rebuild.
+    """
+    if not isinstance(payload, dict):
+        return None
+    center = payload.get("center")
+    if not isinstance(center, list) or len(center) != 2:
+        return None
+    try:
+        lat, lon = float(center[0]), float(center[1])  # pyright: ignore[reportAny]
+    except (TypeError, ValueError):
+        return None
+    mode = payload.get("mode", _AREA_MODE_LITERAL)
+    if mode == _AREA_MODE_LITERAL:
+        radius_km = payload.get("radius_km")
+        if not _is_real_number(radius_km):
+            return None
+        return Area(center=(lat, lon), radius_km=float(radius_km))
+    if mode != _AREA_MODE_ROTATED:
+        return None
+    half_width_km = payload.get("half_width_km")
+    half_height_km = payload.get("half_height_km")
+    angle_deg = payload.get("angle_deg")
+    if not (
+        _is_real_number(half_width_km)
+        and _is_real_number(half_height_km)
+        and _is_real_number(angle_deg)
+    ):
+        return None
+    return Area(
+        center=(lat, lon),
+        # Inert for a rotated area — the extents drive every derivation. Kept at
+        # 0.0 rather than reconstructed so nothing downstream can mistake it for
+        # a meaningful half-side.
+        radius_km=0.0,
+        half_width_km=float(half_width_km),
+        half_height_km=float(half_height_km),
+        angle_deg=float(angle_deg),
+    )
+
+
+def _is_real_number(value: object) -> TypeIs[float]:
+    """True iff `value` is an `int`/`float` and not a `bool`.
+
+    `isinstance(True, int)` is True in Python (bool subclasses int), which would
+    otherwise let `"radius_km": true` coerce silently to `1.0`.
+
+    Typed `TypeIs` rather than `bool` so a caller's early-return guard actually
+    narrows the JSON-decoded `Any` for the type checker.
+    """
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def compute_pipeline_content_hash() -> str:
@@ -212,14 +335,9 @@ class Manifest:
 
     def to_dict(self) -> dict[str, object]:
         """Render the manifest as the JSON-ready dict for atomic writing."""
-        lat, lon = self.area.center
         return {
             "schema_version": self.schema_version,
-            "area": {
-                "mode": _AREA_MODE_LITERAL,
-                "center": [float(lat), float(lon)],
-                "radius_km": float(self.area.radius_km),
-            },
+            "area": _area_wire_dict(self.area),
             "untagged_policy": self.untagged_policy,
             "dem_version": self.dem_version,
             "pipeline_content_hash": self.pipeline_content_hash,
@@ -256,30 +374,27 @@ class Manifest:
                 user_message="Cache manifest is missing or malformed `area` field.",
                 detail=f"Got area={area_payload!r}.",
             )
+        # Non-numeric coordinates get their own diagnostic — a manifest with
+        # `"center": ["forty-five", "six"]` is a recognizably different failure
+        # from a structurally wrong `area` block, and saying so is the difference
+        # between "your cache is broken" and "this field is text, not a number".
         center = area_payload.get("center")
-        radius_km = area_payload.get("radius_km")
-        if (
-            not isinstance(center, list)
-            or len(center) != 2
-            or not isinstance(radius_km, (int, float))
-        ):
+        if isinstance(center, list) and len(center) == 2:
+            try:
+                _ = (float(center[0]), float(center[1]))  # pyright: ignore[reportAny]
+            except (TypeError, ValueError) as exc:
+                raise CacheCorruptedError(
+                    user_message="Cache manifest `area` coordinates are not numeric.",
+                    detail=f"Got area={area_payload!r}; conversion failed: {exc}.",
+                ) from exc
+        # `_area_from_wire` handles both area modes and every remaining
+        # structural defect.
+        area = _area_from_wire(area_payload)
+        if area is None:
             raise CacheCorruptedError(
                 user_message="Cache manifest `area` payload is malformed.",
                 detail=f"Got area={area_payload!r}.",
             )
-        try:
-            area = Area(
-                center=(float(center[0]), float(center[1])),
-                radius_km=float(radius_km),
-            )
-        except (TypeError, ValueError) as exc:
-            # `float()` rejects non-numeric input — a manifest with
-            # `"center": ["forty-five", "six"]` reaches this branch instead of
-            # leaking a raw ValueError past the `CacheCorruptedError` contract.
-            raise CacheCorruptedError(
-                user_message="Cache manifest `area` coordinates are not numeric.",
-                detail=f"Got area={area_payload!r}; conversion failed: {exc}.",
-            ) from exc
 
         # All other manifest fields are typed `str` in the dataclass. A JSON
         # `null` would coerce to the literal string `"None"` via `str(...)` and
@@ -612,7 +727,7 @@ def _gc_superseded_entries(cache_root: pathlib.Path, current: Manifest) -> None:
     under a different key necessarily differs only in its pipeline hash: it was
     built by pipeline code that no longer exists. Left in place it would (a)
     accumulate on disk indefinitely (nothing else collects it) and (b) tie with
-    `current` on `radius_km` in `_select_smallest_containing`, where the
+    `current` on footprint in `_select_smallest_containing`, where the
     lexicographic-`cache_key_hash` tiebreak is effectively a coin flip — so a
     query right after a re-prepare could silently load the superseded graph and
     report its stale provenance. Evicting it here keeps at most one entry per
@@ -764,15 +879,10 @@ def rebuild_index(cache_root: pathlib.Path) -> None:
                     exc,
                 )
                 continue
-            lat, lon = manifest.area.center
             entries.append(
                 {
                     "cache_key_hash": manifest.cache_key_hash,
-                    "area": {
-                        "mode": _AREA_MODE_LITERAL,
-                        "center": [float(lat), float(lon)],
-                        "radius_km": float(manifest.area.radius_km),
-                    },
+                    "area": _area_wire_dict(manifest.area),
                 }
             )
 
@@ -789,33 +899,32 @@ def _areas_dir(cache_root: pathlib.Path) -> pathlib.Path:
 
 
 def _bounds_geojson(area: Area) -> dict[str, object]:
-    """Build a GeoJSON `Polygon` Feature for `area`'s WGS84 bbox.
+    """Build a GeoJSON `Polygon` Feature for `area`'s (optionally rotated) rectangle.
 
-    Matches the `bbox`-mode semantics `osmnx.graph_from_point(...,
-    dist_type="bbox")` consumes upstream: `radius_km` is the half-side of
-    an axis-aligned square in WGS84 degrees (lat/lon), **not** a disk radius.
-    The 4-vertex polygon is the simplest faithful representation; Story 2.10's
-    `check_coverage` builds an equivalent polygon at query time via the shared
-    `_area_to_polygon` helper, so the on-disk sidecar and the in-memory
-    coverage geometry can't silently diverge.
+    The ring is the area's **true** footprint, not its axis-aligned envelope —
+    derived from the shared `_area_to_polygon` so the on-disk sidecar and the
+    in-memory coverage geometry can't silently diverge. For a square it matches
+    the `bbox`-mode semantics `osmnx.graph_from_point(..., dist_type="bbox")`
+    consumes upstream (`radius_km` is a square half-side in WGS84 degrees, not a
+    disk radius) and is byte-identical to pre-Epic-15.
+
+    `properties` mirrors the manifest's `area` block (same modes, same fields) so
+    a diagnostic reader sees one vocabulary — except that coordinates here use
+    GeoJSON `[lon, lat]` ordering, consistent with `geometry.coordinates` per RFC
+    7946. The manifest keeps `[lat, lon]` per Architecture §Cat 4; separate file,
+    separate convention.
     """
     poly = _area_to_polygon(area)
     # `Polygon.exterior.coords` includes the closing duplicate vertex, matching
     # the prior hand-built ring's shape exactly.
     ring = [[float(x), float(y)] for x, y in poly.exterior.coords]
     lat, lon = area.center
-    # `properties.center` uses GeoJSON `[lon, lat]` ordering for internal
-    # consistency with `geometry.coordinates` (also `[lon, lat]` per RFC 7946).
-    # The manifest's `area.center` keeps the `[lat, lon]` ordering Architecture
-    # §Cat 4 specifies — that's a separate file and a separate convention.
+    properties = _area_wire_dict(area)
+    properties["center"] = [float(lon), float(lat)]
     return {
         "type": "Feature",
         "geometry": {"type": "Polygon", "coordinates": [ring]},
-        "properties": {
-            "mode": _AREA_MODE_LITERAL,
-            "center": [float(lon), float(lat)],
-            "radius_km": float(area.radius_km),
-        },
+        "properties": properties,
     }
 
 
@@ -916,6 +1025,17 @@ def _area_to_polygon(area: Area) -> shapely.Polygon:
     return shapely.Polygon(ring)
 
 
+def area_polygon(area: Area) -> shapely.Polygon:
+    """Public name for `area`'s WGS84 (lon, lat) ring — see `_area_to_polygon`.
+
+    Exists so consumers outside this module (setup stage 1's `graph_from_polygon`
+    fetch, Story 15.2) derive the ring from the **one** shared helper rather than
+    re-implementing the km-frame math and skewing away from coverage geometry and
+    the `bounds.geojson` sidecar.
+    """
+    return _area_to_polygon(area)
+
+
 def area_bbox_wgs84(area: Area) -> tuple[float, float, float, float]:
     """Return `area`'s axis-aligned WGS84 **envelope** as `(south, west, north, east)`.
 
@@ -978,39 +1098,36 @@ def _read_indexed_entries(index_path: pathlib.Path) -> list[_IndexedEntry] | Non
         if not isinstance(row, dict):
             return None
         cache_key_hash = row.get("cache_key_hash")
-        area_raw = row.get("area")
-        if not isinstance(cache_key_hash, str) or not isinstance(area_raw, dict):
+        if not isinstance(cache_key_hash, str):
             return None
-        center = area_raw.get("center")
-        radius_km = area_raw.get("radius_km")
-        # `isinstance(True, int)` is True in Python (bool subclasses int) and
-        # `float(NaN)` / `float(Infinity)` succeed silently — a malformed payload
-        # would otherwise build an `Area` whose polygon raises a raw shapely
-        # `GEOSException` from `_area_to_polygon`, breaking the FR24 exit-2
-        # contract. Reject these defensively here so the caller rebuilds.
-        if (
-            not isinstance(center, list)
-            or len(center) != 2
-            or not isinstance(radius_km, (int, float))
-            or isinstance(radius_km, bool)
-            or not math.isfinite(radius_km)
-            or radius_km <= 0
-        ):
-            return None
-        try:
-            lat_raw, lon_raw = float(center[0]), float(center[1])
-        except (TypeError, ValueError):
-            return None
-        # Same finiteness guard on the center coordinates — NaN/Infinity in
-        # `center` would also pollute `_area_to_polygon` downstream.
-        if not (math.isfinite(lat_raw) and math.isfinite(lon_raw)):
-            return None
-        try:
-            area = Area(center=(lat_raw, lon_raw), radius_km=float(radius_km))
-        except (TypeError, ValueError):
+        area = _area_from_wire(row.get("area"))
+        # `float(NaN)` / `float(Infinity)` succeed silently, so a structurally
+        # valid row can still carry geometry that makes `_area_to_polygon` emit
+        # NaN coordinates and shapely raise a raw `GEOSException` — breaking the
+        # FR24 exit-2 contract. Reject such rows here so the caller rebuilds.
+        # The guard is on the *effective* extents, not `radius_km`: a rotated row
+        # legitimately carries `radius_km=0.0`, and the old scalar check would
+        # have discarded every rotated entry in the cache.
+        if area is None or not _has_usable_geometry(area):
             return None
         parsed.append(_IndexedEntry(cache_key_hash=cache_key_hash, area=area))
     return parsed
+
+
+def _has_usable_geometry(area: Area) -> bool:
+    """True iff `area` yields a well-formed, non-degenerate polygon.
+
+    Center and both effective half-extents must be finite, the extents strictly
+    positive (a negative extent inverts the ring's winding, leaving `.contains`
+    undefined), and the bearing finite.
+    """
+    lat, lon = area.center
+    half_width_km, half_height_km = area.half_extents_km
+    if not (math.isfinite(lat) and math.isfinite(lon) and math.isfinite(area.angle_deg)):
+        return False
+    if not (math.isfinite(half_width_km) and math.isfinite(half_height_km)):
+        return False
+    return half_width_km > 0 and half_height_km > 0
 
 
 def _is_entry_dir(path: pathlib.Path) -> bool:
@@ -1050,19 +1167,39 @@ def _areas_has_valid_entries(cache_root: pathlib.Path) -> bool:
     return False
 
 
+def _area_km2(area: Area) -> float:
+    """True footprint of `area` in km² — the shape-agnostic "how big is this entry" measure.
+
+    `2·half_width × 2·half_height`, independent of bearing (rotation preserves
+    area). Replaces `radius_km` as the size ordering: a rotated area's
+    `radius_km` is an inert `0.0`, so ranking on it collapsed every rotated
+    entry to "size 0". Monotone in `radius_km` for squares, so square-only
+    caches order exactly as before.
+
+    This is the *true* rectangle area — the same measure Story 15.3's `--area-cap`
+    check needs, not the `π·r²` disk proxy the pre-Epic-15 cap used.
+    """
+    half_width_km, half_height_km = area.half_extents_km
+    return 4.0 * half_width_km * half_height_km
+
+
 def _select_smallest_containing(
     query_area: Area,
     indexed: list[_IndexedEntry],
 ) -> _IndexedEntry | None:
-    """Return the smallest-radius indexed entry whose bbox contains `query_area`, or None.
+    """Return the smallest indexed entry whose area contains `query_area`, or None.
 
     "Contains" per `shapely.Polygon.contains` (DE-9IM `[T*****FF*]`): no point
-    of the query polygon lies outside the entry polygon. Identical bboxes
-    qualify (a polygon contains itself); a query bbox that pokes outside on
-    any side does not. This matches the Architecture §Cat 4e "strict
-    containment" rule's intent (no out-of-bounds query coverage).
+    of the query polygon lies outside the entry polygon. Identical areas
+    qualify (a polygon contains itself); a query that pokes outside on any side
+    does not. This matches the Architecture §Cat 4e "strict containment" rule's
+    intent (no out-of-bounds query coverage). Both polygons come from
+    `_area_to_polygon`, so the test is orientation-aware — a query tucked into
+    the corner of a rotated entry's *envelope* but outside the box itself is
+    correctly declined.
 
-    Ties on `radius_km` are broken by ascending `cache_key_hash` so the result
+    "Smallest" is the true footprint (`_area_km2`) — smaller area means less
+    graph to load. Ties are broken by ascending `cache_key_hash` so the result
     is deterministic regardless of `index.json` insertion order.
     """
     query_poly = _area_to_polygon(query_area)
@@ -1073,7 +1210,7 @@ def _select_smallest_containing(
             containing.append(entry)
     if not containing:
         return None
-    return min(containing, key=lambda e: (e.area.radius_km, e.cache_key_hash))
+    return min(containing, key=lambda e: (_area_km2(e.area), e.cache_key_hash))
 
 
 def _planar_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -1135,8 +1272,46 @@ def _format_number(value: float) -> str:
     return f"{value:g}"
 
 
+def _format_area_flags(area: Area) -> str:
+    """Render `area`'s size as the CLI flag fragment that would reproduce it.
+
+    A square emits `--radius R` — byte-identical to pre-Epic-15, which is what
+    keeps the suggested-command assertions across the unit/integration/e2e tiers
+    unchanged. Any other rectangle emits its **full** dimensions plus the bearing
+    (users think in width/height, not half-extents).
+
+    Single source for the rotated spelling: Story 15.3 owns the real Click option
+    names, so aligning them is one edit here rather than a hunt across every
+    message formatter.
+    """
+    half_width_km, half_height_km = area.half_extents_km
+    if area.is_square:
+        return f"--radius {_format_number(half_width_km)}"
+    return (
+        f"--width {_format_number(2.0 * half_width_km)} "
+        f"--height {_format_number(2.0 * half_height_km)} "
+        f"--angle {_format_number(area.angle_deg)}"
+    )
+
+
+def _format_area_geometry(area: Area) -> str:
+    """Render `area`'s size for human-facing prose (not a copy-pasteable command).
+
+    Square: `radius 2 km` (the pre-Epic-15 wording). Otherwise: the full box
+    dimensions and bearing, e.g. `16x6 km box at 35°` — never a scalar "radius"
+    claim about a shape that has no radius.
+    """
+    half_width_km, half_height_km = area.half_extents_km
+    if area.is_square:
+        return f"radius {_format_number(half_width_km)} km"
+    return (
+        f"{_format_number(2.0 * half_width_km)}x{_format_number(2.0 * half_height_km)} km box "
+        f"at {_format_number(area.angle_deg)}°"
+    )
+
+
 def _no_prepared_cache_message(query_area: Area) -> str:
-    """AC #3: empty-cache error message echoing the query's center and radius.
+    """AC #3: empty-cache error message echoing the query's center and size.
 
     Lead phrase distinguishes the empty-cache case from `_partial_coverage_message`'s
     "No prepared cache covers this area." so users can triage at a glance.
@@ -1145,7 +1320,7 @@ def _no_prepared_cache_message(query_area: Area) -> str:
     return (
         f"No prepared cache exists yet. "
         f"Run: steeproute-setup --center {_format_lat_lon(lat, lon)} "
-        f"--radius {_format_number(query_area.radius_km)}"
+        f"{_format_area_flags(query_area)}"
     )
 
 
@@ -1162,6 +1337,11 @@ def _partial_coverage_message(
     copy-pasteable `steeproute-setup` command for the "widen the prepared area
     instead" path; the smaller-radius branch additionally suggests a narrowed
     `steeproute` re-invocation.
+
+    The shrink arithmetic only holds **between two squares** — it presumes
+    concentric axis-aligned boxes. When either side is a rotated or non-square
+    rectangle there is no scalar radius guaranteed to fit, so rather than invent
+    a number the message falls through to the relocate-or-prepare advice.
     """
     q_lat, q_lon = query_area.center
     e_lat, e_lon = nearest.area.center
@@ -1170,22 +1350,25 @@ def _partial_coverage_message(
     # Largest query radius keeping query bbox strictly inside the entry bbox at
     # the same query center: r_new = min(entry.r - |Δlat_km|, entry.r - |Δlon_km|).
     # If non-positive, the query center sits outside the entry — fall back to
-    # the center-relocation hint.
-    r_new = min(nearest.area.radius_km - dlat_km, nearest.area.radius_km - dlon_km)
+    # the center-relocation hint. `None` means "not two squares, no such radius".
+    r_new: float | None = None
+    if query_area.is_square and nearest.area.is_square:
+        entry_half_km = nearest.area.half_extents_km[0]
+        r_new = min(entry_half_km - dlat_km, entry_half_km - dlon_km)
     base = (
         f"No prepared cache covers this area. "
         f"Nearest prepared area: center {_format_lat_lon(e_lat, e_lon)}, "
-        f"radius {_format_number(nearest.area.radius_km)} km."
+        f"{_format_area_geometry(nearest.area)}."
     )
     # Both branches echo a fully copy-pasteable `steeproute-setup` command
-    # using the user's original query center + radius so they can widen the
-    # prepared area to cover their target without composing the command
-    # themselves (UX parity with the empty-cache message).
+    # using the user's original query area so they can widen the prepared area
+    # to cover their target without composing the command themselves (UX parity
+    # with the empty-cache message).
     widen_setup_cmd = (
         f"steeproute-setup --center {_format_lat_lon(q_lat, q_lon)} "
-        f"--radius {_format_number(query_area.radius_km)}"
+        f"{_format_area_flags(query_area)}"
     )
-    if r_new > 0:
+    if r_new is not None and r_new > 0:
         return (
             f"{base} Re-run with a smaller --radius (<= {_format_number(r_new)}) "
             f"or prepare your target area: {widen_setup_cmd}"
@@ -1200,7 +1383,7 @@ def _diagnostic_detail(indexed: list[_IndexedEntry]) -> str:
     """Verbose `detail` line listing every prepared area for the user."""
     rows = ", ".join(
         f"{e.cache_key_hash}: center {_format_lat_lon(*e.area.center)} "
-        f"radius {_format_number(e.area.radius_km)} km"
+        f"{_format_area_geometry(e.area)}"
         for e in indexed
     )
     return f"Prepared areas: [{rows}]"
@@ -1220,8 +1403,10 @@ def check_coverage(cache_root: pathlib.Path, query_area: Area) -> PreparedData:
     3. For each indexed entry, build its polygon via `_area_to_polygon` and
        test strict `shapely.contains` against the query polygon (also built
        via `_area_to_polygon` so query and entry share one geometry source).
-       Among the strictly-containing entries, pick the smallest `radius_km`
-       (tiebreak by `cache_key_hash` for determinism).
+       Both polygons are orientation-aware, so a rotated entry is matched on its
+       real footprint rather than its larger axis-aligned envelope. Among the
+       strictly-containing entries, pick the smallest true area (`_area_km2`;
+       tiebreak by `cache_key_hash` for determinism).
     4. If no entry strictly contains the query, raise `CacheNotFoundError`
        with the partial-coverage message naming the nearest prepared area
        and an actionable smaller-radius or center-relocation hint (AC #4).

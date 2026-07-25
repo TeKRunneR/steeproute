@@ -29,3 +29,11 @@ holds the schema-v2 pickled payload (graph minus geometry + ragged coordinate ar
 Story 13.2), so it is still sensitive to networkx/Python upgrades — the regression test
 (and `update-regression`) will surface any incompatibility. Any golden change must be
 committed with an explicit rationale (see the README "Development notes" section).
+
+**Manifest migrated to schema v3 in place (Story 15.2, 2026-07-25.)** The rotated-rectangle
+`area` block bumped `manifest.json`'s `schema_version` 2 → 3, and `Manifest.from_dict`
+rejects any non-current version. Unlike the other three fixtures this cache *can* be
+rebuilt offline via `regenerate_cache.py`, but the manifest was migrated by editing
+`schema_version` alone for consistency with them and to keep the diff auditable: a square's
+`area` block is byte-identical across v2 and v3, and `graph.pkl` was not touched. Verified:
+the golden passes unchanged, **no rebake**.

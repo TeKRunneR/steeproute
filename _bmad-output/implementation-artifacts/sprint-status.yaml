@@ -28,7 +28,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-07-25  # code-review 15.1 -> done
+last_updated: 2026-07-25  # code-review 15.2 -> done
 
 project: bmad-test
 project_key: NOKEY
@@ -190,7 +190,7 @@ development_status:
   # ---------------------------------------------------------------------------
   epic-15: in-progress    # Rotated-Rectangle Search Areas (CLI engine)
   15-1-generalize-area-model-and-geometry-helpers: done
-  15-2-rotated-setup-fetch-cache-schema-and-coverage: backlog
+  15-2-rotated-setup-fetch-cache-schema-and-coverage: done
   15-3-cli-flag-surface-validation-and-render-overlay: backlog
 
   app-epic-5: backlog     # Rotated-Rectangle Map Selection (depends on epic-15)

@@ -58,7 +58,20 @@ _OSM_CUSTOM_FILTER = '["highway"~"{}"]'.format(
 def osm_load(area: Area) -> nx.MultiDiGraph:
     """Stage 1: fetch the OSM trail network for `area` from Overpass via osmnx.
 
-    `area.radius_km` is the bbox half-side, not a disk radius — see `Area` docstring.
+    Dispatches on the area's shape (Story 15.2):
+
+    - **Square** (`Area.is_square`) — `osmnx.graph_from_point(dist_type="bbox")`
+      off `radius_km` (the bbox half-side, not a disk radius; see `Area`). Kept
+      **exactly** as pre-Epic-15: osmnx derives its bbox with its own
+      `EARTH_RADIUS_M = 6_371_009` (~1/111.195 deg/km) while `cache._area_to_polygon`
+      uses `1/111`, so feeding our ring in here would widen the fetch ~0.18% and
+      silently shift the pinned regression goldens.
+    - **Non-square / rotated** — `osmnx.graph_from_polygon` over the shared
+      `cache.area_polygon(area)` ring, so only the rectangle's own footprint is
+      pre-processed and off-axis valley never enters setup. This reuses osmnx's
+      existing `truncate_graph_polygon` path (the bbox mode already goes
+      bbox→polygon→truncate internally) and narrows the Overpass query too — a
+      polygon fetch is sent as a `poly:` filter, not a bbox.
 
     Returns a MultiDiGraph where every edge satisfies the source-attribute
     contract (Architecture §Cat 3): `sac_scale` (str | None), `highway`
@@ -67,17 +80,20 @@ def osm_load(area: Area) -> nx.MultiDiGraph:
     omits one for after simplification).
 
     Raises:
-        BadCLIArgError: if `area.radius_km` is non-positive or non-finite, or
-            `area.center` falls outside lat ∈ [-90, 90] / lon ∈ [-180, 180].
+        BadCLIArgError: if either effective half-extent is non-positive or
+            non-finite, the bearing angle is non-finite, or `area.center` falls
+            outside lat ∈ [-90, 90] / lon ∈ [-180, 180].
         DataSourceUnavailableError: Overpass unreachable, request timeout, HTTP
-            error, or low-level I/O failure during the `osmnx.graph_from_point`
-            call. The original exception is chained via `raise ... from exc` so
-            `--verbose` can surface its `repr` on the detail line.
+            error, or low-level I/O failure during the osmnx fetch (either
+            branch). The original exception is chained via `raise ... from exc`
+            so `--verbose` can surface its `repr` on the detail line.
     """
     # Deferred fetch-stack imports — see the module-level NOTE above the imports.
     import osmnx
     import requests
     import truststore
+
+    from steeproute.cache import area_polygon
 
     _validate_area(area)
     _ensure_sac_scale_in_useful_tags()
@@ -88,15 +104,28 @@ def osm_load(area: Area) -> nx.MultiDiGraph:
     # and the integration-test conftest; without it the OSM fetch fails with
     # CERTIFICATE_VERIFY_FAILED while the DEM download (which injects) succeeds.
     truststore.inject_into_ssl()
+    fetch_call = "graph_from_point" if area.is_square else "graph_from_polygon"
     try:
-        raw = osmnx.graph_from_point(
-            center_point=area.center,
-            dist=area.radius_km * 1000.0,
-            dist_type="bbox",
-            custom_filter=_OSM_CUSTOM_FILTER,
-            retain_all=False,
-            simplify=True,
-        )
+        if area.is_square:
+            # `half_extents_km[0]` (not `radius_km`) so a square expressed as
+            # explicit equal extents fetches its real size — for the classic
+            # `Area(center=..., radius_km=r)` the two are the same float, which
+            # is what keeps this call byte-identical to pre-Epic-15.
+            raw = osmnx.graph_from_point(
+                center_point=area.center,
+                dist=area.half_extents_km[0] * 1000.0,
+                dist_type="bbox",
+                custom_filter=_OSM_CUSTOM_FILTER,
+                retain_all=False,
+                simplify=True,
+            )
+        else:
+            raw = osmnx.graph_from_polygon(
+                area_polygon(area),
+                custom_filter=_OSM_CUSTOM_FILTER,
+                retain_all=False,
+                simplify=True,
+            )
     except (requests.exceptions.RequestException, OSError, ValueError) as exc:
         # `RequestException` is the base of every `requests` failure (ConnectionError,
         # Timeout, HTTPError, ...) — the documented network-failure modes osmnx propagates
@@ -110,29 +139,68 @@ def osm_load(area: Area) -> nx.MultiDiGraph:
         # and `GraphSimplificationError` likewise inherit from `ValueError`. Catching
         # `ValueError` at THIS specific call site is safe because `_validate_area`
         # above already rejected malformed arguments — by elimination, any `ValueError`
-        # surfacing from `osmnx.graph_from_point` is a server-response interpretation
-        # failure, not a programming error. (Catching `ValueError` at the module level
-        # would mask real bugs; constraining it to this call site preserves type-error
-        # diagnostics elsewhere.)
+        # surfacing from the osmnx fetch is a server-response interpretation failure,
+        # not a programming error. (Catching `ValueError` at the module level would
+        # mask real bugs; constraining it to this call site preserves type-error
+        # diagnostics elsewhere.) `graph_from_polygon` additionally raises
+        # `ValueError` for an invalid polygon, which `_validate_area` has already
+        # ruled out for every reachable area.
         raise DataSourceUnavailableError(
             "OSM source unreachable.",
-            detail=f"osmnx.graph_from_point failed: {exc!r}",
+            detail=f"osmnx.{fetch_call} failed: {exc!r}",
         ) from exc
     return normalize_edges(raw)
 
 
 def _validate_area(area: Area) -> None:
-    """Reject Areas that would produce nonsense fetches (out-of-range coords, NaN, Inf, ≤0 radius)."""
-    if not math.isfinite(area.radius_km):
+    """Reject Areas that would produce nonsense fetches (out-of-range coords, NaN, Inf, ≤0 extents).
+
+    Validates the *effective* geometry, not `radius_km` alone: a rotated area
+    carries an inert `radius_km=0.0` and drives the fetch entirely off its
+    half-extents + bearing (Story 15.2).
+
+    Diagnostics are reported against the flag the user actually typed. Which one
+    that is comes from **whether the extents were supplied**, not from
+    `Area.is_square` and not from the bearing:
+
+    - `is_square` compares the two extents, and `nan == nan` is False, so a NaN
+      `--radius` would be misreported as a width problem.
+    - The bearing is orthogonal to how the size was spelled — a rotated *square*
+      is a legitimate `--radius --angle` combination, so a bad radius there must
+      still say `--radius`. The angle is therefore validated for every shape,
+      before the size at all.
+    """
+    if not math.isfinite(area.angle_deg):
         raise BadCLIArgError(
-            f"--radius must be finite (got {area.radius_km})",
-            detail="NaN and Inf radii produce undefined osmnx behavior.",
+            f"--angle must be finite (got {area.angle_deg})",
+            detail="A non-finite bearing yields NaN box corners and an unusable fetch polygon.",
         )
-    if area.radius_km <= 0:
-        raise BadCLIArgError(
-            f"--radius must be > 0 (got {area.radius_km})",
-            detail="Area construction needs a positive bbox half-side to define a search box.",
-        )
+    if area.half_width_km is None and area.half_height_km is None:
+        if not math.isfinite(area.radius_km):
+            raise BadCLIArgError(
+                f"--radius must be finite (got {area.radius_km})",
+                detail="NaN and Inf radii produce undefined osmnx behavior.",
+            )
+        if area.radius_km <= 0:
+            raise BadCLIArgError(
+                f"--radius must be > 0 (got {area.radius_km})",
+                detail="Area construction needs a positive bbox half-side to define a search box.",
+            )
+    else:
+        half_width_km, half_height_km = area.half_extents_km
+        for flag, half_extent_km in (("--width", half_width_km), ("--height", half_height_km)):
+            if not math.isfinite(half_extent_km):
+                raise BadCLIArgError(
+                    f"{flag} must be finite (got a half-extent of {half_extent_km})",
+                    detail="NaN and Inf extents produce undefined osmnx behavior.",
+                )
+            if half_extent_km <= 0:
+                raise BadCLIArgError(
+                    f"{flag} must be > 0 (got a half-extent of {half_extent_km})",
+                    detail=(
+                        "Area construction needs positive half-extents to define a search box."
+                    ),
+                )
     lat, lon = area.center
     if not math.isfinite(lat) or not math.isfinite(lon):
         raise BadCLIArgError(

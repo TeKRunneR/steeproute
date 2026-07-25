@@ -31,6 +31,7 @@ import pytest
 import rasterio
 import shapely
 
+from steeproute import cache
 from steeproute.errors import DataSourceUnavailableError
 from steeproute.models import Area
 from steeproute.pipeline import dem_download
@@ -536,6 +537,48 @@ def test_fetch_workers_caps_concurrent_requests(
 
     resolve_dem(_BOUNDS, tmp_path, fetch_workers=1)
     assert state["peak"] == 1
+
+
+def test_padded_bbox_covers_the_true_rotated_envelope() -> None:
+    """The padded bbox must contain the whole rotated box, on both axes.
+
+    A rotated rectangle's axis-aligned envelope is `hw·|cos θ| + hh·|sin θ|` on one
+    axis and `hw·|sin θ| + hh·|cos θ|` on the other — at hw=8, hh=3, θ=10° the
+    east/west half-extent is ~8.40 km, so sizing both axes off `max(hw, hh) = 8`
+    would clip the very box the raster is meant to cover.
+    """
+    area = Area(
+        center=(45.260, 5.788),
+        radius_km=0.0,
+        half_width_km=8.0,
+        half_height_km=3.0,
+        angle_deg=10.0,
+    )
+    west, south, east, north = dem_download._padded_bbox(area)
+
+    assert shapely.box(west, south, east, north).contains(cache.area_polygon(area))
+    # And it is genuinely wider than the `max(hw, hh)` box the finding flagged.
+    naive_half_lon_deg = (max(8.0, 3.0) * 1000.0 + dem_download._PADDING_M) / (
+        dem_download._M_PER_DEG_LAT * math.cos(math.radians(45.260))
+    )
+    assert east - 5.788 > naive_half_lon_deg
+
+
+def test_padded_bbox_is_unchanged_for_a_square() -> None:
+    """Backward-compat: the square derivation still matches the pre-Epic-15 formula."""
+    lat, lon = _AREA.center
+    half_side_m = _AREA.radius_km * 1000.0 + dem_download._PADDING_M
+    half_lat_deg = half_side_m / dem_download._M_PER_DEG_LAT
+    half_lon_deg = half_side_m / (
+        dem_download._M_PER_DEG_LAT * math.cos(math.radians(lat))
+    )
+
+    assert dem_download._padded_bbox(_AREA) == (
+        lon - half_lon_deg,
+        lat - half_lat_deg,
+        lon + half_lon_deg,
+        lat + half_lat_deg,
+    )
 
 
 def _geom_edge_graph(coords_per_edge: list[list[tuple[float, float]]]) -> nx.MultiDiGraph:

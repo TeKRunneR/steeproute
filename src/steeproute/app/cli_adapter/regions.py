@@ -62,6 +62,15 @@ def resolve_area(
 
 
 def _to_region_info(entry: cache.CoverageEntry) -> RegionInfo:
+    """Project one prepared cache entry into the App's overlay shape.
+
+    **Envelope-leak audit (Story 15.2), deferred to App Story 5.1 which owns
+    `RegionBounds`.** `area_bbox_wgs84` returns the axis-aligned *envelope*, which
+    for a rotated entry is strictly larger than the box — the overlay would draw
+    too big and `radius_km` would read as the inert `0.0`. Correct today because
+    every prepared entry is a square; App 5.1 generalizes `RegionBounds` to carry
+    the true polygon.
+    """
     lat, lon = entry.area.center
     south, west, north, east = cache.area_bbox_wgs84(entry.area)
     return RegionInfo(

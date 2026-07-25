@@ -292,6 +292,14 @@ def _search_bbox(area: Area) -> dict[str, float]:
     `center ± radius_km` per side. An equirectangular delta is used — this drives
     a visual-only overlay rectangle on the map and need not byte-match osmnx's
     bbox: `dlat = radius_km/111.32`, `dlon = radius_km/(111.32*cos(lat))`.
+
+    **Envelope-leak audit (Story 15.2), deferred to Story 15.3 which owns the
+    overlay.** This is square-only on two counts: it reads the scalar `radius_km`
+    (an inert `0.0` for a rotated area, so the overlay would collapse to a point)
+    and it draws an axis-aligned rectangle, which cannot represent a rotated box.
+    It also uses its own `111.32` constant rather than `cache._DEG_PER_KM_LAT`, so
+    it is already a second projection source. Not reachable with a rotated area
+    today — no CLI path constructs one until 15.3 adds the flags.
     """
     lat, lon = area.center
     dlat = area.radius_km / 111.32

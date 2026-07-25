@@ -30,6 +30,7 @@ import pathlib
 
 import networkx as nx
 import pytest
+import shapely
 
 from steeproute import cache as cache_mod
 from steeproute.cache import (
@@ -194,6 +195,165 @@ def test_select_smallest_containing_returns_none_when_query_far_from_all_entries
     assert cache_mod._select_smallest_containing(query, indexed) is None
 
 
+def _rotated_entry(
+    cache_key_hash: str,
+    lat: float,
+    lon: float,
+    half_width_km: float,
+    half_height_km: float,
+    angle_deg: float,
+) -> cache_mod._IndexedEntry:
+    return cache_mod._IndexedEntry(
+        cache_key_hash=cache_key_hash,
+        area=_rotated_area(lat, lon, half_width_km, half_height_km, angle_deg),
+    )
+
+
+def _rotated_area(
+    lat: float,
+    lon: float,
+    half_width_km: float,
+    half_height_km: float,
+    angle_deg: float,
+) -> Area:
+    return Area(
+        center=(lat, lon),
+        radius_km=0.0,
+        half_width_km=half_width_km,
+        half_height_km=half_height_km,
+        angle_deg=angle_deg,
+    )
+
+
+def test_select_smallest_containing_ranks_rotated_entries_by_true_area() -> None:
+    """Story 15.2 AC #5: selection ranks by true rectangle area, not `radius_km`.
+
+    A rotated entry carries an inert `radius_km=0.0`, so the old scalar key made
+    every rotated entry tie at "size 0" and handed the choice to a lexicographic
+    hash coin-flip — loading a 40 km box when a 12 km one would do.
+    """
+    query = Area(center=(45.0, 6.0), radius_km=1.0)
+    indexed = [
+        # 20x20 km footprint (area 400) — hash sorts first, so a hash-only
+        # tiebreak would wrongly pick this one.
+        _rotated_entry("aa" * 8, 45.0, 6.0, 10.0, 10.0, 20.0),
+        # 8x8 km footprint (area 64) — the tightest fit that still contains.
+        _rotated_entry("bb" * 8, 45.0, 6.0, 4.0, 4.0, 20.0),
+    ]
+    chosen = cache_mod._select_smallest_containing(query, indexed)
+    assert chosen is not None
+    assert chosen.cache_key_hash == "bb" * 8
+
+
+def test_select_smallest_containing_compares_squares_and_rotated_on_one_scale() -> None:
+    """A mixed cache must rank both shapes on the same measure."""
+    query = Area(center=(45.0, 6.0), radius_km=1.0)
+    indexed = [
+        # Square half-side 4 km → 8x8 km footprint, area 64.
+        _entry("aa" * 8, lat=45.0, lon=6.0, radius_km=4.0),
+        # Rotated 3x3 km half-extents → 6x6 km footprint, area 36: smaller.
+        _rotated_entry("bb" * 8, 45.0, 6.0, 3.0, 3.0, 15.0),
+    ]
+    chosen = cache_mod._select_smallest_containing(query, indexed)
+    assert chosen is not None
+    assert chosen.cache_key_hash == "bb" * 8
+
+
+def test_select_smallest_containing_rejects_query_poking_out_of_rotated_entry() -> None:
+    """AC #5: containment is orientation-aware — the envelope must not be used.
+
+    This query sits inside the rotated entry's axis-aligned *envelope* but outside
+    the rotated box itself (near a corner the rotation cut off). An
+    envelope-based check would wrongly report coverage.
+    """
+    entry = _rotated_entry("11" * 8, 45.0, 6.0, 10.0, 2.0, 45.0)
+    envelope = cache_mod.area_bbox_wgs84(entry.area)
+    south, west, north, _east = envelope
+    # A tiny query tucked into the envelope's south-west corner.
+    corner_query = Area(center=(south + 0.005, west + 0.005), radius_km=0.2)
+
+    # Sanity: the corner really is inside the envelope...
+    assert south < corner_query.center[0] < north
+    # ...and the envelope is strictly larger than the rotated box.
+    assert cache_mod._area_to_polygon(entry.area).area < shapely.box(
+        west, south, envelope[3], north
+    ).area
+    # ...but coverage must still decline it.
+    assert cache_mod._select_smallest_containing(corner_query, [entry]) is None
+
+
+def test_read_indexed_entries_accepts_a_rotated_row(tmp_path: pathlib.Path) -> None:
+    """AC #5 regression: a rotated row must survive index parsing.
+
+    A rotated entry's `radius_km` is `0.0`, and the pre-15.2 guard rejected any
+    row with `radius_km <= 0` by returning `None` — which made `check_coverage`
+    rebuild, find nothing usable, and report "No prepared cache exists yet" for a
+    cache that was in fact fully prepared.
+    """
+    _write_index(
+        tmp_path,
+        {
+            "schema_version": 1,
+            "entries": [
+                {
+                    "cache_key_hash": "11" * 8,
+                    "area": {
+                        "mode": "center_extents_angle",
+                        "center": [45.0, 6.0],
+                        "half_width_km": 8.0,
+                        "half_height_km": 3.0,
+                        "angle_deg": 35.0,
+                    },
+                }
+            ],
+        },
+    )
+
+    parsed = cache_mod._read_indexed_entries(tmp_path / "steeproute" / "index.json")
+
+    assert parsed is not None
+    assert len(parsed) == 1
+    assert parsed[0].area.half_extents_km == (8.0, 3.0)
+    assert parsed[0].area.angle_deg == 35.0
+
+
+def test_read_indexed_entries_reads_a_pre_migration_row_without_a_mode(
+    tmp_path: pathlib.Path,
+) -> None:
+    """`index.json` stayed at schema v1: an un-rebuilt row still parses as a square."""
+    _write_index(
+        tmp_path,
+        {
+            "schema_version": 1,
+            "entries": [
+                {"cache_key_hash": "11" * 8, "area": {"center": [45.0, 6.0], "radius_km": 2.0}}
+            ],
+        },
+    )
+
+    parsed = cache_mod._read_indexed_entries(tmp_path / "steeproute" / "index.json")
+
+    assert parsed is not None
+    assert parsed[0].area.is_square
+    assert parsed[0].area.radius_km == 2.0
+
+
+def test_check_coverage_resolves_a_query_inside_a_rotated_entry(
+    tmp_path: pathlib.Path,
+) -> None:
+    """AC #5 end-to-end: a rotated prepared area serves a query it truly contains."""
+    _seed_entry(
+        tmp_path,
+        cache_key_hash="11" * 8,
+        area=_rotated_area(45.0, 6.0, 10.0, 4.0, 30.0),
+    )
+
+    result = check_coverage(tmp_path, Area(center=(45.0, 6.0), radius_km=1.0))
+
+    assert result.manifest.cache_key_hash == "11" * 8
+    assert result.manifest.area.angle_deg == 30.0
+
+
 # --- Message formatters ------------------------------------------------------
 
 
@@ -224,6 +384,71 @@ def test_partial_coverage_message_names_nearest_area_and_suggests_smaller_radius
     assert "6.05" in msg
     # Either a smaller-radius suggestion or a center-relocation hint must appear.
     assert "--radius" in msg or "--center" in msg
+
+
+def test_no_prepared_cache_message_describes_a_rotated_query_area() -> None:
+    """AC #6: messaging derives from geometry — never a bogus `--radius 0`.
+
+    A rotated area's `radius_km` is inert `0.0`, so the pre-15.2 formatter would
+    have told the user to run `steeproute-setup --radius 0`.
+    """
+    query = _rotated_area(45.0716, 6.1079, 8.0, 3.0, 35.0)
+    msg = cache_mod._no_prepared_cache_message(query)
+
+    assert msg.startswith("No prepared cache exists yet.")
+    assert "--center 45.0716,6.1079" in msg
+    assert "--radius 0" not in msg
+    # The full box is described: both dimensions (full width/height, not halves)
+    # and the bearing.
+    assert "--width 16" in msg
+    assert "--height 6" in msg
+    assert "--angle 35" in msg
+
+
+def test_partial_coverage_message_describes_a_rotated_nearest_entry() -> None:
+    """AC #6: the nearest-area line reports a rotated box honestly, not as a radius."""
+    query = Area(center=(45.0, 6.0), radius_km=5.0)
+    nearest = _rotated_entry("11" * 8, 45.05, 6.05, 8.0, 3.0, 35.0)
+
+    msg = cache_mod._partial_coverage_message(query, nearest)
+
+    assert msg.startswith("No prepared cache covers this area.")
+    assert "center 45.05,6.05" in msg
+    # No scalar-radius claim about a box that has no radius.
+    assert "radius 0 km" not in msg
+    assert "16x6 km" in msg
+    assert "35" in msg
+    # The widen-your-area command still echoes the user's own square query.
+    assert "steeproute-setup --center 45,6 --radius 5" in msg
+
+
+def test_partial_coverage_message_skips_the_shrink_hint_for_a_rotated_entry() -> None:
+    """AC #6: the "smaller --radius" arithmetic only holds between two squares.
+
+    `r_new = entry.radius - |delta|` presumes both boxes are concentric squares.
+    Against a rotated entry it is meaningless, so the message must fall back to
+    the geometry description + widen command rather than invent a number.
+    """
+    query = Area(center=(45.0, 6.0), radius_km=1.0)
+    nearest = _rotated_entry("11" * 8, 45.01, 6.01, 8.0, 3.0, 35.0)
+
+    msg = cache_mod._partial_coverage_message(query, nearest)
+
+    assert "smaller --radius" not in msg
+    assert "prepare your target area" in msg
+
+
+def test_diagnostic_detail_lists_both_shapes() -> None:
+    """AC #6: the --verbose inventory must be readable for a mixed cache."""
+    detail = cache_mod._diagnostic_detail(
+        [
+            _entry("aa" * 8, lat=45.0, lon=6.0, radius_km=2.0),
+            _rotated_entry("bb" * 8, 45.1, 6.1, 8.0, 3.0, 35.0),
+        ]
+    )
+    assert "radius 2 km" in detail
+    assert "16x6 km" in detail
+    assert "35" in detail
 
 
 def test_partial_coverage_message_falls_back_to_center_hint_when_query_center_outside() -> None:

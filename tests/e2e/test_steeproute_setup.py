@@ -237,7 +237,7 @@ def test_setup_first_run_writes_manifest_with_complete_provenance(
     payload = json.loads((entry / "manifest.json").read_text(encoding="utf-8"))
 
     # Schema + the four key-inducing fields the CLI populated.
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     assert payload["untagged_policy"] == "include"
     # With no `--dem-version` flag, `dem_version` is the stable IGN-layer default
     # tag (the DEM is auto-downloaded, not user-supplied).
@@ -298,20 +298,25 @@ def test_setup_second_run_same_flags_is_cache_hit(tmp_path: pathlib.Path) -> Non
     assert "cache-miss" not in second.output
 
 
-def test_setup_re_prepares_legacy_schema_v1_entry_once(tmp_path: pathlib.Path) -> None:
-    """Story 13.2: a pre-v2 entry at the same key re-prepares as recovery, not a hard error.
+@pytest.mark.parametrize("legacy_version", [1, 2])
+def test_setup_re_prepares_legacy_schema_entry_once(
+    tmp_path: pathlib.Path, legacy_version: int
+) -> None:
+    """A superseded-schema entry at the same key re-prepares as recovery, not a hard error.
 
-    The v2 format bump invalidates v1 entries via the manifest schema version
-    (the cache key deliberately does not shift — `cache.py` is excluded from
-    the pipeline content hash). Setup's `CacheCorruptedError` branch treats the
-    stale entry as a miss and rebuilds it in place; the second run leaves a
-    valid v2 entry behind.
+    Each format bump invalidates older entries via the manifest schema version —
+    the cache key deliberately does not shift for these, since `cache.py` is
+    excluded from the pipeline content hash. v1 → v2 was the graph payload
+    (Story 13.2); v2 → v3 was the rotated `area` block (Story 15.2). Setup's
+    `CacheCorruptedError` branch treats the stale entry as a miss and rebuilds it
+    in place; the second run leaves a valid current-schema entry behind. This is
+    the "pre-existing entries re-prepare once, no compat shim" contract.
     """
     _invoke_setup(tmp_path)  # seed a valid entry at the key
     entry = next((tmp_path / "steeproute" / "areas").iterdir())
     manifest_path = entry / "manifest.json"
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    payload["schema_version"] = 1  # simulate a pre-13.2 entry
+    payload["schema_version"] = legacy_version
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
 
     result = _invoke_setup(tmp_path)
@@ -319,7 +324,7 @@ def test_setup_re_prepares_legacy_schema_v1_entry_once(tmp_path: pathlib.Path) -
     assert result.exit_code == 0, result.output
     assert "cache-miss" in result.output  # re-prepared; not treated as a hit
     rewritten = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert rewritten["schema_version"] == 2
+    assert rewritten["schema_version"] == 3
 
 
 def test_setup_force_refresh_rebuilds_entry_on_existing_key(tmp_path: pathlib.Path) -> None:

@@ -5,6 +5,12 @@ Atomic write + read + entry-overwrite paths are exercised in
 file covers the smaller primitives + recovery branches.
 """
 
+# pyright: reportPrivateUsage=false
+# Reason: this tier is the intended consumer of `cache.py`'s module-private
+# geometry/parse helpers (`_area_to_polygon`, `_read_indexed_entries`) — they are
+# private so other call sites don't reach in, not so tests can't pin them. Same
+# rationale as `tests/unit/test_check_coverage.py`.
+
 from __future__ import annotations
 
 import dataclasses
@@ -27,6 +33,10 @@ from steeproute.errors import CacheCorruptedError, CacheNotFoundError
 from steeproute.models import Area
 
 _INDEX_SCHEMA_VERSION = 1
+# Mirrored (not imported) on purpose: a production bump must fail loudly here so
+# the on-disk-format change is a deliberate, reviewed edit. v3 = Story 15.2's
+# rotated `area` block.
+_MANIFEST_SCHEMA_VERSION = 3
 
 
 # --- write_json_atomic --------------------------------------------------------
@@ -213,7 +223,7 @@ def test_rebuild_index_bootstraps_missing_areas_directory(tmp_path: pathlib.Path
 
 def _manifest_payload(**overrides: object) -> dict[str, object]:
     base: dict[str, object] = {
-        "schema_version": 2,
+        "schema_version": _MANIFEST_SCHEMA_VERSION,
         "area": {"mode": "center_radius", "center": [45.0716, 6.1079], "radius_km": 2.0},
         "untagged_policy": "include",
         "dem_version": "ign_rge_alti_5m_2024-12",
@@ -241,18 +251,23 @@ def test_manifest_from_dict_raises_on_unknown_schema_version() -> None:
     with pytest.raises(CacheCorruptedError) as exc_info:
         Manifest.from_dict(payload)
     assert "schema version" in exc_info.value.user_message
-    assert exc_info.value.detail is not None and "schema_version=2" in exc_info.value.detail
+    assert (
+        exc_info.value.detail is not None
+        and f"schema_version={_MANIFEST_SCHEMA_VERSION}" in exc_info.value.detail
+    )
 
 
-def test_manifest_from_dict_raises_on_legacy_v1_schema_version() -> None:
-    """Story 13.2: v1 entries (pickled-graph format) are rejected with the re-prepare hint.
+@pytest.mark.parametrize("legacy_version", [1, 2])
+def test_manifest_from_dict_raises_on_legacy_schema_version(legacy_version: int) -> None:
+    """Every superseded schema is rejected with the re-prepare hint, no compat shim.
 
-    The graph payload format changed in schema v2; there is deliberately no
-    compat shim (Architecture §Versioned-contract-surfaces) — a v1 entry
+    v1 → v2 changed the graph payload format (Story 13.2); v2 → v3 generalized the
+    `area` block to the rotated rectangle (Story 15.2). Architecture
+    §Versioned-contract-surfaces takes the same line for both: a stale entry
     re-prepares once via the existing recovery paths (query: exit 2 with the
     actionable message; setup: re-prepare-as-recovery).
     """
-    payload = _manifest_payload(schema_version=1)
+    payload = _manifest_payload(schema_version=legacy_version)
 
     with pytest.raises(CacheCorruptedError) as exc_info:
         Manifest.from_dict(payload)
@@ -447,6 +462,147 @@ def test_bounds_geojson_geometry_and_properties_center_use_lon_lat_consistently(
     assert geometry_first_vertex[1] < properties_center[1]
     # Strong assertion: `properties.center` first element matches longitude (6.1079).
     assert properties_center == pytest.approx([6.1079, 45.0716])  # pyright: ignore[reportUnknownMemberType]
+
+
+# --- Story 15.2: rotated geometry through the on-disk surfaces ---------------
+
+
+def _rotated_area() -> Area:
+    return Area(
+        center=(45.0716, 6.1079),
+        radius_km=0.0,
+        half_width_km=8.0,
+        half_height_km=3.0,
+        angle_deg=35.0,
+    )
+
+
+def _write_rotated_entry(cache_root: pathlib.Path) -> pathlib.Path:
+    import networkx as nx
+
+    from steeproute.cache import write_entry  # pyright: ignore[reportUnknownVariableType]
+
+    manifest = Manifest(
+        area=_rotated_area(),
+        untagged_policy="include",
+        dem_version="ign_rge_alti_5m_2024-12",
+        pipeline_content_hash="a" * 64,
+        osm_extract_date="2026-05-20T12:00:00Z",
+        cache_key_hash="0123456789abcdef",
+        steeproute_version="0.1.0",
+        steeproute_commit="abc1234",
+        created_at="2026-05-20T12:00:00Z",
+    )
+    write_entry(cache_root, manifest, nx.MultiDiGraph())  # pyright: ignore[reportMissingTypeArgument, reportUnknownArgumentType]
+    return cache_root / "steeproute" / "areas" / "0123456789abcdef"
+
+
+def test_bounds_geojson_records_the_true_rotated_ring(tmp_path: pathlib.Path) -> None:
+    """AC #8: the sidecar carries the real footprint, not the axis-aligned envelope.
+
+    A rotated box's envelope is strictly larger than the box, so a sidecar built
+    from `.bounds` would misrepresent what was actually prepared. The ring must
+    match `_area_to_polygon` — the same geometry coverage tests against — and its
+    corners must therefore sit strictly inside the envelope's corners.
+    """
+    import json as _json
+
+    entry_dir = _write_rotated_entry(tmp_path)
+    feature = _json.loads((entry_dir / "bounds.geojson").read_text(encoding="utf-8"))
+
+    ring = feature["geometry"]["coordinates"][0]
+    expected = list(cache_mod._area_to_polygon(_rotated_area()).exterior.coords)
+    assert len(ring) == 5  # 4 corners + the closing vertex
+    assert ring[0] == ring[-1]
+    for (got_lon, got_lat), (want_lon, want_lat) in zip(ring, expected, strict=True):
+        assert got_lon == pytest.approx(want_lon)  # pyright: ignore[reportUnknownMemberType]
+        assert got_lat == pytest.approx(want_lat)  # pyright: ignore[reportUnknownMemberType]
+
+    # Not the envelope: every corner is strictly inside it on at least one axis.
+    south, west, north, east = cache_mod.area_bbox_wgs84(_rotated_area())
+    assert all(west < lon < east or south < lat < north for lon, lat in ring)
+
+
+def test_bounds_geojson_properties_describe_the_rotated_shape(tmp_path: pathlib.Path) -> None:
+    """AC #8: `properties` uses the manifest's vocabulary, with GeoJSON `[lon, lat]` center."""
+    import json as _json
+
+    entry_dir = _write_rotated_entry(tmp_path)
+    properties = _json.loads((entry_dir / "bounds.geojson").read_text(encoding="utf-8"))[
+        "properties"
+    ]
+
+    assert properties["mode"] == "center_extents_angle"
+    assert properties["half_width_km"] == 8.0
+    assert properties["half_height_km"] == 3.0
+    assert properties["angle_deg"] == 35.0
+    assert "radius_km" not in properties
+    # `[lon, lat]` per RFC 7946 — the inverse of the manifest's `[lat, lon]`.
+    assert properties["center"] == pytest.approx([6.1079, 45.0716])  # pyright: ignore[reportUnknownMemberType]
+
+
+def test_rebuild_index_writes_rotated_geometry_readable_by_coverage(
+    tmp_path: pathlib.Path,
+) -> None:
+    """AC #4/#5: the index write and read sides agree on a rotated row.
+
+    `rebuild_index` and `Manifest.to_dict` share `_area_wire_dict`, so a rotated
+    entry round-trips through `index.json` without the geometry being flattened to
+    a square — the failure that would make coverage silently resolve the wrong box.
+    """
+    import json as _json
+
+    _ = _write_rotated_entry(tmp_path)
+    rebuild_index(tmp_path)
+
+    index_path = tmp_path / "steeproute" / "index.json"
+    row = _json.loads(index_path.read_text(encoding="utf-8"))["entries"][0]
+    assert row["area"] == {
+        "mode": "center_extents_angle",
+        "center": [45.0716, 6.1079],
+        "half_width_km": 8.0,
+        "half_height_km": 3.0,
+        "angle_deg": 35.0,
+    }
+
+    parsed = cache_mod._read_indexed_entries(index_path)
+    assert parsed is not None
+    assert parsed[0].area.half_extents_km == (8.0, 3.0)
+    assert parsed[0].area.angle_deg == 35.0
+
+
+def test_gc_scopes_superseded_entries_by_rotated_geometry(tmp_path: pathlib.Path) -> None:
+    """Two boxes differing only in bearing are distinct prepared areas, not supersessions.
+
+    `_gc_superseded_entries` matches on `_canonicalize_area`, so it inherits the
+    rotated mode for free — pinned here because a canonicalizer that ignored the
+    angle would make writing one box silently delete the other.
+    """
+    import networkx as nx
+
+    from steeproute.cache import entry_dir_for, write_entry  # pyright: ignore[reportUnknownVariableType]
+
+    base = Manifest(
+        area=_rotated_area(),
+        untagged_policy="include",
+        dem_version="ign_rge_alti_5m_2024-12",
+        pipeline_content_hash="a" * 64,
+        osm_extract_date="2026-05-20T12:00:00Z",
+        cache_key_hash="aaaaaaaaaaaaaaaa",
+        steeproute_version="0.1.0",
+        steeproute_commit="abc1234",
+        created_at="2026-05-20T12:00:00Z",
+    )
+    turned = dataclasses.replace(
+        base,
+        area=dataclasses.replace(_rotated_area(), angle_deg=95.0),
+        cache_key_hash="bbbbbbbbbbbbbbbb",
+    )
+    write_entry(tmp_path, base, nx.MultiDiGraph())  # pyright: ignore[reportMissingTypeArgument, reportUnknownArgumentType]
+    write_entry(tmp_path, turned, nx.MultiDiGraph())  # pyright: ignore[reportMissingTypeArgument, reportUnknownArgumentType]
+
+    assert entry_dir_for(tmp_path, "aaaaaaaaaaaaaaaa").is_dir()
+    assert entry_dir_for(tmp_path, "bbbbbbbbbbbbbbbb").is_dir()
 
 
 # --- Review patch P3: Manifest.from_dict input validation --------------------
