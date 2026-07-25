@@ -61,6 +61,7 @@ pip-delete-this-directory.txt
 htmlcov/
 .tox/
 .nox/
+.benchmarks/
 .coverage
 .coverage.*
 .cache
@@ -199,4 +200,3 @@ cython_debug/
 /.trial-*/
 /.oracle-cache/
 /results*/
-
