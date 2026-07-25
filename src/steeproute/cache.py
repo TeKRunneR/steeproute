@@ -852,40 +852,85 @@ def _deg_per_km_lon(lat_deg: float) -> float:
 
 
 def _area_to_polygon(area: Area) -> shapely.Polygon:
-    """Build the WGS84 lon/lat polygon for `area`'s bbox half-side `radius_km`.
+    """Build the WGS84 lon/lat polygon for `area`'s (optionally rotated) rectangle.
 
     Shared by `_bounds_geojson` (entry-side, persisted) and `check_coverage`
     (query-side, transient). Coordinates are `(lon, lat)` per RFC 7946 — the
     same axis order shapely uses everywhere else in the codebase (pipeline
     geometries are also lon/lat).
 
+    Corners are placed in a local `cos(lat)` km frame (x = east km, y = north
+    km) using the effective half-extents, rotated by `angle_deg`, and converted
+    back to degrees via the same `_DEG_PER_KM_LAT` / `_deg_per_km_lon` factors
+    the rest of coverage uses. `angle_deg` is a **clockwise-from-north bearing**
+    (bearing 90° tilts the box's north edge toward the east) — approximation
+    grade, flat-earth is sub-percent at range scale (Architecture §"Rotated-
+    rectangle search areas").
+
+    The `angle_deg == 0` branch is a byte-identical fast path: for a square it
+    reproduces the pre-Epic-15 ring exactly (same vertex order and float ops),
+    so existing coverage geometry and the `bounds.geojson` sidecar are unchanged
+    (Story 15.1 backward-compat guarantee).
+
     The 5-point ring closes the polygon (first vertex repeated last). Empty /
-    degenerate radii (≤0) would produce a zero-area or self-intersecting polygon
-    and downstream `.contains` would return False for everything — acceptable
-    for v1 since `validate_setup_radius` rejects non-positive radii at the CLI
-    boundary (Story 2.8).
+    degenerate extents (≤0) would produce a zero-area or self-intersecting
+    polygon and downstream `.contains` would return False for everything —
+    acceptable since `validate_setup_radius` rejects non-positive radii at the
+    CLI boundary (Story 2.8).
     """
     lat, lon = area.center
-    dlat = area.radius_km * _DEG_PER_KM_LAT
-    dlon = area.radius_km * _deg_per_km_lon(lat)
-    return shapely.Polygon(
-        [
-            (lon - dlon, lat - dlat),
-            (lon + dlon, lat - dlat),
-            (lon + dlon, lat + dlat),
-            (lon - dlon, lat + dlat),
-            (lon - dlon, lat - dlat),
-        ]
-    )
+    half_width_km, half_height_km = area.half_extents_km
+    deg_per_km_lon = _deg_per_km_lon(lat)
+    if area.angle_deg == 0.0:
+        # Axis-aligned fast path — byte-identical to the pre-Epic-15 square ring
+        # when the extents are equal (see the backward-compat guarantee above).
+        dlon = half_width_km * deg_per_km_lon
+        dlat = half_height_km * _DEG_PER_KM_LAT
+        return shapely.Polygon(
+            [
+                (lon - dlon, lat - dlat),
+                (lon + dlon, lat - dlat),
+                (lon + dlon, lat + dlat),
+                (lon - dlon, lat + dlat),
+                (lon - dlon, lat - dlat),
+            ]
+        )
+    # Rotated: corners in the local (east, north) km frame, clockwise-from-north
+    # rotation, then km → degrees. Local offsets ordered SW, SE, NE, NW to match
+    # the axis-aligned ring's winding.
+    angle_rad = math.radians(area.angle_deg)
+    cos_a = math.cos(angle_rad)
+    sin_a = math.sin(angle_rad)
+    ring: list[tuple[float, float]] = []
+    for east_km, north_km in (
+        (-half_width_km, -half_height_km),
+        (half_width_km, -half_height_km),
+        (half_width_km, half_height_km),
+        (-half_width_km, half_height_km),
+    ):
+        # Clockwise-from-north rotation: bearing increases toward the east.
+        east_rot = east_km * cos_a + north_km * sin_a
+        north_rot = -east_km * sin_a + north_km * cos_a
+        ring.append((lon + east_rot * deg_per_km_lon, lat + north_rot * _DEG_PER_KM_LAT))
+    ring.append(ring[0])  # close
+    return shapely.Polygon(ring)
 
 
 def area_bbox_wgs84(area: Area) -> tuple[float, float, float, float]:
-    """Return `area`'s WGS84 bbox as `(south, west, north, east)` degrees.
+    """Return `area`'s axis-aligned WGS84 **envelope** as `(south, west, north, east)`.
+
+    This is the min/max bounding box of the area's polygon — an
+    over-approximation, **not** the region itself. For a square (or any
+    axis-aligned rectangle) the envelope coincides with the box; for a *rotated*
+    rectangle the envelope is strictly larger than the box, so a consumer must
+    not treat it as "the area" (e.g. containment tests belong against
+    `_area_to_polygon(area)`, which is orientation-aware, not against this
+    envelope). Callers that shortcut through this as if it were the region are
+    the Epic 15 envelope-leak audit targets (Stories 15.2/15.3).
 
     Uses the same km→deg conversion as `check_coverage` / `_bounds_geojson`
-    (`_area_to_polygon`), so a consumer that renders the bbox and tests
-    containment against it — the web App's `GET /regions` overlay — matches the
-    CLI's coverage geometry exactly rather than re-deriving the conversion.
+    (via `_area_to_polygon`), so a consumer that renders the envelope matches
+    the CLI's coverage geometry exactly rather than re-deriving the conversion.
     `(south, west, north, east)` == `(lat_min, lon_min, lat_max, lon_max)`.
     """
     minx, miny, maxx, maxy = _area_to_polygon(area).bounds  # (lon, lat) ring

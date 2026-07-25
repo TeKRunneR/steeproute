@@ -26,23 +26,64 @@ ConvergenceStatus = Literal["converged", "budget-exhausted", "interrupted"]
 
 @dataclass(frozen=True, slots=True)
 class Area:
-    """Geographic search area as a center + bbox half-side.
+    """Geographic search area as a (optionally rotated) rectangle (Epic 15).
 
-    `center` is `(lat, lon)` in WGS84 decimal degrees.
+    `center` is `(lat, lon)` in WGS84 decimal degrees. The rectangle is defined
+    by two half-extents (half-width east–west, half-height north–south, both in
+    km) and a `angle_deg` bearing that rotates the box in a local `cos(lat)` km
+    frame. A **centered square** — the pre-Epic-15 shape and still the common
+    case — is the `angle_deg == 0`, equal-extents special case; an
+    **axis-aligned rectangle** is `angle_deg == 0` with unequal extents.
 
-    `radius_km` is the **bbox half-side**, not a disk radius. Stage 1 fetches
-    OSM with `osmnx.graph_from_point(..., dist_type="bbox")`, which returns
-    everything inside a `2 * radius_km`-side square centered on `center`. The
-    field is named `radius_km` (rather than `bbox_half_side_km`) to match the
-    cache manifest field naming 1:1 (Architecture §Cat 4) and the user-facing
-    `--radius` CLI flag — but the geometric meaning is square half-side.
+    `radius_km` is the **square shorthand / bbox half-side** kept for backward
+    compatibility: constructing `Area(center=..., radius_km=r)` describes a
+    `2r`-side axis-aligned square, exactly as v1 did (Stage 1 still fetches such
+    an area with `osmnx.graph_from_point(..., dist_type="bbox")`). It is named
+    `radius_km` (not `bbox_half_side_km`) to match the cache manifest field and
+    the `--radius` CLI flag 1:1 — the geometric meaning is square half-side, not
+    a disk radius. When `half_width_km` / `half_height_km` are left `None`, they
+    resolve to `radius_km` (see `half_extents_km`), so every existing
+    `area.radius_km` reader and every square construction site is unchanged.
+
+    A rotated / non-square rectangle sets `half_width_km`, `half_height_km`, and
+    `angle_deg` explicitly (done at the CLI boundary in Story 15.3); for such an
+    area `radius_km` is not meaningful and downstream squareness-assuming readers
+    are generalized in Stories 15.2/15.3.
 
     Lives here (not pipeline/) because the same shape feeds setup-side
     ingestion (Epic 2) and query-side cache coverage check (Epic 3).
     """
 
     center: tuple[float, float]
+    # Required (no default) so an area can't be constructed with no size at all —
+    # the v1 guard. For the square shorthand it's the half-side; a rotated /
+    # non-square rectangle passes `radius_km=0.0` (inert — the extents drive the
+    # geometry) plus explicit extents. Value-range validation (>0, finite) stays
+    # at the CLI/`osm._validate_area` boundary, not here (this is a data carrier).
     radius_km: float
+    half_width_km: float | None = None
+    half_height_km: float | None = None
+    angle_deg: float = 0.0
+
+    @property
+    def half_extents_km(self) -> tuple[float, float]:
+        """Effective `(half_width_km, half_height_km)` in km.
+
+        Resolves the square shorthand: a `None` extent falls back to
+        `radius_km`. Computed on access (not stored) so `dataclasses.replace`
+        of `radius_km` on a square area re-derives correctly. Downstream
+        geometry derives everything from this — no reader should branch on
+        which of `radius_km` / the extents was supplied.
+        """
+        half_width = self.radius_km if self.half_width_km is None else self.half_width_km
+        half_height = self.radius_km if self.half_height_km is None else self.half_height_km
+        return (half_width, half_height)
+
+    @property
+    def is_square(self) -> bool:
+        """`True` iff this is a centered, axis-aligned square (v1-equivalent shape)."""
+        half_width, half_height = self.half_extents_km
+        return self.angle_deg == 0.0 and half_width == half_height
 
 
 @dataclass(frozen=True, slots=True)
