@@ -125,3 +125,4 @@ remain **out of scope** (per-query map-drawing cost not justified).
 * Fix CI
 * Remove area cap: I don't use that for anything, I typically just set it to a very high value so that it doesn't bother me
 * Change default query CLI values to be closer to what I actually use
+* Being able to delete cached areas
