@@ -1,37 +1,22 @@
 ## Publishing Releases
 
-This is how to publish a Python package to [**PyPI**](https://pypi.org/) from GitHub
-Actions, when using the
-[**simple-modern-uv**](https://github.com/jlevy/simple-modern-uv) template.
-
-Thanks to
-[the dynamic versioning plugin](https://github.com/ninoseki/uv-dynamic-versioning/) and
-the [`publish.yml`
-workflow](https://github.com/jlevy/simple-modern-uv/blob/main/template/.github/workflows/publish.yml),
-you can simply create tagged releases (using standard format for the tag name, e.g.
-`v0.1.0`) on GitHub and the tag will trigger a release build, which then uploads it to
-PyPI.
+steeproute publishes to [PyPI](https://pypi.org/) through GitHub Actions. The
+[dynamic versioning plugin](https://github.com/ninoseki/uv-dynamic-versioning/) derives
+the package version from Git tags. Publishing a GitHub release with a standard version
+tag such as `v0.1.0` triggers [the repository's workflow](../.github/workflows/publish.yml),
+which builds and uploads the package.
 
 ### First-Time Setup
 
 This part is a little confusing the first time.
 Here is the simplest way to do it.
-For the purposes of this example replace OWNER and PROJECT with the right values.
-
-**Note:** These steps assume you already have a GitHub repo with your code pushed. If
-you used [`uvx uvtemplate`](https://github.com/jlevy/uvtemplate), it handles repo
-creation for you. If you're setting up manually, create an **empty** GitHub repo (no
-README, no .gitignore, no license — the template already provides these) and push your
-code to it. See the
-[README](https://github.com/jlevy/simple-modern-uv#option-2-use-copier-and-git-yourself)
-for details.
 
 1. **Get a PyPI account** at [pypi.org](https://pypi.org/) and sign in.
 
 2. **Pick a name for the project** that isn’t already taken.
 
-   - Go to `https://pypi.org/project/PROJECT` to see if another project with that name
-     already exits.
+   - Go to `https://pypi.org/project/steeproute` to see if another project with that name
+     already exists.
 
    - If needed, update your `pyproject.toml` with the correct name.
 
@@ -52,8 +37,6 @@ for details.
    - Go to your GitHub project page, then click on Actions tab.
 
    - Confirm all tests are passing in the last CI workflow.
-     (If you want, you can even publish this template when it’s empty as just a stub
-     project, to try all this out.)
 
    - Go to your GitHub project page, click on Releases.
 
@@ -67,7 +50,7 @@ for details.
 
    - Watch for the release workflow in the GitHub Actions tab.
 
-   - If it succeeds, you should see it appear at `https://pypi.org/project/PROJECT`.
+   - If it succeeds, you should see it appear at `https://pypi.org/project/steeproute`.
 
 ### Publishing Subsequent Releases
 
@@ -85,8 +68,10 @@ Follow this checklist for each new release.
 2. **Run linting and tests locally:**
 
    ```shell
-   make lint
-   make test
+   uv run ruff check
+   uv run ruff format --check
+   uv run basedpyright
+   uv run pytest
    ```
 
 3. **Confirm CI is passing:**
@@ -144,7 +129,7 @@ Follow this checklist for each new release.
    
    ### Full Changelog
    
-   https://github.com/OWNER/PROJECT/compare/${LAST_TAG}...${NEW_TAG}
+   https://github.com/yfontana/steeproute/compare/${LAST_TAG}...${NEW_TAG}
    EOF
    )"
    ```
@@ -159,7 +144,7 @@ Follow this checklist for each new release.
    gh run list --workflow=publish.yml --limit 1
    
    # Verify on PyPI (may take a minute):
-   # https://pypi.org/project/PROJECT
+   # https://pypi.org/project/steeproute
    ```
 
 ### Release Notes Format
@@ -189,7 +174,7 @@ Description of what changed and how to migrate.
 
 ### Full Changelog
 
-https://github.com/OWNER/PROJECT/compare/vPREVIOUS...vNEW
+https://github.com/yfontana/steeproute/compare/vPREVIOUS...vNEW
 ```
 
 Guidelines:
@@ -206,8 +191,3 @@ Guidelines:
 - Always include the Full Changelog compare link at the end.
 
 - For small releases, a simple bullet list is acceptable instead of full sections.
-
-* * *
-
-*This file was built with
-[simple-modern-uv](https://github.com/jlevy/simple-modern-uv).*

@@ -81,6 +81,23 @@ Both commands take the identical area flags. `--radius R` remains the shorthand 
 centered `2R x 2R` square (and can be combined with `--angle` to rotate it); `--radius` and
 `--width`/`--height` are mutually exclusive.
 
+### Expected runtime
+
+Runtime varies with the area, network services, search budget, and available CPU cores.
+As a concrete larger-area example, on the author's Windows laptop (Intel Core Ultra 7
+155U, 32 GB RAM), a Grenoble-area run produced:
+
+| Workload | Parameters | Observed wall-clock |
+|---|---|---:|
+| Initial area setup (cache miss) | 20 km radius | 299.28 s (~5 min) |
+| Query against that cache | 20 km radius, 1,000,000 iterations, 4 workers, 10 routes | 78.57 s (~1 min 19 s) |
+
+Most of the initial setup time was network-bound: the OpenStreetMap download took
+142.46 s and elevation download took 82.87 s. Those stages can vary substantially with
+network conditions and upstream service load. Query time depends heavily on prepared-area
+size and search parameters, so treat these figures as an order-of-magnitude example, not
+a performance guarantee.
+
 ### Key parameters
 
 | Flag | What it does | Suggested value |
@@ -167,36 +184,3 @@ This re-runs the fixture(s), prints a before/after diff, and overwrites the gold
 - **Do not `pytest.skip` / `xfail` a pinned-regression test** to get a build green. If a gate must
   be disabled temporarily it requires an explicit issue reference and commit-message rationale
   (Architecture §Cat 11c).
-
-### Performance benchmarks
-
-`tests/benchmarks/` is a pytest-benchmark suite pinning throughput baselines: **seconds per
-1k GRASP iterations** (fixed seed/params on the `grenoble_small` contracted graph) and per-stage
-setup wall-clock on committed fixture data (offline — network stages are out of scope; their
-baseline is the profiling capture in `_bmad-output/planning-artifacts/research/profiling/`).
-Benchmarks measure time, never route output — quality regressions are the goldens' job above.
-Excluded from the default test run (`benchmark` marker, same pattern as `live`/`slow`):
-
-```
-uv run pytest tests/benchmarks -m benchmark
-```
-
-Run it standalone as shown (not via bare `-m benchmark` from the repo root — `tests/unit` and
-`tests/integration` can't be collected in one invocation), and without `--cov` (coverage
-instrumentation distorts timings).
-
-**Around every optimization commit:** compare against the saved baseline, then save the new one.
-
-```
-uv run pytest tests/benchmarks -m benchmark --benchmark-compare   # vs latest saved run
-uv run pytest tests/benchmarks -m benchmark --benchmark-autosave  # pin the new baseline
-```
-
-Baselines live in `.benchmarks/` and are committed — but they are **machine-local**: numbers are
-only comparable across runs on the same machine. Save a fresh baseline before an optimization and
-compare after; the original pre-optimization reference is the Epic 11 capture (2026-07-03).
-
-* * *
-
-*This project was built from
-[simple-modern-uv](https://github.com/jlevy/simple-modern-uv).*

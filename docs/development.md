@@ -13,36 +13,20 @@ Then
 
 ## Basic Developer Workflows
 
-The `Makefile` simply offers shortcuts to `uv` commands for developer convenience.
-(For clarity, GitHub Actions don’t use the Makefile and just call `uv` directly.)
-
 ```shell
-# First, install all dependencies and set up your virtual environment.
-# This simply runs `uv sync --all-extras` to install all packages,
-# including dev dependencies and optional dependencies.
-make install
-
-# Run uv sync, lint, and test:
-make
+# Install dependencies and set up the virtual environment:
+uv sync
 
 # Build wheel:
-make build
+uv build
 
 # Linting:
-make lint
+uv run ruff check
+uv run ruff format --check
+uv run basedpyright
 
 # Run tests:
-make test
-
-# Delete all the build artifacts:
-make clean
-
-# Upgrade dependencies to compatible versions:
-make upgrade
-
-# To run tests by hand:
-uv run pytest   # all tests
-uv run pytest -s src/module/some_file.py  # one test, showing outputs
+uv run pytest
 
 # Build and install current dev executables, to let you use your dev copies
 # as local tools:
@@ -87,8 +71,3 @@ See [publishing.md](publishing.md) for instructions on publishing to PyPI.
 - [uv docs](https://docs.astral.sh/uv/)
 
 - [basedpyright docs](https://docs.basedpyright.com/latest/)
-
-* * *
-
-*This file was built with
-[simple-modern-uv](https://github.com/jlevy/simple-modern-uv).*
