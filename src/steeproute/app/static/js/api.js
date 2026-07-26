@@ -32,7 +32,10 @@ export function listJobs() {
   return _json("/jobs");
 }
 
-/** Built regions for the map overlay (each has center, radius_km, bounds). */
+/** Built regions for the map overlay. Each carries its true (possibly rotated)
+ *  `polygon` as [lat, lon] vertices, its `width_km`/`height_km`/`angle_deg`, the
+ *  axis-aligned `bounds` envelope (an over-approximation for a rotated region),
+ *  and `radius_km` only when it is a centered square. */
 export function listRegions() {
   return _json("/regions");
 }
@@ -44,11 +47,20 @@ export function getQuerySchema() {
   return _json("/params/query-schema");
 }
 
-/** Resolve a picked area to its server-computed bbox + coverage decision
- *  ({center, radius_km, bounds, covered, cache_key_hash}). The server owns all
- *  km→deg + containment, so the client never re-derives geometry. */
-export function resolveArea(lat, lon, radiusKm) {
-  const q = new URLSearchParams({ lat, lon, radius_km: radiusKm });
+/** Resolve a picked area to its server-computed geometry + coverage decision
+ *  ({center, radius_km, width_km, height_km, angle_deg, polygon, bounds, covered,
+ *  cache_key_hash}). The server owns all km→deg + containment, so the client never
+ *  re-derives geometry.
+ *
+ *  Pass `radiusKm` for a centered square, or `null` plus `{widthKm, heightKm}` for
+ *  a rectangle; `angleDeg` rotates either (App Story 5.1). Only the supplied
+ *  spelling is sent — the server rejects a body carrying both (422). */
+export function resolveArea(lat, lon, radiusKm, { widthKm, heightKm, angleDeg } = {}) {
+  const q = new URLSearchParams({ lat, lon });
+  if (radiusKm != null) q.set("radius_km", radiusKm);
+  if (widthKm != null) q.set("width_km", widthKm);
+  if (heightKm != null) q.set("height_km", heightKm);
+  if (angleDeg) q.set("angle_deg", angleDeg);
   return _json(`/regions/resolve?${q}`);
 }
 

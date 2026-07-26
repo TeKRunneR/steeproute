@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import datetime
 import enum
+import math
 import time
 import uuid
 from typing import Any, ClassVar, Literal, cast
@@ -61,12 +62,71 @@ class Phase(enum.StrEnum):
 
 
 class AreaSpec(BaseModel):
-    """Search area on the wire — mirrors `steeproute.models.Area` (center + bbox
-    half-side km), kept as its own App-side model so nothing outside `cli_adapter`
-    imports the CLI domain type."""
+    """Search area on the wire — a (optionally rotated) rectangle, kept as its own
+    App-side model so nothing outside `cli_adapter` imports the CLI domain type.
+
+    Mirrors the **CLI flag surface** (Epic 15, `cli/_shared.resolve_area`) rather
+    than `steeproute.models.Area`: two mutually exclusive spellings, with
+    `angle_deg` (a bearing, clockwise from north) rotating either.
+
+    - `radius_km` — the centered-square shorthand (half-side, not a disk radius),
+      the pre-Story-5.1 shape and still the common case. A `job.json` written
+      before this story carries exactly `center` + `radius_km` and loads unchanged.
+    - `width_km` + `height_km` — **full box dimensions** (what the user thinks in,
+      and what `--width`/`--height` take). `Area` stores half-extents, so the
+      halving happens once, at the single point that builds a CLI `Area`
+      (`cli_adapter.regions.to_cli_area`) — never here and never in JS.
+
+    The exactly-one-of rule is enforced here so a malformed body fails 422 at the
+    API boundary instead of becoming a failed job. `cli/_shared.resolve_area`
+    stays the authoritative rule (it validates again, and owns the CLI wording);
+    this is the fast-fail guard in front of it.
+    """
 
     center: tuple[float, float]
-    radius_km: float
+    radius_km: float | None = Field(default=None, gt=0.0, allow_inf_nan=False)
+    width_km: float | None = Field(default=None, gt=0.0, allow_inf_nan=False)
+    height_km: float | None = Field(default=None, gt=0.0, allow_inf_nan=False)
+    angle_deg: float = Field(default=0.0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def _check_shape(self) -> AreaSpec:
+        """Exactly one spelling, both dimensions together, center in range.
+
+        Mirrors `cli/_shared.resolve_area`'s combination check and
+        `_validate_center`; the per-field `gt=0` / `allow_inf_nan=False`
+        constraints above cover what its `_validate_extent` does.
+        """
+        has_extent = self.width_km is not None or self.height_km is not None
+        if self.radius_km is None and not has_extent:
+            raise ValueError(
+                "no search area given: pass radius_km (centered square) or "
+                "width_km and height_km (rectangle); angle_deg rotates either "
+                "shape but does not define one"
+            )
+        if self.radius_km is not None and has_extent:
+            raise ValueError("radius_km cannot be combined with width_km/height_km")
+        if has_extent and (self.width_km is None or self.height_km is None):
+            raise ValueError("width_km and height_km must be given together")
+
+        lat, lon = self.center
+        if not math.isfinite(lat) or not math.isfinite(lon):
+            raise ValueError(f"center coordinates must be finite (got {self.center})")
+        if not -90.0 <= lat <= 90.0:
+            raise ValueError(f"center latitude {lat} is outside [-90, 90]")
+        if not -180.0 <= lon <= 180.0:
+            raise ValueError(f"center longitude {lon} is outside [-180, 180]")
+        return self
+
+    @property
+    def dimensions_km(self) -> tuple[float, float]:
+        """Effective **full** `(width_km, height_km)` — `2 × radius_km` for the
+        square shorthand. Lets a consumer describe any area's size without
+        branching on which spelling produced it."""
+        if self.radius_km is not None:
+            return (2.0 * self.radius_km, 2.0 * self.radius_km)
+        assert self.width_km is not None and self.height_km is not None  # validated above
+        return (self.width_km, self.height_km)
 
 
 class SetupParams(BaseModel):
@@ -189,11 +249,19 @@ class JobRecord(BaseModel):
 
 
 class RegionBounds(BaseModel):
-    """WGS84 lat/lon bbox corners of a prepared region (`south`/`west`/`north`/
-    `east` degrees). Precomputed server-side from the CLI cache's shared km→deg
-    conversion (`steeproute.cache.area_bbox_wgs84`) so the Leaflet overlay and
-    the green/grey containment test use exact geometry — the frontend renders
-    and tests against these, never re-deriving km→deg."""
+    """The axis-aligned WGS84 **envelope** of an area (`south`/`west`/`north`/
+    `east` degrees) — the min/max box of its polygon, **not** the region itself.
+
+    For a square (or any axis-aligned rectangle) the envelope coincides with the
+    box; for a *rotated* rectangle it is strictly larger, so drawing it
+    over-reports the area and it must never be used for a containment test (App
+    Story 5.1 envelope-leak audit, mirroring `steeproute.cache.area_bbox_wgs84`
+    which computes it). The true shape rides alongside as `polygon`; coverage
+    decisions come from the CLI cache's orientation-aware containment.
+
+    Precomputed server-side from the CLI cache's shared km→deg conversion so the
+    frontend renders exact geometry and never re-derives km→deg.
+    """
 
     south: float
     west: float
@@ -201,32 +269,48 @@ class RegionBounds(BaseModel):
     east: float
 
 
-class RegionInfo(BaseModel):
+class AreaGeometry(BaseModel):
+    """The server-computed geometry of an area — the shape fields `GET /regions`
+    and `GET /regions/resolve` both carry (App Story 5.1).
+
+    `polygon` is the **true** (possibly rotated) box as `[lat, lon]` vertices in
+    ring order, derived from `steeproute.cache.area_polygon` (the very ring
+    coverage is tested against); `bounds` is its axis-aligned envelope, kept for
+    the pre-5.1 overlay path and honest about being an over-approximation.
+    `width_km`/`height_km` are the effective **full** dimensions and `angle_deg`
+    the bearing, so a client can describe any shape without re-deriving it.
+    `radius_km` is present only for a centered square — `None` for a rectangle,
+    rather than the inert `0.0` a rotated CLI `Area` carries.
+    """
+
+    center: tuple[float, float]
+    radius_km: float | None
+    width_km: float
+    height_km: float
+    angle_deg: float
+    polygon: list[tuple[float, float]]
+    bounds: RegionBounds
+
+
+class RegionInfo(AreaGeometry):
     """A built (prepared) region for the map overlay (`GET /regions`,
-    architecture-app.md §Category 6). Mirrors the cache's per-entry coverage
-    view: the entry hash, the area center, its bbox half-side, and the
-    precomputed WGS84 bbox. snake_case; App-side type so nothing outside
-    `cli_adapter` imports the CLI `Area`."""
+    architecture-app.md §Category 6). The cache's per-entry coverage view: the
+    entry hash plus the entry area's geometry. snake_case; App-side type so
+    nothing outside `cli_adapter` imports the CLI `Area`."""
 
     cache_key_hash: str
-    center: tuple[float, float]
-    radius_km: float
-    bounds: RegionBounds
 
 
-class AreaResolution(BaseModel):
+class AreaResolution(AreaGeometry):
     """Server-computed resolution of a candidate selection (`GET /regions/resolve`).
 
-    The map home sends a picked `center` + `radius_km`; the server returns the
-    exact WGS84 `bounds` (via `steeproute.cache.area_bbox_wgs84`) and the
-    green/grey decision (`covered`, plus the containing entry's `cache_key_hash`)
-    from the CLI cache's own containment (`cache.find_covering_entry`). This keeps
-    ALL km→deg + containment on the server — the frontend never re-derives either,
-    so its overlay can't drift from the query-side coverage check."""
+    The map home sends its picked area (center + radius, or center + dimensions +
+    bearing); the server returns that area's exact geometry and the green/grey
+    decision (`covered`, plus the containing entry's `cache_key_hash`) from the
+    CLI cache's own containment (`cache.find_covering_entry`). This keeps ALL
+    km→deg + containment on the server — the frontend never re-derives either, so
+    its overlay can't drift from the query-side coverage check."""
 
-    center: tuple[float, float]
-    radius_km: float
-    bounds: RegionBounds
     covered: bool
     cache_key_hash: str | None = None
 

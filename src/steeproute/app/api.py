@@ -20,9 +20,10 @@ import re
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.sse import EventSourceResponse, ServerSentEvent
+from pydantic import ValidationError
 
 from steeproute.app.cli_adapter import SchemaField, list_regions, query_params_schema, resolve_area
 from steeproute.app.geocode import GeocodeFn
@@ -179,17 +180,49 @@ def resolve_region(
     request: Request,
     lat: float,
     lon: float,
-    radius_km: Annotated[float, Query(gt=0)],
+    radius_km: float | None = None,
+    width_km: float | None = None,
+    height_km: float | None = None,
+    angle_deg: float = 0.0,
 ) -> AreaResolution:
-    """Resolve a candidate selection to its bbox + green/grey coverage (Story 1.6).
+    """Resolve a candidate selection to its geometry + green/grey coverage (Story 1.6).
 
-    The map picker sends its picked `center`/`radius_km`; the server returns the
-    exact WGS84 bbox and the coverage decision computed by the CLI cache's own
-    conversion + containment (`cli_adapter.resolve_area`). Keeps ALL km→deg and
-    containment server-side so the overlay can't drift from query-side coverage.
-    Read-only. `radius_km` must be > 0 (else 422).
+    The map picker sends its picked area — `radius_km` (centered square) or
+    `width_km` + `height_km` (full box dimensions), either optionally rotated by
+    `angle_deg` (App Story 5.1, CLI Epic 15). The server returns that area's true
+    polygon, its axis-aligned envelope, and the coverage decision, all computed by
+    the CLI cache's own conversion + containment (`cli_adapter.resolve_area`).
+    Keeps ALL km→deg and containment server-side so the overlay can't drift from
+    query-side coverage. Read-only.
+
+    The scalars are funnelled through `AreaSpec` so this endpoint and `POST /jobs`
+    share **one** shape rule (exactly one spelling, positive finite sizes, in-range
+    center) instead of growing a second copy; a violation is a 422.
     """
-    return resolve_area((lat, lon), radius_km, cache_root=_regions_cache_root(request))
+    try:
+        area = AreaSpec(
+            center=(lat, lon),
+            radius_km=radius_km,
+            width_km=width_km,
+            height_km=height_km,
+            angle_deg=angle_deg,
+        )
+    except ValidationError as exc:
+        # `include_input=False` matters: a rejected value can be a non-finite float
+        # (`angle_deg=nan`), and echoing it back would make the error response
+        # itself unserializable as JSON.
+        raise HTTPException(
+            status_code=422,
+            detail=exc.errors(include_url=False, include_context=False, include_input=False),
+        ) from exc
+    try:
+        return resolve_area(area, cache_root=_regions_cache_root(request))
+    except ValueError as exc:
+        # `cli_adapter.to_cli_area` re-raises the CLI resolver's own rejection as a
+        # `ValueError` — reachable only if the `AreaSpec` guard above and the CLI's
+        # rule have drifted apart. It is still the client's shape that is bad, so
+        # answer 422 with the CLI's wording rather than letting it become a 500.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/jobs/{job_id}")

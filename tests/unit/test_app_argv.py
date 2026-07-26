@@ -163,3 +163,61 @@ def test_query_argv_executable_defaults_to_resolved_console_script() -> None:
     assert argv[0] == resolve_query_executable()
     stem = argv[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
     assert stem in ("steeproute", "steeproute.exe")
+
+
+# --- Rotated / rectangular areas (App Story 5.1, CLI Epic 15) -----------------
+
+_ROTATED = AreaSpec(center=(45.19, 5.72), width_km=16.0, height_km=6.0, angle_deg=35.0)
+
+
+def test_setup_argv_emits_full_dimensions_and_bearing() -> None:
+    # `--width`/`--height` are FULL box dimensions on the CLI, so they pass through
+    # unhalved (halving to Area half-extents happens only at the CLI Area boundary).
+    argv = _argv(_ROTATED, SetupParams())
+    assert argv == [
+        _EXE,
+        "--center",
+        "45.19,5.72",
+        "--width",
+        "16",
+        "--height",
+        "6",
+        "--angle",
+        "35",
+    ]
+    assert "--radius" not in argv
+
+
+def test_query_argv_emits_full_dimensions_and_bearing() -> None:
+    argv = _query_argv(_ROTATED, QueryParams())
+    assert argv[argv.index("--center") + 1] == "45.19,5.72"
+    assert argv[argv.index("--width") + 1] == "16"
+    assert argv[argv.index("--height") + 1] == "6"
+    assert argv[argv.index("--angle") + 1] == "35"
+    assert "--radius" not in argv
+
+
+def test_axis_aligned_rectangle_omits_the_bearing() -> None:
+    # angle 0 is the CLI default; emitting it would be noise (and would make the
+    # command differ from what a user would type).
+    argv = _argv(AreaSpec(center=(1.0, 2.0), width_km=8.0, height_km=4.5), SetupParams())
+    assert "--angle" not in argv
+    assert argv[argv.index("--height") + 1] == "4.5"
+
+
+def test_rotated_square_keeps_the_radius_spelling() -> None:
+    # `--radius R --angle A` is a legal CLI shape; a bearing must not force the
+    # width/height spelling.
+    argv = _argv(AreaSpec(center=(1.0, 2.0), radius_km=3.0, angle_deg=45.0), SetupParams())
+    assert argv == [_EXE, "--center", "1.0,2.0", "--radius", "3", "--angle", "45"]
+
+
+def test_square_argv_is_unchanged_by_the_rotated_surface() -> None:
+    # AC #3 regression guard: a square area still produces exactly the pre-5.1
+    # argv — no --angle, no width/height, same flag order.
+    setup_argv = _argv(AreaSpec(center=(45.26, 5.788), radius_km=2.0), SetupParams())
+    assert setup_argv == [_EXE, "--center", "45.26,5.788", "--radius", "2"]
+    query_argv = _query_argv(AreaSpec(center=(45.26, 5.788), radius_km=2.0), QueryParams())
+    assert query_argv[:5] == [_QUERY_EXE, "--center", "45.26,5.788", "--radius", "2"]
+    assert "--angle" not in query_argv
+    assert "--width" not in query_argv

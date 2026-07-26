@@ -580,7 +580,10 @@ def test_gc_scopes_superseded_entries_by_rotated_geometry(tmp_path: pathlib.Path
     """
     import networkx as nx
 
-    from steeproute.cache import entry_dir_for, write_entry  # pyright: ignore[reportUnknownVariableType]
+    from steeproute.cache import (  # pyright: ignore[reportUnknownVariableType]
+        entry_dir_for,
+        write_entry,
+    )
 
     base = Manifest(
         area=_rotated_area(),

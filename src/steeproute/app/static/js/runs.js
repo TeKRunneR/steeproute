@@ -12,7 +12,7 @@
 // DELETE, Story 3.2), and Re-run with tweaks (done/failed query, Story 3.2).
 
 import { listJobs, cancelJob, runWatchUrl, resultViewUrl, rerunConfigUrl, ApiError } from "./api.js";
-import { groupThousands } from "./format.js";
+import { areaGeometry, areaSummary, groupThousands } from "./format.js";
 
 const listEl = document.getElementById("runs-list");
 const emptyEl = document.getElementById("runs-empty");
@@ -33,18 +33,17 @@ function orderForLibrary(jobs) {
  *  today's `kind · r{radius}` fallback (Story 4.3 — a run with no `area_label`,
  *  i.e. geocoding disabled/offline/no place, is never worse off than before). */
 function cardTitle(job) {
-  const radius = job.area?.radius_km;
   if (job.area_label) return `${job.kind} · ${job.area_label}`;
-  return `${job.kind} · r${radius ?? "?"}`;
+  return `${job.kind} · ${areaSummary(job.area)}`;
 }
 
-/** Secondary detail: the raw center/radius (now that the label leads) + timestamp. */
+/** Secondary detail: the raw center + area geometry (now that the label leads) +
+ *  timestamp. A rotated area reads as its box dimensions, never a radius. */
 function metaText(job) {
   const [lat, lon] = job.area?.center ?? [];
-  const radius = job.area?.radius_km;
   const center = lat != null && lon != null ? `${lat}, ${lon}` : "?";
   const when = job.created_at ? new Date(job.created_at).toLocaleString() : "?";
-  return `center ${center} · radius ${radius ?? "?"} km · ${when}`;
+  return `center ${center} · ${areaGeometry(job.area)} · ${when}`;
 }
 
 /** Display a stored param value: booleans as on/off, long numbers space-grouped

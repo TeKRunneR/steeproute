@@ -7,6 +7,7 @@ present).
 
 from __future__ import annotations
 
+import json
 import pathlib
 
 from steeproute.app.models import AreaSpec, JobKind, JobRecord, JobStatus, utcnow_iso
@@ -157,3 +158,38 @@ def test_recover_interrupted_is_idempotent(tmp_path: pathlib.Path) -> None:
     assert second is not None
     assert second.status is JobStatus.FAILED
     assert second.finished_at == first.finished_at  # not re-stamped
+
+
+def test_pre_story_5_1_record_loads_with_the_square_area(tmp_path: pathlib.Path) -> None:
+    """A `job.json` written before the rotated-area fields existed still loads.
+
+    `AreaSpec` gained `width_km`/`height_km`/`angle_deg` additively (App Story
+    5.1); an on-disk record carrying only `center` + `radius_km` must keep working
+    — the run library reads every historical job through this path.
+    """
+    store = JobStore(tmp_path)
+    job_dir = tmp_path / "legacy-job"
+    job_dir.mkdir(parents=True)
+    (job_dir / "job.json").write_text(
+        json.dumps(
+            {
+                "id": "legacy-job",
+                "kind": "setup",
+                "area": {"center": [45.26, 5.788], "radius_km": 2.0},
+                "params": {},
+                "status": "done",
+                "created_at": "2026-07-01T10:00:00+00:00",
+                "exit_code": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = store.get("legacy-job")
+
+    assert loaded is not None
+    assert loaded.area.radius_km == 2.0
+    assert loaded.area.width_km is None
+    assert loaded.area.angle_deg == 0.0
+    assert loaded.area.dimensions_km == (4.0, 4.0)
+    assert [r.id for r in store.list()] == ["legacy-job"]

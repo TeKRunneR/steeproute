@@ -17,6 +17,7 @@ import {
   jobLoadErrorMessage,
   ApiError,
 } from "./api.js";
+import { areaGeometry, areaSummary } from "./format.js";
 
 const jobId = decodeURIComponent(location.pathname.split("/").pop() ?? "");
 
@@ -54,9 +55,9 @@ function renderStatus(status) {
 
 function renderIdentity(job) {
   const [lat, lon] = job.area?.center ?? [];
-  const radius = job.area?.radius_km;
   const center = lat != null && lon != null ? `${lat}, ${lon}` : "?";
-  identityEl.textContent = `${job.kind} · r${radius ?? "?"}  (center ${center} · radius ${radius ?? "?"} km)`;
+  identityEl.textContent =
+    `${job.kind} · ${areaSummary(job.area)}  (center ${center} · ${areaGeometry(job.area)})`;
 }
 
 function renderProgress(model) {

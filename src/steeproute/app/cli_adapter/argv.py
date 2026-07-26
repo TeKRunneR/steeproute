@@ -44,6 +44,32 @@ def resolve_query_executable() -> str:
     return shutil.which(_QUERY_SCRIPT) or _QUERY_SCRIPT
 
 
+def _area_flags(area: AreaSpec) -> list[str]:
+    """The `--center` + shape flags for `area` — the CLI Epic 15 area surface.
+
+    One spelling or the other, mirroring `cli/_shared.resolve_area`: a centered
+    square emits `--radius` (byte-identical to pre-Story-5.1, which is what keeps
+    every square job's command, cache key, and message unchanged), any other
+    rectangle emits `--width`/`--height` as **full box dimensions** — the CLI
+    halves them into `Area` half-extents itself, so they pass through unhalved
+    here. `--angle` rides on either spelling and is omitted at 0 (the CLI default)
+    so a square command stays exactly what a user would type.
+
+    Shared by both job kinds: setup and query take the identical area surface
+    (FR23), so they must not drift on how the App spells it.
+    """
+    lat, lon = area.center
+    flags: list[str] = ["--center", f"{lat},{lon}"]
+    if area.radius_km is not None:
+        flags += ["--radius", _format_number(area.radius_km)]
+    else:
+        width_km, height_km = area.dimensions_km
+        flags += ["--width", _format_number(width_km), "--height", _format_number(height_km)]
+    if area.angle_deg != 0.0:
+        flags += ["--angle", _format_number(area.angle_deg)]
+    return flags
+
+
 def build_setup_argv(
     area: AreaSpec,
     params: SetupParams,
@@ -55,14 +81,7 @@ def build_setup_argv(
     `executable` is injectable so tests can point argv[0] at a fake command while
     still exercising the real flag-mapping logic.
     """
-    lat, lon = area.center
-    argv: list[str] = [
-        executable or resolve_setup_executable(),
-        "--center",
-        f"{lat},{lon}",
-        "--radius",
-        _format_number(area.radius_km),
-    ]
+    argv: list[str] = [executable or resolve_setup_executable(), *_area_flags(area)]
     # Only emit non-default flags — keeps the command legible and matches the
     # CLI defaults exactly when the App defaults are unchanged.
     if params.untagged_trails != "include":
@@ -108,13 +127,9 @@ def build_query_argv(
         value = getattr(params, name)
         return value if value is not None else defaults[name]
 
-    lat, lon = area.center
     argv: list[str] = [
         executable or resolve_query_executable(),
-        "--center",
-        f"{lat},{lon}",
-        "--radius",
-        _format_number(area.radius_km),
+        *_area_flags(area),
         "--theta",
         _format_number(resolved("theta")),
         "--min-climb-slope",

@@ -14,6 +14,7 @@ import {
   jobLoadErrorMessage,
   ApiError,
 } from "./api.js";
+import { areaSummary } from "./format.js";
 
 // URL shape is /runs/<id>/result — the id is the segment before "result".
 const parts = location.pathname.split("/").filter(Boolean); // ["runs", "<id>", "result"]
@@ -68,7 +69,8 @@ async function init() {
     return;
   }
   const [lat, lon] = job.area?.center ?? [];
-  statusEl.textContent = `${job.kind} · r${job.area?.radius_km ?? "?"} (center ${lat ?? "?"}, ${lon ?? "?"})`;
+  statusEl.textContent =
+    `${job.kind} · ${areaSummary(job.area)} (center ${lat ?? "?"}, ${lon ?? "?"})`;
 
   let routes;
   try {

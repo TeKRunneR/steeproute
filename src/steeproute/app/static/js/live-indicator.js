@@ -6,6 +6,7 @@
 // "return to live progress at any time" real without a modal. Empty when idle.
 
 import { listJobs, openJobEvents, runWatchUrl } from "./api.js";
+import { areaSummary } from "./format.js";
 
 const POLL_MS = 4000;
 
@@ -28,8 +29,7 @@ function detachStream() {
 
 function render(job, model) {
   if (!el) return;
-  const radius = job.area?.radius_km;
-  const area = radius != null ? `r${radius}` : "area";
+  const area = areaSummary(job.area);
   const stage = model?.stage_name ? ` · ${model.stage_name}` : "";
   el.innerHTML = "";
   const link = document.createElement("a");

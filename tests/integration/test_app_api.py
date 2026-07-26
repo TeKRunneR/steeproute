@@ -28,6 +28,7 @@ import textwrap
 import time
 
 import networkx as nx
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -35,7 +36,7 @@ from steeproute.app.geocode import GeocodeFn
 from steeproute.app.main import create_app
 from steeproute.app.models import AreaSpec, JobKind, JobRecord, JobStatus, new_job_id, utcnow_iso
 from steeproute.app.store import JobStore
-from steeproute.cache import Manifest, write_entry
+from steeproute.cache import Manifest, area_bbox_wgs84, write_entry
 from steeproute.models import Area
 
 # Fake CLI: emit a stdout line, then exit with the code encoded in argv.
@@ -864,3 +865,167 @@ def test_boot_recovers_interrupted_and_rebuilds_queue(tmp_path: pathlib.Path) ->
 
     # ...and they ran in creation order (concurrency = 1, FIFO from list()).
     assert order_file.read_text(encoding="utf-8").split() == ["02-queued", "03-queued"]
+
+
+# --- Story 5.1: rotated-rectangle areas end to end ---------------------------
+
+_ROTATED_WIRE_AREA: dict[str, object] = {
+    "center": [45.19, 5.72],
+    "width_km": 16.0,
+    "height_km": 6.0,
+    "angle_deg": 35.0,
+}
+_ROTATED_CLI_AREA = Area(
+    center=(45.19, 5.72),
+    radius_km=0.0,
+    half_width_km=8.0,
+    half_height_km=3.0,
+    angle_deg=35.0,
+)
+
+
+def test_rotated_area_job_round_trips_through_the_store(tmp_path: pathlib.Path) -> None:
+    with _lifecycle_client(tmp_path, exit_code=0) as client:
+        created = client.post("/jobs", json={"kind": "setup", "area": _ROTATED_WIRE_AREA})
+        assert created.status_code == 201
+        job_id = created.json()["id"]
+        # Echoed on create...
+        assert created.json()["area"] == {
+            "center": [45.19, 5.72],
+            "radius_km": None,
+            "width_km": 16.0,
+            "height_km": 6.0,
+            "angle_deg": 35.0,
+        }
+        # ...and persisted verbatim (re-read from job.json, not from memory).
+        assert client.get(f"/jobs/{job_id}").json()["area"] == created.json()["area"]
+
+
+def test_rotated_query_job_accepted(tmp_path: pathlib.Path) -> None:
+    with _lifecycle_client(tmp_path, exit_code=0) as client:
+        body = {"kind": "query", "area": _ROTATED_WIRE_AREA, "params": {"n": 3}}
+        resp = client.post("/jobs", json=body)
+        assert resp.status_code == 201
+        assert resp.json()["area"]["angle_deg"] == 35.0
+
+
+def test_square_area_job_unchanged(tmp_path: pathlib.Path) -> None:
+    # AC #3 regression guard on the wire: the pre-5.1 body still works and the
+    # square spelling survives the round trip (new fields default to unset/0).
+    with _lifecycle_client(tmp_path, exit_code=0) as client:
+        body = client.post("/jobs", json=_setup_body()).json()
+        assert body["area"] == {
+            "center": [45.26, 5.788],
+            "radius_km": 2.0,
+            "width_km": None,
+            "height_km": None,
+            "angle_deg": 0.0,
+        }
+
+
+@pytest.mark.parametrize(
+    "area",
+    [
+        {"center": [45.19, 5.72], "radius_km": 10.0, "width_km": 16.0, "height_km": 6.0},
+        {"center": [45.19, 5.72], "width_km": 16.0},
+        {"center": [45.19, 5.72], "height_km": 6.0},
+        {"center": [45.19, 5.72], "angle_deg": 35.0},
+        {"center": [45.19, 5.72], "width_km": 0.0, "height_km": 6.0},
+        {"center": [91.0, 5.72], "radius_km": 10.0},
+    ],
+)
+def test_malformed_area_shape_rejected_422(tmp_path: pathlib.Path, area: dict[str, object]) -> None:
+    with _lifecycle_client(tmp_path, exit_code=0) as client:
+        assert client.post("/jobs", json={"kind": "setup", "area": area}).status_code == 422
+
+
+def test_regions_lists_rotated_region_with_true_polygon(tmp_path: pathlib.Path) -> None:
+    with _regions_client(tmp_path, seeded=("ab" * 8, _ROTATED_CLI_AREA)) as client:
+        (region,) = client.get("/regions").json()
+        assert region["width_km"] == 16.0
+        assert region["height_km"] == 6.0
+        assert region["angle_deg"] == 35.0
+        # No misleading scalar radius for a shape that has none.
+        assert region["radius_km"] is None
+        # The true (rotated) box, as [lat, lon] vertices — not the envelope.
+        assert len(region["polygon"]) == 4
+        assert all(len(vertex) == 2 for vertex in region["polygon"])
+        lats = [lat for lat, _ in region["polygon"]]
+        lons = [lon for _, lon in region["polygon"]]
+        # A rotated box's envelope is strictly larger than the box: no vertex sits
+        # on an envelope corner (which is what an axis-aligned box would give).
+        assert region["bounds"]["south"] == min(lats)
+        assert region["bounds"]["north"] == max(lats)
+        corners = {
+            (region["bounds"]["south"], region["bounds"]["west"]),
+            (region["bounds"]["north"], region["bounds"]["east"]),
+        }
+        assert not corners & {(lat, lon) for lat, lon in zip(lats, lons, strict=True)}
+
+
+def test_regions_resolve_accepts_a_rotated_selection(tmp_path: pathlib.Path) -> None:
+    with _regions_client(tmp_path, seeded=("ab" * 8, _ROTATED_CLI_AREA)) as client:
+        inside = client.get(
+            "/regions/resolve",
+            params={"lat": 45.19, "lon": 5.72, "width_km": 12, "height_km": 4, "angle_deg": 35},
+        )
+        assert inside.status_code == 200
+        body = inside.json()
+        assert body["covered"] is True
+        assert body["cache_key_hash"] == "ab" * 8
+        assert body["radius_km"] is None
+        assert len(body["polygon"]) == 4
+
+
+def test_regions_resolve_declines_a_selection_outside_the_rotated_box(
+    tmp_path: pathlib.Path,
+) -> None:
+    # Inside the rotated entry's ENVELOPE (its NW corner) but outside the box —
+    # orientation-aware containment must decline it.
+    south, west, north, east = area_bbox_wgs84(_ROTATED_CLI_AREA)
+    assert west < east and south < north
+    with _regions_client(tmp_path, seeded=("ab" * 8, _ROTATED_CLI_AREA)) as client:
+        resp = client.get(
+            "/regions/resolve",
+            params={"lat": north - 0.002, "lon": west + 0.002, "radius_km": 0.1},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["covered"] is False
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"lat": 45.19, "lon": 5.72},  # no size at all
+        {"lat": 45.19, "lon": 5.72, "radius_km": 10, "width_km": 16, "height_km": 6},
+        {"lat": 45.19, "lon": 5.72, "width_km": 16},  # lone dimension
+        {"lat": 45.19, "lon": 5.72, "radius_km": 10, "angle_deg": "nan"},
+    ],
+)
+def test_regions_resolve_rejects_malformed_shape_422(
+    tmp_path: pathlib.Path, params: dict[str, object]
+) -> None:
+    with _regions_client(tmp_path) as client:
+        resp = client.get("/regions/resolve", params=params)
+        assert resp.status_code == 422
+        assert "detail" in resp.json()
+
+
+def test_regions_resolve_seam_rejection_is_422_not_500(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A shape the `cli_adapter` seam rejects answers 422, never an unhandled 500.
+
+    `to_cli_area` re-raises the CLI resolver's `BadCLIArgError` as a `ValueError`,
+    reachable only if `AreaSpec`'s guard and the CLI's rule drift apart. Simulated
+    here by making the seam raise, because the two agree today.
+    """
+
+    def _boom(*_args: object, **_kwargs: object) -> object:
+        raise ValueError("--width and --height must be given together.")
+
+    monkeypatch.setattr("steeproute.app.api.resolve_area", _boom)
+    with _regions_client(tmp_path) as client:
+        resp = client.get("/regions/resolve", params={"lat": 45.19, "lon": 5.72, "radius_km": 10})
+        assert resp.status_code == 422
+        assert "must be given together" in resp.json()["detail"]

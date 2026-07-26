@@ -31,7 +31,7 @@ from steeproute.app.cli_adapter.progress_parse import (
     parse_summary_objective,
     progress_parser_for,
 )
-from steeproute.app.cli_adapter.regions import list_regions, resolve_area
+from steeproute.app.cli_adapter.regions import list_regions, resolve_area, to_cli_area
 
 __all__ = [
     "QueryProgressParser",
@@ -47,4 +47,5 @@ __all__ = [
     "resolve_query_defaults",
     "resolve_query_executable",
     "resolve_setup_executable",
+    "to_cli_area",
 ]
