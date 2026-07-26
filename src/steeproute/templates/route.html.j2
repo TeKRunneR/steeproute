@@ -111,13 +111,15 @@
       "Map data &copy; OpenStreetMap contributors, SRTM | " +
       "Style: &copy; OpenTopoMap (CC-BY-SA)",
   }).addTo(map);
-  // Search-area overlay: the 2*radius_km query bbox as a thin stroke-only
-  // rectangle, added BEFORE the route so the red polyline draws on top. Stroke
-  // only (no fill) so it covers minimal area; dashed gray-blue to read as a
-  // secondary marker distinct from the route's #b00020.
-  const searchBbox = {{ search_bbox | tojson }};
-  L.rectangle(
-    [[searchBbox.south, searchBbox.west], [searchBbox.north, searchBbox.east]],
+  // Search-area overlay: the query area's true footprint as a thin stroke-only
+  // polygon, added BEFORE the route so the red polyline draws on top. A polygon
+  // (not L.rectangle) because the area may be a rotated rectangle — an
+  // axis-aligned proxy would draw a box larger than the region actually searched.
+  // Stroke only (no fill) so it covers minimal area; dashed gray-blue to read as
+  // a secondary marker distinct from the route's #b00020.
+  const searchPolygon = {{ search_polygon | tojson }};
+  L.polygon(
+    searchPolygon,
     { color: "#5a6b8c", weight: 2, fill: false, dashArray: "6 4" }
   ).addTo(map);
 

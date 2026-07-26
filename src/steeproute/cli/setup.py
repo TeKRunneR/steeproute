@@ -55,6 +55,7 @@ from steeproute.cache import (
     write_entry,
 )
 from steeproute.cli._shared import (
+    angle_option,
     cache_dir_option,
     center_option,
     configure_cli_logging,
@@ -62,20 +63,22 @@ from steeproute.cli._shared import (
     dem_version_option,
     emit_osm_age_warning,
     force_refresh_option,
+    height_option,
     osm_age_warn_days_option,
     quiet_option,
     radius_option,
+    resolve_area,
     run_entry_point,
     untagged_trails_option,
     validate_dem_fetch_workers,
-    validate_setup_radius,
+    validate_setup_area,
     verbose_option,
+    width_option,
 )
 from steeproute.errors import (
     CacheCorruptedError,
     CacheNotFoundError,
 )
-from steeproute.models import Area
 from steeproute.pipeline import attach_elevation, build_graph_geometry
 from steeproute.pipeline.dem_download import (
     DEFAULT_DEM_VERSION,
@@ -95,6 +98,9 @@ _logger = logging.getLogger(__name__)
 @click.version_option(package_name="steeproute", prog_name="steeproute-setup")
 @center_option
 @radius_option
+@width_option
+@height_option
+@angle_option
 @untagged_trails_option
 @verbose_option
 @quiet_option
@@ -106,7 +112,10 @@ _logger = logging.getLogger(__name__)
 def cli(
     *,
     center: tuple[float, float],
-    radius: float,
+    radius: float | None,
+    width: float | None,
+    height: float | None,
+    angle: float,
     untagged_trails: str,
     verbose: bool,
     quiet: bool,
@@ -118,12 +127,15 @@ def cli(
 ) -> int:
     configure_cli_logging(verbose=verbose)
 
-    # Numeric radius check first (pure arithmetic, no I/O) so a typo like
-    # `--radius 5000` is rejected before any cache or network work.
-    validate_setup_radius(radius)
+    # Area resolution + numeric checks first (pure arithmetic, no I/O) so a typo
+    # like `--radius 5000` — or a `--width` with no `--height` — is rejected before
+    # any cache or network work.
+    area = resolve_area(
+        center=center, radius_km=radius, width_km=width, height_km=height, angle_deg=angle
+    )
+    validate_setup_area(area)
     validate_dem_fetch_workers(dem_fetch_workers)
 
-    area = Area(center=center, radius_km=radius)
     cache_root = resolve_cache_root(cache_dir)
     _configure_osmnx_cache(cache_root)
 

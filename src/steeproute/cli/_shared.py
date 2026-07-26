@@ -10,8 +10,9 @@ from typing import NoReturn, override
 
 import click
 
-from steeproute.cache import Manifest
+from steeproute.cache import Manifest, area_km2, format_area_flags
 from steeproute.errors import BadCLIArgError, PreExecutionError
+from steeproute.models import Area
 from steeproute.pipeline.dem_download import DEFAULT_DEM_FETCH_WORKERS
 from steeproute.pipeline.smoothing import (
     ELEVATION_DEADBAND_DEFAULT_M,
@@ -109,33 +110,172 @@ class LatLonParamType(click.ParamType):
 LAT_LON = LatLonParamType()
 
 
-def validate_area_size(radius_km: float, area_cap_km2: float) -> None:
-    """Enforce FR2: reject radii whose disk area exceeds --area-cap.
+def _is_radius_shorthand(area: Area) -> bool:
+    """True iff `area` was spelled with `--radius` rather than `--width`/`--height`.
+
+    The discriminator for **which flag a diagnostic names**, and deliberately not
+    `Area.is_square`: `is_square` compares the two extents (so a NaN radius, where
+    `nan == nan` is False, would be misreported as a width problem) and it folds in
+    the bearing (so a rotated *square* — a legitimate `--radius --angle` pair —
+    would name a `--width` the user never typed).
+
+    **Deliberately duplicated with `pipeline/osm.py::_validate_area`**, which
+    applies the identical rule as setup's own backstop for direct (non-CLI)
+    pipeline callers. Since Story 15.3 the CLI validates first, so on the CLI path
+    the pipeline copy is unreachable and this one owns all user-facing wording.
+    They were not merged because the only neutral home is inside
+    `_PIPELINE_CONTENT_GLOBS` (`pipeline/**`, `models.py`), so touching it at all
+    re-keys every cache entry on disk — too high a price for de-duplicating one
+    predicate. Keep the two in step; if the rule changes, change both.
+    """
+    return area.half_width_km is None and area.half_height_km is None
+
+
+def resolve_area(
+    *,
+    center: tuple[float, float],
+    radius_km: float | None,
+    width_km: float | None,
+    height_km: float | None,
+    angle_deg: float,
+) -> Area:
+    """Build the search `Area` from the shared CLI flag surface (FR1/FR23, Story 15.3).
+
+    One resolver for both `steeproute` and `steeproute-setup`, so the two CLIs
+    cannot drift on what an area *is* or on how a bad one is reported. Two
+    mutually exclusive spellings:
+
+    - `--radius R` — the centered-square shorthand. Constructs
+      `Area(center=..., radius_km=R)` **literally** (not equal explicit extents),
+      which is what keeps the cache key, the `graph_from_point` fetch, the manifest
+      `area` block, and every square-path message byte-identical to pre-Epic-15.
+    - `--width W --height H` — a rectangle. These are **full box dimensions**
+      (users think in box size); `Area` stores half-extents, so they are halved
+      here. `radius_km` is passed as an inert `0.0`.
+
+    `--angle` rotates either spelling and defaults to 0, so a rotated square
+    (`--radius R --angle A`) is expressible.
+
+    Validation order is deliberate: combination first (so "you gave me nothing" or
+    "you gave me both" is reported before any value check), then the bearing (it
+    applies to every shape), then the size against the flag actually typed, then
+    the center. `click.FLOAT` happily parses `"nan"`/`"inf"`, and a NaN slips past
+    every downstream comparison (IEEE-754) into a silently empty fetch or a
+    confusing coverage miss — §Cat 10 garbage-in, so it maps to
+    `BadCLIArgError → exit 2` here rather than deeper.
+
+    Raises:
+        BadCLIArgError: no size, both spellings, one dimension of two, a
+            non-finite bearing, a non-finite/non-positive size, or an
+            out-of-range center.
+    """
+    has_extent = width_km is not None or height_km is not None
+    if radius_km is None and not has_extent:
+        raise BadCLIArgError(
+            "no search area given: pass --radius (centered square) or "
+            "--width and --height (rectangle).",
+            detail="--angle rotates either shape; it does not define one on its own.",
+        )
+    if radius_km is not None and has_extent:
+        raise BadCLIArgError(
+            "--radius cannot be combined with --width/--height.",
+            detail="--radius is the centered-square shorthand; use one spelling or the other.",
+        )
+    if has_extent and (width_km is None or height_km is None):
+        raise BadCLIArgError(
+            "--width and --height must be given together.",
+        )
+
+    if not math.isfinite(angle_deg):
+        raise BadCLIArgError(
+            f"--angle {angle_deg!r} must be a finite number.",
+            detail="A non-finite bearing yields NaN box corners and an unusable search area.",
+        )
+
+    if radius_km is not None:
+        _validate_extent("--radius", radius_km)
+        area = Area(center=center, radius_km=radius_km, angle_deg=angle_deg)
+    else:
+        assert width_km is not None and height_km is not None  # narrowed above
+        _validate_extent("--width", width_km)
+        _validate_extent("--height", height_km)
+        area = Area(
+            center=center,
+            # Inert: the explicit extents drive the geometry (see `Area`).
+            radius_km=0.0,
+            half_width_km=width_km / 2.0,
+            half_height_km=height_km / 2.0,
+            angle_deg=angle_deg,
+        )
+
+    _validate_center(center)
+    return area
+
+
+def _validate_extent(flag: str, value_km: float) -> None:
+    """Reject a non-finite or non-positive area dimension, naming `flag`.
+
+    Message wording is carried over verbatim from the pre-Epic-15
+    `validate_setup_radius` so every existing `--radius` diagnostic is unchanged.
+    """
+    if not math.isfinite(value_km):
+        raise BadCLIArgError(
+            f"{flag} {value_km!r} must be a finite number.",
+        )
+    if value_km <= 0.0:
+        raise BadCLIArgError(
+            f"{flag} {value_km:g} must be positive.",
+        )
+
+
+def _validate_center(center: tuple[float, float]) -> None:
+    """Range/finiteness guard for the area center.
+
+    `LatLonParamType` already enforces this during click's parse, so on the CLI
+    path this is unreachable; it keeps `resolve_area` correct for direct callers
+    (tests, future in-process embedders) rather than letting a NaN center produce
+    a degenerate polygon that silently matches nothing.
+    """
+    lat, lon = center
+    if not math.isfinite(lat) or not math.isfinite(lon):
+        raise BadCLIArgError(f"--center coordinates must be finite (got {center})")
+    if not -90.0 <= lat <= 90.0:
+        raise BadCLIArgError(f"--center latitude {lat} is outside [-90, 90]")
+    if not -180.0 <= lon <= 180.0:
+        raise BadCLIArgError(f"--center longitude {lon} is outside [-180, 180]")
+
+
+def validate_area_size(area: Area, area_cap_km2: float) -> None:
+    """Enforce FR2: reject a search area whose **true** footprint exceeds --area-cap.
 
     Raises BadCLIArgError with a user-facing message in the format:
-        --radius {r} produces ~{area} km², exceeds --area-cap of {cap} km²
+        {area flags} produces ~{area} km², exceeds --area-cap of {cap} km²
 
     Used by cli/query.py only; cli/setup.py has no --area-cap flag (per Architecture
     §FR mapping; setup is "prepare what you'll later query", cap enforcement is
-    sufficient at query time).
+    sufficient at query time) — it carries `validate_setup_area`'s ceiling instead.
 
-    **Envelope-leak audit (Story 15.2), deferred to Story 15.3 which owns the area
-    flag surface.** The `π·r²` disk figure is a proxy, not the box's real footprint;
-    FR2 as revised calls for the **true** rectangle area (`width × height`, i.e.
-    `cache._area_km2`). Takes a scalar radius rather than an `Area`, so it cannot
-    see a rotated box at all — safe only because no CLI path constructs one until
-    15.3.
+    **Story 15.3 corrects FR2 off the disk proxy.** The measure is now
+    `cache.area_km2` (`width × height`), not `π·r²`. Two consequences: a rotated
+    box is measured at all (its `radius_km` is an inert `0.0`, so the old formula
+    would have computed an area of zero and waved every box through), and a
+    *square* is measured ~27% larger than before — the default `--area-cap 500`
+    now admits a radius up to 11.18 km instead of 12.61 km. That is the intended
+    correction, not a regression: `4r² > πr²` because the prepared region really
+    is the box, not the inscribed disk. The offending shape's own flags are named
+    via `cache.format_area_flags`, so the message never suggests a `--radius` for
+    a rectangle.
     """
-    area_km2 = math.pi * radius_km * radius_km
-    if area_km2 > area_cap_km2:
+    footprint_km2 = area_km2(area)
+    if footprint_km2 > area_cap_km2:
         raise BadCLIArgError(
-            f"--radius {radius_km:g} produces ~{area_km2:.0f} km², "
+            f"{format_area_flags(area)} produces ~{footprint_km2:.0f} km², "
             f"exceeds --area-cap of {area_cap_km2:g} km²",
         )
 
 
-# Setup-side hard ceiling on --radius (km), routed in via deferred-work D8 from
-# Story 2.1. A 2*r bbox at r=50 km still spans 10_000 km^2 — far above the
+# Setup-side hard ceiling on each area half-extent (km), routed in via deferred-work
+# D8 from Story 2.1. A 2*r bbox at r=50 km still spans 10_000 km^2 — far above the
 # Grenoble Alps personal-tool use case but small enough to catch obvious typos
 # (e.g. `--radius 5000`) that would otherwise hand osmnx an Overpass query that
 # either times out or exceeds the 1 GB response cap. The query CLI has its own
@@ -143,34 +283,46 @@ def validate_area_size(radius_km: float, area_cap_km2: float) -> None:
 # `--area-cap` flag so this constant carries the safety net here.
 _SETUP_MAX_RADIUS_KM: float = 50.0
 
+# Shared by both branches of `validate_setup_area`, so the wording has to fit a
+# `--radius` square and a `--width`/`--height` rectangle alike: "dimensions", not
+# "radii", and no claim about *how* the area is fetched (a square goes to Overpass
+# as a bounding box, a rotated rectangle as a `poly:` filter — Story 15.2).
+_SETUP_CEILING_DETAIL: str = (
+    "Setup downloads the whole area from Overpass in one request; very large "
+    "dimensions hit the Overpass timeout / 1 GB response cap. Split the "
+    "area into smaller prepared regions instead."
+)
 
-def validate_setup_radius(radius_km: float) -> None:
-    """Setup-side --radius sanity ceiling. Rejects non-finite and non-positive values.
 
-    Click parses `"nan"` and `"inf"` as legitimate floats; both slip past naive
-    `r <= 0` / `r > max` comparisons (`nan` compares False against everything,
-    `inf` only passes the upper bound). The explicit `math.isfinite` check at
-    the top closes both. Per Architecture §Cat 10, CLI-tier validation surfaces
-    as `BadCLIArgError → exit 2`, not a raw IEEE-754-induced traceback.
+def validate_setup_area(area: Area) -> None:
+    """Setup-side size ceiling, applied per dimension (Story 15.3 generalization).
+
+    The ceiling is a **half-extent** of `_SETUP_MAX_RADIUS_KM`, so the square
+    wording and threshold are exactly Story 2.8's; a rectangle is reported in the
+    full dimensions the user typed, against the same box span expressed as
+    `2 × _SETUP_MAX_RADIUS_KM`. A `--radius 50` square and a `--width 100` box are
+    the same span, so the two phrasings describe one ceiling.
+
+    Finiteness and positivity are already enforced by `resolve_area`; this is
+    purely the upper bound. Bearing-independent — rotation does not change how
+    much of the world a dimension spans.
     """
-    if not math.isfinite(radius_km):
-        raise BadCLIArgError(
-            f"--radius {radius_km!r} must be a finite number.",
-        )
-    if radius_km <= 0.0:
-        raise BadCLIArgError(
-            f"--radius {radius_km:g} must be positive.",
-        )
-    if radius_km > _SETUP_MAX_RADIUS_KM:
-        raise BadCLIArgError(
-            f"--radius {radius_km:g} km exceeds the steeproute-setup ceiling of "
-            f"{_SETUP_MAX_RADIUS_KM:g} km.",
-            detail=(
-                "Setup fetches the full bounding box from Overpass; very large "
-                "radii hit the Overpass timeout / 1 GB response cap. Split the "
-                "area into smaller prepared regions instead."
-            ),
-        )
+    half_width_km, half_height_km = area.half_extents_km
+    if _is_radius_shorthand(area):
+        if area.radius_km > _SETUP_MAX_RADIUS_KM:
+            raise BadCLIArgError(
+                f"--radius {area.radius_km:g} km exceeds the steeproute-setup ceiling of "
+                f"{_SETUP_MAX_RADIUS_KM:g} km.",
+                detail=_SETUP_CEILING_DETAIL,
+            )
+        return
+    for flag, half_extent_km in (("--width", half_width_km), ("--height", half_height_km)):
+        if half_extent_km > _SETUP_MAX_RADIUS_KM:
+            raise BadCLIArgError(
+                f"{flag} {2.0 * half_extent_km:g} km exceeds the steeproute-setup ceiling of "
+                f"{2.0 * _SETUP_MAX_RADIUS_KM:g} km.",
+                detail=_SETUP_CEILING_DETAIL,
+            )
 
 
 def validate_dem_fetch_workers(dem_fetch_workers: int) -> None:
@@ -340,11 +492,52 @@ center_option = click.option(
     help="Search-area center as 'LAT,LON' decimal degrees (e.g. '45.0716,6.1079').",
 )
 
+# `--radius` is no longer click-`required`: it is one of two mutually exclusive
+# spellings (Story 15.3), and click cannot express exactly-one-of. `resolve_area`
+# owns the whole combination rule so both CLIs report it identically, and so the
+# "no area at all" case still fails as a `BadCLIArgError → exit 2` rather than
+# click's own multi-line Usage/Error block.
 radius_option = click.option(
     "--radius",
     type=click.FLOAT,
-    required=True,
-    help="Search-area radius in kilometers from --center.",
+    default=None,
+    help=(
+        "Search-area radius in kilometers from --center: the centered-square "
+        "shorthand (half-side, not a disk radius). Mutually exclusive with "
+        "--width/--height."
+    ),
+)
+
+width_option = click.option(
+    "--width",
+    type=click.FLOAT,
+    default=None,
+    help=(
+        "Search-area width in kilometers (the full box dimension across, before "
+        "rotation). Use with --height instead of --radius."
+    ),
+)
+
+height_option = click.option(
+    "--height",
+    type=click.FLOAT,
+    default=None,
+    help=(
+        "Search-area height in kilometers (the full box dimension along, before "
+        "rotation). Use with --width instead of --radius."
+    ),
+)
+
+angle_option = click.option(
+    "--angle",
+    type=click.FLOAT,
+    default=0.0,
+    show_default=True,
+    help=(
+        "Search-area bearing in degrees, clockwise from north, so the box can hug "
+        "a diagonally-oriented range. 0 is axis-aligned; applies to --radius and "
+        "--width/--height alike."
+    ),
 )
 
 # --- Constraints ---

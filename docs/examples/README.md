@@ -44,6 +44,10 @@ The setup radius is 1 km larger than the query radius, so the query area is stri
 contained in the prepared area (the FR24 coverage check uses strict containment) with
 enough DEM padding to absorb osmnx's geometry overshoot at the box edge.
 
+Every gallery region is a centered square (`--radius`). The same commands accept the
+rotated-rectangle spelling — `--width W --height H --angle DEG` in place of `--radius` on
+*both* the setup and the query line — for terrain that runs diagonally.
+
 ## Regenerate a region
 
 ```sh

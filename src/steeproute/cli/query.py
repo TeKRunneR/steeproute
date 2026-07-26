@@ -42,6 +42,7 @@ import numpy as np
 from steeproute import output
 from steeproute.cache import Manifest, check_coverage, resolve_cache_root
 from steeproute.cli._shared import (
+    angle_option,
     area_cap_option,
     cache_dir_option,
     center_option,
@@ -51,6 +52,7 @@ from steeproute.cli._shared import (
     elevation_smoothing_option,
     emit_osm_age_warning,
     ensure_output_dir,
+    height_option,
     iter_budget_option,
     j_max_option,
     l_connector_option,
@@ -64,6 +66,7 @@ from steeproute.cli._shared import (
     progress_interval_option,
     quiet_option,
     radius_option,
+    resolve_area,
     run_entry_point,
     seed_option,
     stagnation_iters_option,
@@ -74,10 +77,10 @@ from steeproute.cli._shared import (
     validate_area_size,
     validate_solver_options,
     verbose_option,
+    width_option,
     workers_option,
 )
 from steeproute.models import (
-    Area,
     ContractedGraph,
     ConvergenceStatus,
     ProvenanceInfo,
@@ -113,6 +116,9 @@ DEFAULT_ITER_BUDGET: int = 2000
 @click.version_option(package_name="steeproute", prog_name="steeproute")
 @center_option
 @radius_option
+@width_option
+@height_option
+@angle_option
 @theta_option
 @min_climb_slope_option
 @difficulty_cap_option
@@ -141,7 +147,10 @@ DEFAULT_ITER_BUDGET: int = 2000
 def cli(
     *,
     center: tuple[float, float],
-    radius: float,
+    radius: float | None,
+    width: float | None,
+    height: float | None,
+    angle: float,
     theta: float,
     min_climb_slope: float,
     difficulty_cap: str,
@@ -175,10 +184,16 @@ def cli(
     # in the end-of-run summary. `perf_counter` (monotonic) mirrors `cli/setup.py`.
     start = time.perf_counter()
 
-    # FR2 sanity: reject queries whose disk-area exceeds --area-cap before we
-    # walk the cache. A typo like `--radius 5000` should fail-fast at the CLI
-    # boundary, not after a successful cache walk.
-    validate_area_size(radius_km=radius, area_cap_km2=area_cap)
+    # Area resolution (FR1/FR23) then the FR2 cap: reject queries whose true
+    # rectangle area exceeds --area-cap before we walk the cache. A typo like
+    # `--radius 5000` should fail-fast at the CLI boundary, not after a successful
+    # cache walk. `resolve_area` also rejects a malformed shape (no size, both
+    # spellings, NaN dimensions) that would otherwise degrade into a confusing
+    # coverage miss.
+    area = resolve_area(
+        center=center, radius_km=radius, width_km=width, height_km=height, angle_deg=angle
+    )
+    validate_area_size(area, area_cap_km2=area_cap)
 
     # Solver-parameter sanity at the CLI boundary (§Cat 10 → exit 2). Out-of-range
     # values would otherwise surface as a raw `ValueError` traceback from
@@ -205,7 +220,6 @@ def cli(
     # clean exit 2 rather than an `OSError` traceback mid-render.
     ensure_output_dir(output_dir)
 
-    area = Area(center=center, radius_km=radius)
     cache_root = resolve_cache_root(cache_dir)
 
     # Stage-timing seam for the non-solver query phases (Story 11.1 mechanism,

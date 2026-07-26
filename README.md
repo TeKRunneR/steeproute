@@ -61,14 +61,33 @@ uv run steeproute --center 45.12,5.88 --radius 6.0 \
     --elevation-deadband 1 --j-max 0 --n 3 --seed 42 --output-dir results
 ```
 
-Then open `results/route-1.html` in a browser. Keep the query radius a little smaller
-than the setup radius so the queried area sits fully inside the prepared one.
+Then open `results/route-1.html` in a browser. Keep the query area a little smaller
+than the setup area so the queried area sits fully inside the prepared one.
+
+### Non-square search areas
+
+A mountain range rarely runs north–south. Instead of `--radius`, give the area as a
+**rectangle** with `--width` / `--height` (full dimensions in km) and rotate it with
+`--angle` (bearing in degrees, clockwise from north) so the box hugs the range and leaves
+the off-axis valleys out of the expensive setup phase:
+
+```sh
+# A 30 x 10 km box along the SW-NE axis of the Belledonne range.
+uv run steeproute-setup --center 45.19,5.96 --width 30 --height 10 --angle 45
+uv run steeproute --center 45.19,5.96 --width 28 --height 9 --angle 45 --area-cap 100000
+```
+
+Both commands take the identical area flags. `--radius R` remains the shorthand for a
+centered `2R x 2R` square (and can be combined with `--angle` to rotate it); `--radius` and
+`--width`/`--height` are mutually exclusive.
 
 ### Key parameters
 
 | Flag | What it does | Suggested value |
 |---|---|---|
-| `--center` / `--radius` | area center `lat,lon` and radius in km | your area |
+| `--center` / `--radius` | area center `lat,lon` and radius in km (a `2R x 2R` square) | your area |
+| `--width` / `--height` / `--angle` | area as a rotated rectangle instead of a square — full dimensions in km plus a bearing in degrees | use when the terrain runs diagonally; keeps off-axis valley out of setup |
+| `--area-cap` | reject a query whose box area (`width x height`) exceeds this, in km² | `500` default; raise it (e.g. `100000`) for whole-range areas |
 | `--theta` | route-level average-slope floor every route must clear | `0.20` — this *is* the steepness bar; raise it for steeper routes, lower it to admit gentler ones |
 | `--difficulty-cap` | SAC hiking-scale ceiling for eligible trails | `T4` (the `T3` default filters out a lot of steep alpine terrain) |
 | `--start-at-junction` | require each route to start at a road/trail junction (a realistic trailhead) rather than mid-trail | off by default; turn it on for routes you'd actually set off on from a road |

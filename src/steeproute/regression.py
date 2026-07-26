@@ -78,6 +78,12 @@ class Fixture:
     set, so this guards the one case the golden can't — a run that silently collapses
     to (near-)zero routes being baked into a fresh golden by `update-regression`,
     turning a real regression into a green no-op gate.
+
+    **Area spelling (Story 15.3).** `radius_km` is the centered-square shorthand and
+    stays the default, so every pre-Epic-15 fixture emits byte-identical argv. A
+    rotated-rectangle fixture sets `width_km`/`height_km` (full box dimensions, as
+    the CLI takes them) and `angle_deg` instead; the area is *not* part of
+    `params_hash`, so adding one cannot perturb an existing golden.
     """
 
     name: str
@@ -87,6 +93,12 @@ class Fixture:
     seed: int
     pinned_params: dict[str, str] = field(default_factory=dict)
     min_routes: int = 1
+    # Rotated-rectangle spelling (Story 15.3). Left `None` → the `radius_km`
+    # square shorthand; set together → `--width W --height H`. `angle_deg` is
+    # emitted only when non-zero, so a square fixture's argv is unchanged.
+    width_km: float | None = None
+    height_km: float | None = None
+    angle_deg: float = 0.0
     # Regression tier. `"fast"` (the default) runs at low budgets as a cheap
     # determinism smoke; `"realistic"` mirrors the budgets the tool is actually
     # used at (`REALISTIC_FIXTURES`), gated `slow` in the suite. The tier
@@ -141,6 +153,26 @@ FIXTURES: tuple[Fixture, ...] = (
         cache_dir=_FIXTURES_ROOT / "grenoble_small" / "cache",
         center=(45.260, 5.788),
         radius_km=1.5,
+        seed=42,
+        pinned_params=dict(_PINNED_PARAMS),
+    ),
+    # Story 15.3: the rotated-rectangle golden. It queries a **rotated prepared
+    # entry** (second entry in the same `grenoble_small` cache root, see that
+    # fixture's `regenerate_cache.py`), not the square one — the query area selects
+    # a cache entry but never clips the search, so a rotated query over the square
+    # entry would just reproduce `grenoble_small`'s routes and pin nothing. The
+    # behaviour Epic 15 adds is setup-side truncation to the rotated ring, and this
+    # is what notices if that ring ever silently changes shape.
+    Fixture(
+        name="grenoble_small_rotated",
+        cache_dir=_FIXTURES_ROOT / "grenoble_small" / "cache",
+        center=(45.260, 5.788),
+        # Inert, exactly as `Area.radius_km` is for a rotated area — `width_km` /
+        # `height_km` below drive the geometry.
+        radius_km=0.0,
+        width_km=3.0,
+        height_km=1.6,
+        angle_deg=45.0,
         seed=42,
         pinned_params=dict(_PINNED_PARAMS),
     ),
@@ -290,6 +322,26 @@ def write_golden(fixture: Fixture, golden: Golden) -> None:
     write_json_atomic(golden_path(fixture), golden)
 
 
+def area_args(fixture: Fixture) -> list[str]:
+    """The `--radius` or `--width/--height[/--angle]` fragment for `fixture`'s area.
+
+    A square fixture emits exactly `["--radius", str(radius_km)]` — the
+    pre-Story-15.3 argv, byte for byte, so no committed golden can shift because
+    the harness learned a second spelling.
+    """
+    if fixture.width_km is None and fixture.height_km is None:
+        return ["--radius", str(fixture.radius_km)]
+    if fixture.width_km is None or fixture.height_km is None:
+        raise ValueError(
+            f"fixture {fixture.name!r} sets only one of width_km/height_km; "
+            f"a rectangle needs both"
+        )
+    args = ["--width", str(fixture.width_km), "--height", str(fixture.height_km)]
+    if fixture.angle_deg:
+        args += ["--angle", str(fixture.angle_deg)]
+    return args
+
+
 def run_fixture(fixture: Fixture) -> list[Sidecar]:
     """Run `steeproute` against `fixture`'s cache at its pinned params; return route sidecars.
 
@@ -308,8 +360,7 @@ def run_fixture(fixture: Fixture) -> list[Sidecar]:
         args = [
             "--center",
             f"{fixture.center[0]},{fixture.center[1]}",
-            "--radius",
-            str(fixture.radius_km),
+            *area_args(fixture),
             "--cache-dir",
             str(fixture.cache_dir),
             "--output-dir",

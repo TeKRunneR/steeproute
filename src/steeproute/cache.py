@@ -1167,7 +1167,7 @@ def _areas_has_valid_entries(cache_root: pathlib.Path) -> bool:
     return False
 
 
-def _area_km2(area: Area) -> float:
+def area_km2(area: Area) -> float:
     """True footprint of `area` in km² — the shape-agnostic "how big is this entry" measure.
 
     `2·half_width × 2·half_height`, independent of bearing (rotation preserves
@@ -1176,8 +1176,9 @@ def _area_km2(area: Area) -> float:
     entry to "size 0". Monotone in `radius_km` for squares, so square-only
     caches order exactly as before.
 
-    This is the *true* rectangle area — the same measure Story 15.3's `--area-cap`
-    check needs, not the `π·r²` disk proxy the pre-Epic-15 cap used.
+    Public because it is also the FR2 `--area-cap` measure (Story 15.3,
+    `cli/_shared.validate_area_size`) — the *true* rectangle area, not the
+    `π·r²` disk proxy the pre-Epic-15 cap used.
     """
     half_width_km, half_height_km = area.half_extents_km
     return 4.0 * half_width_km * half_height_km
@@ -1198,7 +1199,7 @@ def _select_smallest_containing(
     the corner of a rotated entry's *envelope* but outside the box itself is
     correctly declined.
 
-    "Smallest" is the true footprint (`_area_km2`) — smaller area means less
+    "Smallest" is the true footprint (`area_km2`) — smaller area means less
     graph to load. Ties are broken by ascending `cache_key_hash` so the result
     is deterministic regardless of `index.json` insertion order.
     """
@@ -1210,7 +1211,7 @@ def _select_smallest_containing(
             containing.append(entry)
     if not containing:
         return None
-    return min(containing, key=lambda e: (_area_km2(e.area), e.cache_key_hash))
+    return min(containing, key=lambda e: (area_km2(e.area), e.cache_key_hash))
 
 
 def _planar_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -1272,7 +1273,7 @@ def _format_number(value: float) -> str:
     return f"{value:g}"
 
 
-def _format_area_flags(area: Area) -> str:
+def format_area_flags(area: Area) -> str:
     """Render `area`'s size as the CLI flag fragment that would reproduce it.
 
     A square emits `--radius R` — byte-identical to pre-Epic-15, which is what
@@ -1280,9 +1281,13 @@ def _format_area_flags(area: Area) -> str:
     unchanged. Any other rectangle emits its **full** dimensions plus the bearing
     (users think in width/height, not half-extents).
 
-    Single source for the rotated spelling: Story 15.3 owns the real Click option
-    names, so aligning them is one edit here rather than a hunt across every
-    message formatter.
+    The spellings are the real Click option names (Story 15.3,
+    `cli/_shared.py` §Area), so the emitted fragment is copy-pasteable. Public
+    because the `--area-cap` rejection message reuses it, keeping one source for
+    "which flags describe this shape". A rotated *square* spelled
+    `--radius R --angle A` renders as `--width 2R --height 2R --angle A`: an
+    equivalent command (same polygon, same cache key), because an area read back
+    from the cache no longer records which spelling produced it.
     """
     half_width_km, half_height_km = area.half_extents_km
     if area.is_square:
@@ -1320,7 +1325,7 @@ def _no_prepared_cache_message(query_area: Area) -> str:
     return (
         f"No prepared cache exists yet. "
         f"Run: steeproute-setup --center {_format_lat_lon(lat, lon)} "
-        f"{_format_area_flags(query_area)}"
+        f"{format_area_flags(query_area)}"
     )
 
 
@@ -1366,7 +1371,7 @@ def _partial_coverage_message(
     # with the empty-cache message).
     widen_setup_cmd = (
         f"steeproute-setup --center {_format_lat_lon(q_lat, q_lon)} "
-        f"{_format_area_flags(query_area)}"
+        f"{format_area_flags(query_area)}"
     )
     if r_new is not None and r_new > 0:
         return (
@@ -1405,7 +1410,7 @@ def check_coverage(cache_root: pathlib.Path, query_area: Area) -> PreparedData:
        via `_area_to_polygon` so query and entry share one geometry source).
        Both polygons are orientation-aware, so a rotated entry is matched on its
        real footprint rather than its larger axis-aligned envelope. Among the
-       strictly-containing entries, pick the smallest true area (`_area_km2`;
+       strictly-containing entries, pick the smallest true area (`area_km2`;
        tiebreak by `cache_key_hash` for determinism).
     4. If no entry strictly contains the query, raise `CacheNotFoundError`
        with the partial-coverage message naming the nearest prepared area

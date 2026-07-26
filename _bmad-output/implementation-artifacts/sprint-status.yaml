@@ -28,7 +28,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-07-25  # code-review 15.2 -> done
+last_updated: 2026-07-26  # code-review 15.3 -> done; epic-15 complete
 
 project: bmad-test
 project_key: NOKEY
@@ -188,10 +188,10 @@ development_status:
   # (engine) lands first; App Epic 5 (picker) depends on it. See
   # sprint-change-proposal-2026-07-24-rotated-rectangle-areas.md.
   # ---------------------------------------------------------------------------
-  epic-15: in-progress    # Rotated-Rectangle Search Areas (CLI engine)
+  epic-15: done           # Rotated-Rectangle Search Areas (CLI engine)
   15-1-generalize-area-model-and-geometry-helpers: done
   15-2-rotated-setup-fetch-cache-schema-and-coverage: done
-  15-3-cli-flag-surface-validation-and-render-overlay: backlog
+  15-3-cli-flag-surface-validation-and-render-overlay: done
 
   app-epic-5: backlog     # Rotated-Rectangle Map Selection (depends on epic-15)
   app-5-1-rotated-areaspec-argv-and-regions-plumbing: backlog

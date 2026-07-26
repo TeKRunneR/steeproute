@@ -52,8 +52,15 @@ Planning lives under `_bmad-output/planning-artifacts/`:
   — it's a real, valid ceiling value, not a "disable" flag. `--area-cap`
   *can't* be disabled with `0`: the check rejects any area strictly greater
   than the cap and area is never negative, so `0` would reject every
-  selection — `100000` km² (~178 km radius) is a practical no-op ceiling
-  instead. Do **not** lower `--theta` below its 0.20 default — the
+  selection — `100000` km² (~158 km radius) is a practical no-op ceiling
+  instead. Since Story 15.3 the cap measures the **true box area**
+  (`width × height`), not the old `π·r²` disk proxy, so a given cap admits a
+  smaller radius than it used to: `500` admits 11.18 km rather than 12.61 km,
+  and `100000` admits 158 km rather than 178 km. The area itself is either
+  `--radius R` (centered `2R × 2R` square) or `--width W --height H`
+  (full dimensions), with an optional `--angle` bearing on either; the two
+  spellings are mutually exclusive and both CLIs take the identical set.
+  Do **not** lower `--theta` below its 0.20 default — the
   route-level average-slope floor is intentionally limiting; that's the whole
   point of the tool. (The web App's query config form mirrors these as its
   quality-demo defaults — `cli_adapter/params_schema.py`.)

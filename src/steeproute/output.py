@@ -29,7 +29,7 @@ from typing import Any
 
 import jinja2
 
-from steeproute.cache import write_json_atomic, write_text_atomic
+from steeproute.cache import area_polygon, write_json_atomic, write_text_atomic
 from steeproute.models import (
     Area,
     ContractedGraph,
@@ -77,8 +77,8 @@ def render(
             violations. Drives both the per-route reports and the banner logic.
         base_graph: the post-stage-7 operational `MultiDiGraph` carrying the
             `vertices_resampled` edge attribute used for map + profile geometry.
-        area: the query search area (center + bbox half-side). Its `2*radius_km`
-            square is drawn as a thin overlay rectangle on the HTML map only; it
+        area: the query search area (a possibly rotated rectangle). Its true
+            footprint is drawn as a thin overlay polygon on the HTML map only; it
             does not affect the JSON sidecar, metadata, or provenance.
         contracted: the `ContractedGraph` the solver/validator ran on; its
             `super_edge_to_base` expands super-edges to their base edges.
@@ -101,7 +101,7 @@ def render(
     leaflet_css = _load_asset(_LEAFLET_CSS_ASSET)
     leaflet_js = _load_asset(_LEAFLET_JS_ASSET)
     chart_js = _load_asset(_CHARTJS_JS_ASSET)
-    search_bbox = _search_bbox(area)
+    search_polygon = _search_polygon(area)
 
     for idx0, route in enumerate(validated_set.routes):
         display_index = idx0 + 1
@@ -139,9 +139,10 @@ def render(
             route_geojson=_geojson(vertices),
             profile_distances=distances,
             profile_elevations=elevations,
-            # The 2*radius_km query bbox, drawn as a thin overlay rectangle on the
-            # map (HTML only). Visual-only — see `_search_bbox`.
-            search_bbox=search_bbox,
+            # The query area's true (possibly rotated) footprint, drawn as a thin
+            # overlay polygon on the map (HTML only). Visual-only — see
+            # `_search_polygon`.
+            search_polygon=search_polygon,
         )
         sidecar = {
             "route_index": display_index,
@@ -285,31 +286,28 @@ def _extend_dedup(
         acc.append(vert)
 
 
-def _search_bbox(area: Area) -> dict[str, float]:
-    """The query area's `2*radius_km` bbox as `{south, west, north, east}` degrees.
+def _search_polygon(area: Area) -> list[list[float]]:
+    """The query area's true footprint as Leaflet `[[lat, lon], ...]` corners.
 
-    `radius_km` is the bbox half-side (models.py `Area`), so the square spans
-    `center ± radius_km` per side. An equirectangular delta is used — this drives
-    a visual-only overlay rectangle on the map and need not byte-match osmnx's
-    bbox: `dlat = radius_km/111.32`, `dlon = radius_km/(111.32*cos(lat))`.
+    Derived from `cache.area_polygon` — the one ring that coverage tests
+    containment against and that `bounds.geojson` records — so the overlay draws
+    exactly the region that was searched, rotation included.
 
-    **Envelope-leak audit (Story 15.2), deferred to Story 15.3 which owns the
-    overlay.** This is square-only on two counts: it reads the scalar `radius_km`
-    (an inert `0.0` for a rotated area, so the overlay would collapse to a point)
-    and it draws an axis-aligned rectangle, which cannot represent a rotated box.
-    It also uses its own `111.32` constant rather than `cache._DEG_PER_KM_LAT`, so
-    it is already a second projection source. Not reachable with a rotated area
-    today — no CLI path constructs one until 15.3 adds the flags.
+    **Story 15.3 closes the envelope leak** the audit left here. The old
+    `_search_bbox` was square-only twice over: it read the scalar `radius_km` (an
+    inert `0.0` for a rotated area, collapsing the overlay to a point) and it
+    emitted an axis-aligned `{south, west, north, east}` box, which cannot
+    represent a rotated rectangle. It also carried its own `111.32` deg/km
+    constant, a second projection source; sharing `area_polygon`'s `1/111` frame
+    removes that and shifts a square's drawn rectangle by ~0.3% — visual-only, and
+    the JSON sidecar never carried the box at all.
+
+    `area_polygon` returns `(lon, lat)` per RFC 7946 with the first vertex
+    repeated to close the ring; Leaflet wants `[lat, lon]` and closes an
+    `L.polygon` itself, so both are converted here.
     """
-    lat, lon = area.center
-    dlat = area.radius_km / 111.32
-    dlon = area.radius_km / (111.32 * math.cos(math.radians(lat)))
-    return {
-        "south": lat - dlat,
-        "west": lon - dlon,
-        "north": lat + dlat,
-        "east": lon + dlon,
-    }
+    ring = list(area_polygon(area).exterior.coords)[:-1]  # drop the closing vertex
+    return [[lat, lon] for lon, lat in ring]
 
 
 def _geojson(vertices: list[tuple[float, float, float]]) -> dict[str, Any]:

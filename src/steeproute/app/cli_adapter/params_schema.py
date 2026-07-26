@@ -31,14 +31,31 @@ from steeproute.cli.query import cli as _query_cli
 FieldType = Literal["float", "int", "string", "bool", "choice"]
 
 # Flags the App owns instead of exposing on the form: the map selection
-# (center/radius), server-controlled paths (output-dir, cache-dir),
+# (center/radius, plus the Story 15.3 rotated-rectangle spelling
+# width/height/angle), server-controlled paths (output-dir, cache-dir),
 # CLI-operational flags that don't belong on a route-param form (verbose,
 # quiet), and click's own `--version` eager flag (added by
 # `@click.version_option`, present in `cli.params` like any other Option —
 # caught live in this story's browser drive-through, where it first showed up
 # as a bogus "version" checkbox on the rendered form).
+#
+# The schema is a live introspection of `cli.query`, so **every** area flag must
+# be listed here or it renders as a stray numeric field on the query form. The
+# map owns area selection end to end; App Story 5.1 is what teaches the picker
+# and the argv builder to emit the rotated spelling.
 _EXCLUDED_FIELDS: frozenset[str] = frozenset(
-    {"center", "radius", "output_dir", "cache_dir", "verbose", "quiet", "version"}
+    {
+        "center",
+        "radius",
+        "width",
+        "height",
+        "angle",
+        "output_dir",
+        "cache_dir",
+        "verbose",
+        "quiet",
+        "version",
+    }
 )
 
 # Quality-demo overrides (AGENTS.md §Solver / GRASP): the App's defaults are
@@ -46,10 +63,10 @@ _EXCLUDED_FIELDS: frozenset[str] = frozenset(
 # Every field not listed here keeps its CLI default unchanged.
 #
 # `area_cap` can't be "disabled" with 0 — `validate_area_size` rejects any
-# area strictly greater than the cap, and a disk area is never negative, so
-# `--area-cap 0` would reject every selection. 100_000 km² (~178 km radius) is
-# large enough to be a no-op for this personal-tool use case while still
-# catching an obvious typo.
+# area strictly greater than the cap, and a box area is never negative, so
+# `--area-cap 0` would reject every selection. 100_000 km² (~158 km radius,
+# measuring the true `width × height` box since Story 15.3) is large enough to
+# be a no-op for this personal-tool use case while still catching an obvious typo.
 #
 # `max_descent_slope` (0.4) and `start_at_junction` (on) are steep-route-tool
 # defaults corrected in Story app-4-2: the CLI ships them off/false, but the

@@ -9,6 +9,9 @@ from steeproute.cli.setup import cli as setup_cli
 QUERY_FLAGS = [
     "--center",
     "--radius",
+    "--width",
+    "--height",
+    "--angle",
     "--theta",
     "--min-climb-slope",
     "--difficulty-cap",
@@ -38,6 +41,9 @@ QUERY_FLAGS = [
 SETUP_FLAGS = [
     "--center",
     "--radius",
+    "--width",
+    "--height",
+    "--angle",
     "--untagged-trails",
     "--verbose",
     "--quiet",
@@ -111,6 +117,20 @@ def test_query_help_l_connector_describes_reuse_exemption() -> None:
     normalized = " ".join(result.output.split())
     assert "reuse-exemption threshold" in normalized
     assert "in both directions" in normalized
+
+
+def test_area_surface_is_identical_on_both_clis() -> None:
+    """FR23 (Story 15.3): setup and query expose exactly the same area flags.
+
+    Asserted as a set comparison rather than per-flag membership so a flag added
+    to one CLI and forgotten on the other fails here, not in a user's shell.
+    """
+    runner = CliRunner()
+    area_flags = {"--center", "--radius", "--width", "--height", "--angle"}
+    query_out = runner.invoke(query_cli, ["--help"]).output
+    setup_out = runner.invoke(setup_cli, ["--help"]).output
+    assert {f for f in area_flags if f in query_out} == area_flags
+    assert {f for f in area_flags if f in setup_out} == area_flags
 
 
 def test_query_version_exits_zero() -> None:

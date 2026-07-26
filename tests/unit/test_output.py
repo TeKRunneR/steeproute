@@ -19,6 +19,7 @@ import networkx as nx
 import pytest
 
 from steeproute import output
+from steeproute.cache import area_bbox_wgs84
 from steeproute.models import (
     Area,
     ConstraintViolation,
@@ -151,11 +152,12 @@ def _render(
     set_violations: list[PairwiseViolation] | None = None,
     *,
     degradation: str | None = None,
+    area: Area | None = None,
 ) -> None:
     output.render(
         ValidatedRouteSet(routes=routes, set_violations=set_violations or []),
         _base_graph(),
-        _AREA,
+        area if area is not None else _AREA,
         _contracted(),
         _PARAMS,
         _PROVENANCE,
@@ -378,17 +380,44 @@ def test_map_and_profile_hover_linking_wired(tmp_path: pathlib.Path) -> None:
 
 
 def test_search_area_overlay_wired(tmp_path: pathlib.Path) -> None:
-    """The 2*radius_km query bbox is drawn as an L.rectangle from the injected bbox."""
+    """The query area is drawn as an L.polygon from the injected ring (Story 15.3)."""
     _render(tmp_path, [_route()])
     html = (tmp_path / "route-1.html").read_text(encoding="utf-8")  # raw: overlay is in a <script>
-    assert "L.rectangle" in html
-    assert "searchBbox" in html
-    # The injected bbox carries the area center's degrees (equirectangular deltas).
-    # 45.115 ± 2.0/111.32 -> south ~45.097, north ~45.133 (full float in tojson).
-    assert "45.09703377650018" in html  # south
-    assert "45.13296622349982" in html  # north
+    assert "L.polygon" in html
+    assert "searchPolygon" in html
+    # The ring comes from `cache.area_polygon` — the same geometry coverage tests
+    # against — so a square still spans center ± radius_km in the shared km frame.
+    south, west, north, east = area_bbox_wgs84(_AREA)
+    for corner in (south, west, north, east):
+        assert repr(corner) in html
     # Initial view stays fitted to the ROUTE, not the box.
     assert "line.getBounds()" in html
+
+
+def test_search_area_overlay_draws_the_true_rotated_box(tmp_path: pathlib.Path) -> None:
+    """Story 15.3 AC #6: a rotated area draws its real corners, not an axis-aligned proxy.
+
+    The envelope-leak guard: every emitted corner must lie strictly inside the
+    axis-aligned envelope on at least one axis (a rotated rectangle touches its
+    envelope only at the four extreme points), and no corner may lie outside it.
+    """
+    rotated = Area(
+        center=(45.115, 6.115), radius_km=0.0, half_width_km=3.0, half_height_km=1.0, angle_deg=35.0
+    )
+    _render(tmp_path, [_route()], area=rotated)
+    html = (tmp_path / "route-1.html").read_text(encoding="utf-8")  # raw: overlay is in a <script>
+    ring = json.loads(html.split("const searchPolygon = ")[1].split(";\n")[0])
+
+    assert len(ring) == 4, "a rectangle overlay is four corners (no repeated closing vertex)"
+    south, west, north, east = area_bbox_wgs84(rotated)
+    for lat, lon in ring:
+        assert south <= lat <= north
+        assert west <= lon <= east
+    # An axis-aligned proxy would put all four corners ON the envelope; a rotated
+    # box has no corner sitting at an envelope *corner*.
+    assert not any(
+        lat in (south, north) and lon in (west, east) for lat, lon in ring
+    ), "overlay collapsed to the axis-aligned envelope"
 
 
 def test_slope_tooltip_and_diverging_coloring_wired(tmp_path: pathlib.Path) -> None:

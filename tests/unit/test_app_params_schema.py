@@ -26,6 +26,9 @@ def test_excluded_fields_are_absent() -> None:
     for excluded in (
         "center",
         "radius",
+        "width",
+        "height",
+        "angle",
         "output_dir",
         "cache_dir",
         "verbose",
@@ -33,6 +36,26 @@ def test_excluded_fields_are_absent() -> None:
         "version",
     ):
         assert excluded not in fields
+
+
+def test_no_area_flag_leaks_onto_the_form() -> None:
+    """Story 15.3: the map owns area selection, so no area flag may become a field.
+
+    Stronger than the name-by-name list above: it re-derives the area flags from
+    the CLI's own option surface, so a *future* area flag added to `cli/query.py`
+    and forgotten in `_EXCLUDED_FIELDS` fails here rather than rendering as a
+    stray numeric box on the query form.
+    """
+    area_flags = {"--center", "--radius", "--width", "--height", "--angle"}
+    area_field_names = {
+        param.name
+        for param in query_cli.params
+        if param.name is not None and area_flags & set(param.opts)
+    }
+    assert area_field_names == {"center", "radius", "width", "height", "angle"}, (
+        "the CLI's area surface changed - update this test and `_EXCLUDED_FIELDS`"
+    )
+    assert not area_field_names & _schema_by_name().keys()
 
 
 def test_quality_demo_defaults_override_cli_defaults() -> None:

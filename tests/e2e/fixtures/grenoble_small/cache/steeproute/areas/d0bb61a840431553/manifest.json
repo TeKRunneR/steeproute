@@ -1,0 +1,21 @@
+{
+  "area": {
+    "angle_deg": 45.0,
+    "center": [
+      45.26,
+      5.788
+    ],
+    "half_height_km": 1.0,
+    "half_width_km": 1.7,
+    "mode": "center_extents_angle"
+  },
+  "cache_key_hash": "d0bb61a840431553",
+  "created_at": "2026-07-26T09:15:22Z",
+  "dem_version": "ign-rgealti-highres",
+  "osm_extract_date": "2026-07-26T09:15:22Z",
+  "pipeline_content_hash": "ad1f159ee7136ce2ce9c7a634d691907c673d4d3bac01e1e0b410f38a4d90ee9",
+  "schema_version": 3,
+  "steeproute_commit": "eaa09c7-dirty",
+  "steeproute_version": "0.0.1.dev122+2cbcf8d",
+  "untagged_policy": "include"
+}

@@ -13,13 +13,32 @@ from steeproute.cli._shared import (
     LAT_LON,
     ensure_output_dir,
     is_verbose,
+    resolve_area,
     validate_area_size,
+    validate_setup_area,
     validate_solver_options,
 )
 from steeproute.cli.query import cli as query_cli
 from steeproute.cli.query import main as query_main
 from steeproute.cli.setup import cli as setup_cli
 from steeproute.errors import BadCLIArgError, CacheNotFoundError
+from steeproute.models import Area
+
+_CENTER = (45.0716, 6.1079)
+
+
+def _resolve(
+    *,
+    radius: float | None = None,
+    width: float | None = None,
+    height: float | None = None,
+    angle: float = 0.0,
+    center: tuple[float, float] = _CENTER,
+) -> Area:
+    """`resolve_area` with the CLI's keyword names, defaulted for brevity."""
+    return resolve_area(
+        center=center, radius_km=radius, width_km=width, height_km=height, angle_deg=angle
+    )
 
 # --- LatLonParamType: range validation + BadCLIArgError surfacing (AC #1) ---
 
@@ -51,30 +70,213 @@ def test_lat_lon_convert_accepts_boundary_values() -> None:
     assert LAT_LON.convert("-90.0,-180.0", None, None) == (-90.0, -180.0)
 
 
-# --- validate_area_size: AC #2 message format ---
+# --- resolve_area: the shared area surface (Story 15.3 AC #1/#2/#3) ---
+
+
+def test_resolve_area_radius_builds_the_v1_square() -> None:
+    """AC #2: `--radius` constructs exactly the pre-Epic-15 `Area` — no extents stored.
+
+    Storing `radius_km` literally (rather than equal explicit extents) is what
+    keeps the manifest `area` block, the fetch call, and every square message
+    byte-identical.
+    """
+    assert _resolve(radius=6.0) == Area(center=_CENTER, radius_km=6.0)
+
+
+def test_resolve_area_width_height_are_full_dimensions() -> None:
+    """AC #1: `--width`/`--height` are box dimensions; `Area` stores half-extents."""
+    area = _resolve(width=16.0, height=6.0, angle=35.0)
+    assert area.half_extents_km == (8.0, 3.0)
+    assert area.angle_deg == 35.0
+    # A rotated area's `radius_km` is inert — the extents drive the geometry.
+    assert area.radius_km == 0.0
+    assert not area.is_square
+
+
+def test_resolve_area_angle_with_radius_is_a_rotated_square() -> None:
+    """AC #1: `--angle` rotates either spelling; a rotated square is a legal shape."""
+    area = _resolve(radius=4.0, angle=30.0)
+    assert area.half_extents_km == (4.0, 4.0)
+    assert area.angle_deg == 30.0
+    # `is_square` means "v1-equivalent" (axis-aligned), so a rotated square is not one —
+    # it correctly takes the polygon fetch path.
+    assert not area.is_square
+
+
+def test_resolve_area_equal_extents_stay_square() -> None:
+    """A square spelled as equal extents is still `is_square` (axis-aligned, equal)."""
+    assert _resolve(width=12.0, height=12.0).is_square
+
+
+def test_resolve_area_rejects_no_size_at_all() -> None:
+    """AC #1: `--radius` is no longer click-required, so the resolver owns the check."""
+    with pytest.raises(BadCLIArgError) as exc_info:
+        _resolve()
+    msg = exc_info.value.user_message
+    assert "--radius" in msg
+    assert "--width" in msg
+
+
+def test_resolve_area_rejects_radius_combined_with_extents() -> None:
+    """AC #1: the two spellings are mutually exclusive."""
+    with pytest.raises(BadCLIArgError) as exc_info:
+        _resolve(radius=5.0, width=10.0, height=4.0)
+    assert "--radius" in exc_info.value.user_message
+
+
+@pytest.mark.parametrize(
+    ("width", "height"),
+    [(10.0, None), (None, 4.0)],
+)
+def test_resolve_area_rejects_partial_extents(width: float | None, height: float | None) -> None:
+    """AC #1: one dimension alone is not a rectangle."""
+    with pytest.raises(BadCLIArgError) as exc_info:
+        _resolve(width=width, height=height)
+    msg = exc_info.value.user_message
+    assert "--width" in msg
+    assert "--height" in msg
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_resolve_area_rejects_non_finite_angle(bad: float) -> None:
+    """AC #3: a non-finite bearing yields NaN corners and an unusable polygon."""
+    with pytest.raises(BadCLIArgError) as exc_info:
+        _resolve(radius=5.0, angle=bad)
+    assert "--angle" in exc_info.value.user_message
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf"), 0.0, -1.0])
+def test_resolve_area_rejects_bad_radius_naming_radius(bad: float) -> None:
+    """AC #3: diagnostics name `--radius` when the size was spelled as a radius."""
+    with pytest.raises(BadCLIArgError) as exc_info:
+        _resolve(radius=bad)
+    msg = exc_info.value.user_message
+    assert "--radius" in msg
+    assert "--width" not in msg
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), 0.0, -1.0])
+@pytest.mark.parametrize("flag", ["--width", "--height"])
+def test_resolve_area_rejects_bad_extent_naming_that_flag(flag: str, bad: float) -> None:
+    """AC #3: a bad dimension is reported against the dimension flag the user typed."""
+    width, height = (bad, 4.0) if flag == "--width" else (4.0, bad)
+    with pytest.raises(BadCLIArgError) as exc_info:
+        _resolve(width=width, height=height)
+    msg = exc_info.value.user_message
+    assert flag in msg
+    assert "--radius" not in msg
+
+
+def test_resolve_area_rejects_bad_radius_even_under_a_bearing() -> None:
+    """AC #3: the bearing must not decide which flag a size error names.
+
+    A rotated square is a legitimate `--radius --angle` pair; reporting its bad
+    radius as a `--width` problem would name a flag the user never typed.
+    """
+    with pytest.raises(BadCLIArgError) as exc_info:
+        _resolve(radius=-1.0, angle=30.0)
+    assert "--radius" in exc_info.value.user_message
+
+
+def test_resolve_area_rejects_out_of_range_center() -> None:
+    """AC #3: the center guard also applies to direct (non-click) callers."""
+    with pytest.raises(BadCLIArgError) as exc_info:
+        _resolve(radius=5.0, center=(95.0, 0.0))
+    assert "latitude" in exc_info.value.user_message
+
+
+# --- validate_area_size: FR2 true-rectangle-area cap (Story 15.3 AC #4) ---
 
 
 def test_validate_area_size_passes_below_cap() -> None:
     """Area strictly below the cap is silently accepted."""
-    validate_area_size(radius_km=10.0, area_cap_km2=500.0)
+    validate_area_size(_resolve(radius=10.0), area_cap_km2=500.0)
 
 
 def test_validate_area_size_passes_just_below_cap() -> None:
-    """Values strictly below the cap are accepted; the comparison is exact (no FP slack)."""
-    radius = math.sqrt(500.0 / math.pi) * 0.999
-    validate_area_size(radius_km=radius, area_cap_km2=500.0)
+    """Values strictly below the cap are accepted; the comparison is exact (no FP slack).
+
+    The cap measures the **true** rectangle area (`2r × 2r = 4r²`), so the
+    boundary radius is `sqrt(cap/4)` — not the pre-Epic-15 `sqrt(cap/π)` disk
+    proxy (which admitted boxes ~27% over the cap).
+    """
+    radius = math.sqrt(500.0 / 4.0) * 0.999
+    validate_area_size(_resolve(radius=radius), area_cap_km2=500.0)
+
+
+def test_validate_area_size_uses_true_rectangle_area_not_disk_proxy() -> None:
+    """AC #4: a radius the `π·r²` proxy admitted is now correctly rejected."""
+    radius = math.sqrt(500.0 / math.pi) * 0.999  # ~499.5 km² as a disk, ~635 km² as a box
+    with pytest.raises(BadCLIArgError):
+        validate_area_size(_resolve(radius=radius), area_cap_km2=500.0)
 
 
 def test_validate_area_size_rejects_above_cap() -> None:
     """Area exceeding the cap raises BadCLIArgError naming --radius and --area-cap."""
     with pytest.raises(BadCLIArgError) as exc_info:
-        validate_area_size(radius_km=30.0, area_cap_km2=500.0)
+        validate_area_size(_resolve(radius=30.0), area_cap_km2=500.0)
     msg = exc_info.value.user_message
     assert "--radius" in msg
     assert "30" in msg
     assert "--area-cap" in msg
     assert "500" in msg
     assert "km" in msg
+    # True rectangle area (60x60), not the old π·30² ≈ 2827 disk proxy.
+    assert "3600" in msg
+
+
+def test_validate_area_size_rejects_oversize_rectangle_naming_its_own_flags() -> None:
+    """AC #4: a rotated box's rejection is copy-pasteable, never a bogus `--radius`."""
+    with pytest.raises(BadCLIArgError) as exc_info:
+        validate_area_size(_resolve(width=40.0, height=30.0, angle=25.0), area_cap_km2=500.0)
+    msg = exc_info.value.user_message
+    assert "--width 40" in msg
+    assert "--height 30" in msg
+    assert "--angle 25" in msg
+    assert "1200" in msg  # 40 x 30
+    assert "--radius" not in msg
+
+
+def test_validate_area_size_area_is_bearing_independent() -> None:
+    """Rotation preserves area, so the cap verdict cannot depend on `--angle`."""
+    validate_area_size(_resolve(width=20.0, height=20.0, angle=37.0), area_cap_km2=401.0)
+    with pytest.raises(BadCLIArgError):
+        validate_area_size(_resolve(width=20.0, height=20.0, angle=37.0), area_cap_km2=399.0)
+
+
+# --- validate_setup_area: shape-aware setup ceiling (Story 15.3 AC #5) ---
+
+
+def test_validate_setup_area_accepts_at_the_ceiling() -> None:
+    """The 50 km half-side ceiling is inclusive, unchanged from Story 2.8."""
+    validate_setup_area(_resolve(radius=50.0))
+
+
+def test_validate_setup_area_rejects_radius_above_ceiling() -> None:
+    """Square wording and threshold are unchanged (byte-identical to pre-Epic-15)."""
+    with pytest.raises(BadCLIArgError) as exc_info:
+        validate_setup_area(_resolve(radius=60.0))
+    msg = exc_info.value.user_message
+    assert msg == "--radius 60 km exceeds the steeproute-setup ceiling of 50 km."
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "flag"),
+    [(120.0, 10.0, "--width"), (10.0, 120.0, "--height")],
+)
+def test_validate_setup_area_rejects_oversize_dimension(
+    width: float, height: float, flag: str
+) -> None:
+    """AC #5: the ceiling generalizes per dimension, expressed as a full 100 km span."""
+    with pytest.raises(BadCLIArgError) as exc_info:
+        validate_setup_area(_resolve(width=width, height=height))
+    msg = exc_info.value.user_message
+    assert msg.startswith(f"{flag} 120 km exceeds the steeproute-setup ceiling of 100 km.")
+
+
+def test_validate_setup_area_accepts_a_long_thin_rotated_box() -> None:
+    """A 100x20 km box is exactly the square ceiling's span — the point of the epic."""
+    validate_setup_area(_resolve(width=100.0, height=20.0, angle=45.0))
 
 
 # --- validate_solver_options: §Cat 10 CLI-boundary guards (Story 3.11 review) ---
@@ -340,7 +542,7 @@ def test_query_cli_happy_path_passes_parsing_then_hits_coverage_check(
 
 
 def test_query_cli_rejects_radius_exceeding_area_cap() -> None:
-    """π·r² > --area-cap surfaces BadCLIArgError."""
+    """True rectangle area > --area-cap surfaces BadCLIArgError."""
     runner = CliRunner()
     result = runner.invoke(query_cli, ["--center", "45.0716,6.1079", "--radius", "30"])
     assert isinstance(result.exception, BadCLIArgError)
@@ -356,7 +558,7 @@ def test_query_cli_accepts_radius_just_below_custom_cap(tmp_path: pathlib.Path) 
     than a `BadCLIArgError` from the cap.
     """
     runner = CliRunner()
-    radius = math.sqrt(100.0 / math.pi) * 0.999
+    radius = math.sqrt(100.0 / 4.0) * 0.999
     result = runner.invoke(
         query_cli,
         [
@@ -372,6 +574,117 @@ def test_query_cli_accepts_radius_just_below_custom_cap(tmp_path: pathlib.Path) 
     )
     # Area-cap passed (no BadCLIArgError); coverage check then raises.
     assert isinstance(result.exception, CacheNotFoundError)
+
+
+# --- Both CLIs share one area surface (Story 15.3 AC #1) ---
+
+
+@pytest.mark.parametrize("cli_name", ["query", "setup"])
+def test_both_clis_reject_missing_area(cli_name: str) -> None:
+    """`--radius` is no longer click-required; the shared resolver rejects "no area"."""
+    runner = CliRunner()
+    cli = query_cli if cli_name == "query" else setup_cli
+    result = runner.invoke(cli, ["--center", "45.0716,6.1079"])
+    assert isinstance(result.exception, BadCLIArgError)
+    assert "--width" in result.exception.user_message
+
+
+@pytest.mark.parametrize("cli_name", ["query", "setup"])
+def test_both_clis_reject_radius_combined_with_extents(cli_name: str) -> None:
+    """FR23: the mutual-exclusion rule is identical on both CLIs."""
+    runner = CliRunner()
+    cli = query_cli if cli_name == "query" else setup_cli
+    result = runner.invoke(
+        cli, ["--center", "45.0716,6.1079", "--radius", "5", "--width", "8", "--height", "4"]
+    )
+    assert isinstance(result.exception, BadCLIArgError)
+    assert "--radius" in result.exception.user_message
+
+
+def test_query_cli_accepts_a_rotated_rectangle(tmp_path: pathlib.Path) -> None:
+    """AC #1: a rotated box parses and reaches the coverage check (not a parse error).
+
+    With an isolated empty `--cache-dir`, reaching `CacheNotFoundError` proves the
+    area surface was accepted and an `Area` was built.
+    """
+    runner = CliRunner()
+    result = runner.invoke(
+        query_cli,
+        [
+            "--center",
+            "45.0716,6.1079",
+            "--width",
+            "16",
+            "--height",
+            "6",
+            "--angle",
+            "35",
+            "--cache-dir",
+            str(tmp_path),
+        ],
+    )
+    assert isinstance(result.exception, CacheNotFoundError)
+
+
+def test_query_cli_rotated_coverage_miss_suggests_matching_flags(tmp_path: pathlib.Path) -> None:
+    """AC #7: the suggested `steeproute-setup` command is copy-pasteable, not `--radius 0`."""
+    runner = CliRunner()
+    result = runner.invoke(
+        query_cli,
+        [
+            "--center",
+            "45.0716,6.1079",
+            "--width",
+            "16",
+            "--height",
+            "6",
+            "--angle",
+            "35",
+            "--cache-dir",
+            str(tmp_path),
+        ],
+    )
+    assert isinstance(result.exception, CacheNotFoundError)
+    msg = result.exception.user_message
+    assert "--width 16 --height 6 --angle 35" in msg
+    assert "--radius" not in msg
+
+
+def test_setup_cli_builds_a_rotated_area(tmp_path: pathlib.Path) -> None:
+    """AC #1: setup accepts the same surface and hands the rotated `Area` to stage 1.
+
+    `osm_load` is patched with a sentinel, so this proves the flags reached area
+    construction without any network work.
+    """
+    from unittest.mock import patch
+
+    runner = CliRunner()
+    captured: list[Area] = []
+
+    def _capture(area: Area) -> None:
+        captured.append(area)
+        raise RuntimeError("reached OSM download")
+
+    with patch("steeproute.pipeline.osm_load", side_effect=_capture):
+        runner.invoke(
+            setup_cli,
+            [
+                "--center",
+                "45.0716,6.1079",
+                "--width",
+                "16",
+                "--height",
+                "6",
+                "--angle",
+                "35",
+                "--cache-dir",
+                str(tmp_path),
+            ],
+            catch_exceptions=True,
+        )
+    assert captured, "stage 1 was never reached"
+    assert captured[0].half_extents_km == (8.0, 3.0)
+    assert captured[0].angle_deg == 35.0
 
 
 def test_query_cli_rejects_malformed_center() -> None:
@@ -402,7 +715,7 @@ def test_setup_cli_inherits_lat_lon_range_validation() -> None:
 
 
 def test_setup_cli_rejects_nan_radius() -> None:
-    """validate_setup_radius rejects non-finite radii (NaN, ±Inf).
+    """`resolve_area` rejects non-finite radii (NaN, ±Inf).
 
     `click.FLOAT` accepts the strings "nan", "inf", "-inf" via `float()`. Without
     an explicit finiteness check, `nan` slips past every comparison (IEEE-754),
@@ -447,10 +760,10 @@ def test_setup_cli_rejects_non_positive_dem_fetch_workers() -> None:
 def test_setup_cli_does_not_enforce_area_cap(tmp_path: pathlib.Path) -> None:
     """Setup CLI has no --area-cap flag and does not call validate_area_size.
 
-    A 30 km radius (~2827 km²) would be rejected by the query CLI's default cap of 500 km²,
-    but setup accepts it because area-cap enforcement is query-only. The setup CLI does
-    apply its own `validate_setup_radius` ceiling (Story 2.8), set at 50 km — 30 is below
-    that. We patch `osm_load` (the first pipeline step) with a sentinel: any area-cap
+    A 30 km radius (3600 km² as a true box) would be rejected by the query CLI's default
+    cap of 500 km², but setup accepts it because area-cap enforcement is query-only. The
+    setup CLI does apply its own `validate_setup_area` ceiling (Story 2.8), set at a 50 km
+    half-side — 30 is below that. We patch `osm_load` (the first pipeline step) with a sentinel: any area-cap
     check would raise `BadCLIArgError` at the CLI boundary before the pipeline starts,
     so the sentinel propagating proves the 30 km radius passed validation with no
     area-cap rejection — without ever touching the network. (Patching a later step

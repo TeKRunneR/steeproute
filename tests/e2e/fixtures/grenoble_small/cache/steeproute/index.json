@@ -10,6 +10,19 @@
         "radius_km": 2.0
       },
       "cache_key_hash": "4c348169d4d0bb0c"
+    },
+    {
+      "area": {
+        "angle_deg": 45.0,
+        "center": [
+          45.26,
+          5.788
+        ],
+        "half_height_km": 1.0,
+        "half_width_km": 1.7,
+        "mode": "center_extents_angle"
+      },
+      "cache_key_hash": "d0bb61a840431553"
     }
   ],
   "schema_version": 1
