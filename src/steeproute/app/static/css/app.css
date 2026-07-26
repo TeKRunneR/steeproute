@@ -196,6 +196,23 @@ body {
   margin: 0;
 }
 
+/* Low-emphasis inline action (Story app-5-2 "Reset to square") — deliberately not
+   a `.primary-btn`: it must not compete with Build / Configure query. */
+.link-btn {
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0 0 1rem;
+  color: #2b6cb0;
+  font-size: 0.85rem;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.link-btn:hover {
+  color: #245a94;
+}
+
 /* Draggable radius handle — a divIcon (no marker-image asset needed). */
 .map-handle {
   width: 16px;
@@ -205,6 +222,25 @@ body {
   border: 2px solid #fff;
   box-shadow: 0 0 0 1px #2b6cb0;
   cursor: ew-resize;
+}
+
+/* Second dimension handle (Story app-5-2): same chip as the width handle, with a
+   ns-resize cursor so the two read as "this axis" vs. "that axis". */
+.map-handle-height {
+  cursor: ns-resize;
+}
+
+/* Rotation handle (Story app-5-2) — a distinct round amber grip outside the box's
+   height-axis edge (not necessarily the longer edge), so it doesn't read as
+   another dimension. */
+.map-rotate-handle {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #b0592b;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px #b0592b;
+  cursor: grab;
 }
 
 /* Draggable center handle for move-selection mode (Story 4.1) — a distinct

@@ -28,7 +28,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-07-26  # dev-story app-5-1 -> review
+last_updated: 2026-07-26  # code-review app-5-2 -> done; app-epic-5 -> done
 
 project: bmad-test
 project_key: NOKEY
@@ -193,9 +193,9 @@ development_status:
   15-2-rotated-setup-fetch-cache-schema-and-coverage: done
   15-3-cli-flag-surface-validation-and-render-overlay: done
 
-  app-epic-5: in-progress # Rotated-Rectangle Map Selection (depends on epic-15)
+  app-epic-5: done        # Rotated-Rectangle Map Selection (depends on epic-15)
   app-5-1-rotated-areaspec-argv-and-regions-plumbing: done
-  app-5-2-map-picker-rotation-and-dimension-handles: backlog
+  app-5-2-map-picker-rotation-and-dimension-handles: done
 
   # ---------------------------------------------------------------------------
   # Ownership-oriented performance pass (correct-course 2026-07-24, from

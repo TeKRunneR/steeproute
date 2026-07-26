@@ -45,16 +45,24 @@
           </label>
         </fieldset>
         <p id="picker-hint" class="picker-hint">
-          Click the map to drop a center, then drag the handle to set the radius.
+          Click the map to drop a center, then drag ↔ to size it, ↕ for a second
+          dimension, and ⟳ to rotate.
         </p>
         <dl id="selection-readout" class="selection-readout" hidden>
           <dt>Center</dt>
           <dd id="sel-center">—</dd>
-          <dt>Radius (bbox half-side)</dt>
-          <dd id="sel-radius">—</dd>
+          <!-- Shape, not "radius": since CLI Epic 15 the area is a possibly
+               rotated rectangle, which has no single radius (Story app-5-2). -->
+          <dt>Shape</dt>
+          <dd id="sel-shape">—</dd>
           <dt>Coverage</dt>
           <dd id="sel-coverage">—</dd>
         </dl>
+        <!-- Only shown once the selection is a rectangle/rotated box: returns it
+             to the centered-square spelling (Story app-5-2). -->
+        <button id="reset-square-btn" class="link-btn" type="button" hidden>
+          Reset to square
+        </button>
         <div class="picker-actions">
           <button id="build-btn" class="primary-btn" type="button" disabled>
             Build this region

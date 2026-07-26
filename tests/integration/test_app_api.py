@@ -581,6 +581,11 @@ def test_home_page_renders_map_and_actions() -> None:
     assert 'id="mode-control"' in body
     for value in ("area-pick", "move-selection", "select-region"):
         assert f'value="{value}"' in body
+    # Rotated-rectangle picker (Story app-5-2): the readout names the *shape*
+    # (a rotated box has no radius), and a box can be reset back to a square.
+    assert 'id="sel-shape"' in body
+    assert 'id="reset-square-btn"' in body
+    assert 'id="sel-radius"' not in body  # retired: radius-only label
     # Global chrome still present on the reworked home page.
     assert 'id="live-indicator"' in body
 
