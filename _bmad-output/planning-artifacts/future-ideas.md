@@ -122,7 +122,7 @@ and square are the `angle=0`/equal-extents cases. Arbitrary free-form polygons
 remain **out of scope** (per-query map-drawing cost not justified).
 
 # Misc
-* Fix CI
+* Fix CI ==> actually it's pretty much pointless for a personal tool with no build nor deployment, it should probably just be replaced by pre-commit hooks.
 * Remove area cap: I don't use that for anything, I typically just set it to a very high value so that it doesn't bother me
 * Change default query CLI values to be closer to what I actually use
 * Being able to delete cached areas
