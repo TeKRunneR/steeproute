@@ -272,7 +272,6 @@ def make_toy_solver_params(
         min_climb_ground_length=300.0,
         j_max=j_max,
         n=n,
-        area_cap=500.0,
         untagged_policy="include",
         seed=seed,
         iter_budget=iter_budget,

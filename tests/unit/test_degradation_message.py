@@ -24,7 +24,6 @@ def _params(
         min_climb_ground_length=300.0,
         j_max=0.30,
         n=n,
-        area_cap=500.0,
         untagged_policy="include",
         seed=42,
         iter_budget=100,

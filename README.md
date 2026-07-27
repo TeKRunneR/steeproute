@@ -74,7 +74,7 @@ the off-axis valleys out of the expensive setup phase:
 ```sh
 # A 30 x 10 km box along the SW-NE axis of the Belledonne range.
 uv run steeproute-setup --center 45.19,5.96 --width 30 --height 10 --angle 45
-uv run steeproute --center 45.19,5.96 --width 28 --height 9 --angle 45 --area-cap 100000
+uv run steeproute --center 45.19,5.96 --width 28 --height 9 --angle 45
 ```
 
 Both commands take the identical area flags. `--radius R` remains the shorthand for a
@@ -104,7 +104,6 @@ a performance guarantee.
 |---|---|---|
 | `--center` / `--radius` | area center `lat,lon` and radius in km (a `2R x 2R` square) | your area |
 | `--width` / `--height` / `--angle` | area as a rotated rectangle instead of a square — full dimensions in km plus a bearing in degrees | use when the terrain runs diagonally; keeps off-axis valley out of setup |
-| `--area-cap` | reject a query whose box area (`width x height`) exceeds this, in km² | `500` default; raise it (e.g. `100000`) for whole-range areas |
 | `--theta` | route-level average-slope floor every route must clear | `0.20` — this *is* the steepness bar; raise it for steeper routes, lower it to admit gentler ones |
 | `--difficulty-cap` | SAC hiking-scale ceiling for eligible trails | `T4` (the `T3` default filters out a lot of steep alpine terrain) |
 | `--start-at-junction` | require each route to start at a road/trail junction (a realistic trailhead) rather than mid-trail | off by default; turn it on for routes you'd actually set off on from a road |

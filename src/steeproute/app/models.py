@@ -170,7 +170,6 @@ class QueryParams(BaseModel):
     start_at_junction: bool | None = None
     max_descent_slope: float | None = None
     n: int | None = None
-    area_cap: float | None = None
     untagged_trails: Literal["include", "exclude"] | None = None
     seed: int | None = None
     iter_budget: int | None = None

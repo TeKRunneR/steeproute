@@ -52,7 +52,6 @@ def _params(*, n: int = 1, theta: float = _THETA, j_max: float = _J_MAX) -> Solv
         min_climb_ground_length=300.0,
         j_max=j_max,
         n=n,
-        area_cap=500.0,
         untagged_policy="include",
         seed=42,
         iter_budget=1000,

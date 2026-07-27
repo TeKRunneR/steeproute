@@ -43,7 +43,6 @@ _PARAMS = SolverParams(
     min_climb_ground_length=333.0,
     j_max=0.27,
     n=29,
-    area_cap=555.0,
     untagged_policy="exclude",
     seed=4242,
     iter_budget=1234,
@@ -73,7 +72,6 @@ _EXPECTED_METADATA_STRINGS = [
     "333.0",  # min_climb_ground_length
     "0.27",  # j_max
     "29",  # n
-    "555.0",  # area_cap
     "exclude",  # untagged_policy
     "4242",  # seed (FR29)
     "1234",  # iter_budget

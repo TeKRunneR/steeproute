@@ -234,7 +234,7 @@ class ContractedGraph:
 
 @dataclass(frozen=True, slots=True)
 class SolverParams:
-    """The 15 parameters every query records in its HTML/JSON metadata block (Architecture §Cat 9).
+    """The 14 parameters every query records in its HTML/JSON metadata block (Architecture §Cat 9).
 
     Field names match the CLI flag names verbatim so they double as the
     JSON-sidecar field names (`snake_case` per Architecture §"Serialization
@@ -257,7 +257,6 @@ class SolverParams:
       candidate climb to qualify (FR3/FR6).
     - `j_max`: pairwise Jaccard distinctness ceiling (FR11).
     - `n`: top-N route count (FR11).
-    - `area_cap`: maximum query-area radius (km); enforced at CLI parse time.
     - `untagged_policy`: matches `PipelineConfig.untagged_policy`; recorded
       here so the report's metadata block carries the full input fingerprint.
     - `seed`: explicit RNG seed (FR29); `None` only at the CLI-flag boundary
@@ -287,7 +286,6 @@ class SolverParams:
     min_climb_ground_length: float
     j_max: float
     n: int
-    area_cap: float
     untagged_policy: str
     seed: int | None
     iter_budget: int

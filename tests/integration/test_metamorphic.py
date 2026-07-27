@@ -471,7 +471,6 @@ def _descent_params(*, max_descent_slope: float | None, seed: int) -> SolverPara
         min_climb_ground_length=300.0,
         j_max=0.30,
         n=5,
-        area_cap=500.0,
         untagged_policy="include",
         seed=seed,
         iter_budget=_ITER_BUDGET,

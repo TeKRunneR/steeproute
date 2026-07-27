@@ -148,8 +148,6 @@ def build_query_argv(
         _format_number(resolved("j_max")),
         "--n",
         str(resolved("n")),
-        "--area-cap",
-        _format_number(resolved("area_cap")),
         "--untagged-trails",
         str(resolved("untagged_trails")),
         "--iter-budget",

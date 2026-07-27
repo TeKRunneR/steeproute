@@ -8,7 +8,6 @@ from click.testing import CliRunner
 from steeproute.cli._shared import (
     LAT_LON,
     LatLonParamType,
-    area_cap_option,
     cache_dir_option,
     center_option,
     dem_fetch_workers_option,
@@ -76,7 +75,6 @@ ALL_DECORATORS = [
     min_climb_ground_length_option,
     j_max_option,
     n_option,
-    area_cap_option,
     untagged_trails_option,
     seed_option,
     iter_budget_option,

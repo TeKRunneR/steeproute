@@ -62,12 +62,6 @@ _EXCLUDED_FIELDS: frozenset[str] = frozenset(
 # the high-quality manual-run params, not the CLI's fast-iteration defaults.
 # Every field not listed here keeps its CLI default unchanged.
 #
-# `area_cap` can't be "disabled" with 0 — `validate_area_size` rejects any
-# area strictly greater than the cap, and a box area is never negative, so
-# `--area-cap 0` would reject every selection. 100_000 km² (~158 km radius,
-# measuring the true `width × height` box since Story 15.3) is large enough to
-# be a no-op for this personal-tool use case while still catching an obvious typo.
-#
 # `max_descent_slope` (0.4) and `start_at_junction` (on) are steep-route-tool
 # defaults corrected in Story app-4-2: the CLI ships them off/false, but the
 # whole point of this tool is steep routes, so the App defaults them on. These
@@ -79,7 +73,6 @@ _QUALITY_DEFAULTS: dict[str, Any] = {
     "difficulty_cap": "T4",
     "elevation_deadband": 1.0,
     "j_max": 0.0,
-    "area_cap": 100_000.0,
     "workers": 4,
     "max_descent_slope": 0.4,
     "start_at_junction": True,

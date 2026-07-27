@@ -43,7 +43,6 @@ from steeproute import output
 from steeproute.cache import Manifest, check_coverage, resolve_cache_root
 from steeproute.cli._shared import (
     angle_option,
-    area_cap_option,
     cache_dir_option,
     center_option,
     configure_cli_logging,
@@ -74,7 +73,6 @@ from steeproute.cli._shared import (
     theta_option,
     time_budget_option,
     untagged_trails_option,
-    validate_area_size,
     validate_solver_options,
     verbose_option,
     width_option,
@@ -130,7 +128,6 @@ DEFAULT_ITER_BUDGET: int = 2000
 @start_at_junction_option
 @max_descent_slope_option
 @n_option
-@area_cap_option
 @untagged_trails_option
 @seed_option
 @iter_budget_option
@@ -162,7 +159,6 @@ def cli(
     start_at_junction: bool,
     max_descent_slope: float | None,
     n: int,
-    area_cap: float,
     untagged_trails: str,
     seed: int | None,
     iter_budget: int | None,
@@ -184,16 +180,12 @@ def cli(
     # in the end-of-run summary. `perf_counter` (monotonic) mirrors `cli/setup.py`.
     start = time.perf_counter()
 
-    # Area resolution (FR1/FR23) then the FR2 cap: reject queries whose true
-    # rectangle area exceeds --area-cap before we walk the cache. A typo like
-    # `--radius 5000` should fail-fast at the CLI boundary, not after a successful
-    # cache walk. `resolve_area` also rejects a malformed shape (no size, both
-    # spellings, NaN dimensions) that would otherwise degrade into a confusing
-    # coverage miss.
+    # Area resolution (FR1/FR23): `resolve_area` rejects a malformed shape (no
+    # size, both spellings, NaN dimensions) that would otherwise degrade into a
+    # confusing coverage miss.
     area = resolve_area(
         center=center, radius_km=radius, width_km=width, height_km=height, angle_deg=angle
     )
-    validate_area_size(area, area_cap_km2=area_cap)
 
     # Solver-parameter sanity at the CLI boundary (§Cat 10 → exit 2). Out-of-range
     # values would otherwise surface as a raw `ValueError` traceback from
@@ -262,7 +254,6 @@ def cli(
         start_at_junction=start_at_junction,
         max_descent_slope=max_descent_slope,
         n=n,
-        area_cap=area_cap,
         untagged_policy=untagged_trails,
         seed=seed,
         # Resolve the `None` flag default to a concrete iteration ceiling; with

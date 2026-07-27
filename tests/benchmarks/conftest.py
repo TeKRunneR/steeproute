@@ -84,7 +84,6 @@ BENCH_PARAMS = SolverParams(
     min_climb_ground_length=300.0,
     j_max=0.30,
     n=5,
-    area_cap=500.0,
     untagged_policy=BENCH_UNTAGGED_POLICY,
     seed=BENCH_SEED,
     iter_budget=1000,

@@ -65,9 +65,6 @@ def test_quality_demo_defaults_override_cli_defaults() -> None:
     assert fields["difficulty_cap"].default == "T4"
     assert fields["elevation_deadband"].default == 1.0
     assert fields["j_max"].default == 0.0
-    # area_cap can't be "disabled" with 0 (validate_area_size rejects any area
-    # > cap, and area is never negative) — a large no-op ceiling instead.
-    assert fields["area_cap"].default == 100_000.0
     assert fields["workers"].default == 4
     # Steep-route-tool defaults corrected in Story app-4-2: the CLI ships these
     # off/false, but this tool's whole point is steep routes, so the App defaults

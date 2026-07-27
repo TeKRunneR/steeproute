@@ -159,6 +159,7 @@ territory (noted there).
 
 # Misc
 * Fix CI ==> actually it's pretty much pointless for a personal tool with no build nor deployment, it should probably just be replaced by pre-commit hooks.
-* Remove area cap: I don't use that for anything, I typically just set it to a very high value so that it doesn't bother me
+* ~~Remove area cap: I don't use that for anything, I typically just set it to a very high value so that it doesn't bother me~~
+  **Done 2026-07-27:** `--area-cap` removed entirely from the query CLI (spec-remove-area-cap.md, quick-dev). The setup CLI's separate 50 km radius ceiling is unaffected.
 * Change default query CLI values to be closer to what I actually use
 * Being able to delete cached areas

@@ -111,7 +111,6 @@ The project has no business dimension (N=1, no revenue, no adoption target). Its
 - `min_climb_ground_length` (minimum climb length, measured as projected 2D distance along the trail) = 300m
 - `J_max` (top-5 Jaccard overlap ceiling) = 0.30
 - `N` (result count) = 5
-- `area_cap` ≈ 500 km²
 - `untagged_trails_policy` = include
 
 **Quality**
@@ -213,7 +212,7 @@ If any of these become relevant under v2 (the web-app vision), journeys will be 
 
 Capabilities the v1 product must deliver, consolidated from the three journeys:
 
-- **CLI with area specification** (`--center/radius`) and flags for every configurable parameter (`θ`, `difficulty_cap`, `L_connector`, `min_climb_ground_length`, `J_max`, `N`, `area_cap`, `untagged_trails_policy`).
+- **CLI with area specification** (`--center/radius`) and flags for every configurable parameter (`θ`, `difficulty_cap`, `L_connector`, `min_climb_ground_length`, `J_max`, `N`, `untagged_trails_policy`).
 - **Progress reporting** during GRASP: iteration count, best-so-far D++D−, elapsed time, rough ETA — printed at a reasonable cadence.
 - **Graceful manual interrupt** (Ctrl-C): best-so-far top-5 written to disk with a "not-converged" flag in metadata; cache state remains valid.
 - **Graceful degradation**: when fewer than N distinct routes exist under the current J_max, return the feasible subset with an explanation rather than silently loosening the constraint.
@@ -355,7 +354,6 @@ All configuration via CLI flags. No config file in v1 (N=1, flag count manageabl
 | `--min-climb-ground-length` | 300m | Minimum climb 2D arc length |
 | `--j-max` | 0.30 | Top-N pairwise Jaccard ceiling |
 | `--n` | 5 | Target result count |
-| `--area-cap` | ~500 km² | Hard area-size cap |
 | `--untagged-trails` | `include` | Policy for OSM trails without sac_scale |
 | `--start-at-junction` | off | Constrain each route's start endpoint to a road/trail junction (FR31) |
 | `--max-descent-slope` | off (None) | Direction-aware cap: forbid descending a segment whose windowed uphill slope exceeds this, while it stays eligible as a climb (FR32). The distance window is a fixed internal constant (not a separate flag) for v1; may be surfaced later if needed. |
@@ -401,8 +399,6 @@ steeproute-setup --center LAT,LON --radius KM
 ```
 
 It accepts the same area-specification flags as `steeproute`, plus `--output-cache-dir` (default: standard user cache directory). It downloads OSM trail data and DEM elevation samples for the specified area, preprocesses them into the graph structure used by `steeproute`, and writes the result into the local cache.
-
-`steeproute-setup` has no `--area-cap` equivalent — preparing large regions is a deliberate user choice.
 
 Exit codes mirror `steeproute`: `0` on success, `2` on pre-execution error (bad flags, network failure, source unavailable), `130` on manual interrupt.
 
@@ -451,7 +447,7 @@ Consolidated from the brainstorming risk register and PRD commitments. Top risks
 | **Validation rigor insufficient.** Previous attempt's exact failure mode — can't tell good output from bad output. | High | Explicit Validation & Quality Commitments (constraint validation, heuristic-quality bound, regression protection). Appendix A captures strategy detail for architecture phase. |
 | **Cliff-bias in top-5.** Phantom elevation from GPS-drift-induced DEM sampling error over-ranks cliff-adjacent routes. | High | v1: README "Known Limitations" + optional per-result high-gradient flag in HTML metadata. Full cliff detection + penalty deferred to v2. |
 | **Parameter tuning affects entire solution space.** `θ`, `min_climb_ground_length`, `L_connector`, `J_max` interact in non-obvious ways. | High | All parameters configurable via CLI flags with documented defaults. Dev-time diagnostic visualization of detected climbs (scope TBD in architecture). |
-| **Compute budget blown on large areas.** Preprocessing or solving on oversized areas consumes hours without convergence. | High | Hard `--area-cap` flag (~500 km² default). Progress reporting. Manual kill preserves best-so-far. Soft `--time-budget`. |
+| **Compute budget blown on large areas.** Preprocessing or solving on oversized areas consumes hours without convergence. | High | Setup-side hard radius ceiling bounds any single prepared area; query is bounded to whatever was prepared (no cross-region stitching). Progress reporting. Manual kill preserves best-so-far. Soft `--time-budget`. |
 | **OSM trail graph disconnects.** Some Alpine areas have disconnected trail components, causing silent route oddities. | Medium | Connected-component analysis at preprocessing time; component sizes reported to the user. |
 
 **Market risks:** not applicable (N=1, no market).
@@ -482,7 +478,9 @@ These are load-bearing for portfolio credibility. A feature-lean v1 is defensibl
 ### Area Specification & Invocation
 
 - **FR1**: User can specify a search area as a rectangle — a center point plus width and height — optionally rotated by a bearing angle so the box can align to a diagonally-oriented feature (e.g. a mountain range). A single radius remains a shorthand for a centered, axis-aligned square (the `angle = 0`, equal-extents case). Arbitrary (free-form) polygons are out of v1 scope. *(Generalized from center+radius via correct-course 2026-07-24 — Epic 15.)*
-- **FR2**: System rejects search areas exceeding the configured area-size cap with a descriptive error, using the rectangle's true area (`width × height`), not a radius-derived proxy.
+<!-- FR2 (the query CLI's hard area-size ceiling) removed 2026-07-27 — dead weight
+     nobody used in practice (always overridden to a no-op-high value). Numbering
+     intentionally left with a gap rather than renumbering FR3-FR32. -->
 
 ### Route Search & Solver
 

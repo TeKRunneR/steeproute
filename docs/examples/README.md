@@ -28,8 +28,7 @@ The runs use `--difficulty-cap T4` (surfaces more of the steep alpine terrain th
 default T3), a large search budget (`--iter-budget 1000000 --stagnation-iters 200000`)
 run in parallel across four cores (`--workers 4 --merge-interval 250000`, three
 intermediate island-migration merges), the practical-route constraints
-`--start-at-junction` and `--max-descent-slope 0.4`, and `--area-cap 100000` (the default
-500 km² cap would reject these large areas). `--theta 0.2` (the route-level average-slope
+`--start-at-junction` and `--max-descent-slope 0.4`. `--theta 0.2` (the route-level average-slope
 floor) is left at its default **on purpose**: the point of the tool is steep routes, so
 the floor is meant to be limiting. It also sets `--elevation-deadband 1` (drops sub-metre
 up/down noise from the D+/D− totals) and `--j-max 0` (returned routes share no segments;
@@ -59,7 +58,7 @@ uv run steeproute --center <LAT,LON> --radius <QUERY_KM> --cache-dir <CACHE> \
     --output-dir docs/examples/<region> --seed 42 --n 3 \
     --difficulty-cap T4 --iter-budget 1000000 --stagnation-iters 200000 \
     --merge-interval 250000 --workers 4 --elevation-deadband 1 --j-max 0 \
-    --start-at-junction --max-descent-slope 0.4 --area-cap 100000
+    --start-at-junction --max-descent-slope 0.4
 
 # 3. Capture the route-1 thumbnails (headless Chrome/Edge; needs network for tiles).
 uv run python devtools/gallery_capture.py \

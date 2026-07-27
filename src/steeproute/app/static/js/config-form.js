@@ -40,7 +40,7 @@ function effectiveValue(field) {
   return pv !== null && pv !== undefined ? pv : field.default;
 }
 
-/** Long numeric fields (iter budget, stagnation iters, area cap) get space
+/** Long numeric fields (iter budget, stagnation iters) get space
  *  thousands separators for readability (Story app-4-2 / FR14). A default with
  *  magnitude >= 1000 is the "long" signal — a self-contained display heuristic,
  *  not a hand-listed flag set, so it tracks the schema. Small numbers (theta, n,

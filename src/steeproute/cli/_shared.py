@@ -10,7 +10,7 @@ from typing import NoReturn, override
 
 import click
 
-from steeproute.cache import Manifest, area_km2, format_area_flags
+from steeproute.cache import Manifest
 from steeproute.errors import BadCLIArgError, PreExecutionError
 from steeproute.models import Area
 from steeproute.pipeline.dem_download import DEFAULT_DEM_FETCH_WORKERS
@@ -245,42 +245,13 @@ def _validate_center(center: tuple[float, float]) -> None:
         raise BadCLIArgError(f"--center longitude {lon} is outside [-180, 180]")
 
 
-def validate_area_size(area: Area, area_cap_km2: float) -> None:
-    """Enforce FR2: reject a search area whose **true** footprint exceeds --area-cap.
-
-    Raises BadCLIArgError with a user-facing message in the format:
-        {area flags} produces ~{area} km², exceeds --area-cap of {cap} km²
-
-    Used by cli/query.py only; cli/setup.py has no --area-cap flag (per Architecture
-    §FR mapping; setup is "prepare what you'll later query", cap enforcement is
-    sufficient at query time) — it carries `validate_setup_area`'s ceiling instead.
-
-    **Story 15.3 corrects FR2 off the disk proxy.** The measure is now
-    `cache.area_km2` (`width × height`), not `π·r²`. Two consequences: a rotated
-    box is measured at all (its `radius_km` is an inert `0.0`, so the old formula
-    would have computed an area of zero and waved every box through), and a
-    *square* is measured ~27% larger than before — the default `--area-cap 500`
-    now admits a radius up to 11.18 km instead of 12.61 km. That is the intended
-    correction, not a regression: `4r² > πr²` because the prepared region really
-    is the box, not the inscribed disk. The offending shape's own flags are named
-    via `cache.format_area_flags`, so the message never suggests a `--radius` for
-    a rectangle.
-    """
-    footprint_km2 = area_km2(area)
-    if footprint_km2 > area_cap_km2:
-        raise BadCLIArgError(
-            f"{format_area_flags(area)} produces ~{footprint_km2:.0f} km², "
-            f"exceeds --area-cap of {area_cap_km2:g} km²",
-        )
-
-
 # Setup-side hard ceiling on each area half-extent (km), routed in via deferred-work
 # D8 from Story 2.1. A 2*r bbox at r=50 km still spans 10_000 km^2 — far above the
 # Grenoble Alps personal-tool use case but small enough to catch obvious typos
 # (e.g. `--radius 5000`) that would otherwise hand osmnx an Overpass query that
-# either times out or exceeds the 1 GB response cap. The query CLI has its own
-# `--area-cap`-driven ceiling (`validate_area_size`); setup deliberately has no
-# `--area-cap` flag so this constant carries the safety net here.
+# either times out or exceeds the 1 GB response cap. The query CLI has no
+# equivalent ceiling of its own — this constant carries the only area-size
+# safety net.
 _SETUP_MAX_RADIUS_KM: float = 50.0
 
 # Shared by both branches of `validate_setup_area`, so the wording has to fit a
@@ -647,14 +618,6 @@ n_option = click.option(
     default=5,
     show_default=True,
     help="Target result count (max number of distinct routes returned).",
-)
-
-area_cap_option = click.option(
-    "--area-cap",
-    type=click.FLOAT,
-    default=500.0,
-    show_default=True,
-    help="Hard area-size cap in km^2 (rejection threshold).",
 )
 
 untagged_trails_option = click.option(

@@ -1176,9 +1176,8 @@ def area_km2(area: Area) -> float:
     entry to "size 0". Monotone in `radius_km` for squares, so square-only
     caches order exactly as before.
 
-    Public because it is also the FR2 `--area-cap` measure (Story 15.3,
-    `cli/_shared.validate_area_size`) — the *true* rectangle area, not the
-    `π·r²` disk proxy the pre-Epic-15 cap used.
+    Public because callers outside this module also need "how big is this
+    area" — the *true* rectangle area, not a `π·r²` disk proxy.
     """
     half_width_km, half_height_km = area.half_extents_km
     return 4.0 * half_width_km * half_height_km
@@ -1283,7 +1282,7 @@ def format_area_flags(area: Area) -> str:
 
     The spellings are the real Click option names (Story 15.3,
     `cli/_shared.py` §Area), so the emitted fragment is copy-pasteable. Public
-    because the `--area-cap` rejection message reuses it, keeping one source for
+    because coverage-miss messages reuse it, keeping one source for
     "which flags describe this shape". A rotated *square* spelled
     `--radius R --angle A` renders as `--width 2R --height 2R --angle A`: an
     equivalent command (same polygon, same cache key), because an area read back

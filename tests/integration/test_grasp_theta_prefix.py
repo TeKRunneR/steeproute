@@ -77,7 +77,6 @@ def _params() -> SolverParams:
         min_climb_ground_length=300.0,
         j_max=0.30,
         n=5,
-        area_cap=500.0,
         untagged_policy="include",
         seed=42,
         iter_budget=300,

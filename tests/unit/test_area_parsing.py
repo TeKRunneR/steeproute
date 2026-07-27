@@ -1,6 +1,5 @@
-"""Unit tests for FR1/FR2 area-spec validation at the CLI boundary (Story 1.6)."""
+"""Unit tests for FR1 area-spec validation at the CLI boundary (Story 1.6)."""
 
-import math
 import pathlib
 import sys
 from collections.abc import Callable
@@ -14,7 +13,6 @@ from steeproute.cli._shared import (
     ensure_output_dir,
     is_verbose,
     resolve_area,
-    validate_area_size,
     validate_setup_area,
     validate_solver_options,
 )
@@ -183,65 +181,6 @@ def test_resolve_area_rejects_out_of_range_center() -> None:
     with pytest.raises(BadCLIArgError) as exc_info:
         _resolve(radius=5.0, center=(95.0, 0.0))
     assert "latitude" in exc_info.value.user_message
-
-
-# --- validate_area_size: FR2 true-rectangle-area cap (Story 15.3 AC #4) ---
-
-
-def test_validate_area_size_passes_below_cap() -> None:
-    """Area strictly below the cap is silently accepted."""
-    validate_area_size(_resolve(radius=10.0), area_cap_km2=500.0)
-
-
-def test_validate_area_size_passes_just_below_cap() -> None:
-    """Values strictly below the cap are accepted; the comparison is exact (no FP slack).
-
-    The cap measures the **true** rectangle area (`2r × 2r = 4r²`), so the
-    boundary radius is `sqrt(cap/4)` — not the pre-Epic-15 `sqrt(cap/π)` disk
-    proxy (which admitted boxes ~27% over the cap).
-    """
-    radius = math.sqrt(500.0 / 4.0) * 0.999
-    validate_area_size(_resolve(radius=radius), area_cap_km2=500.0)
-
-
-def test_validate_area_size_uses_true_rectangle_area_not_disk_proxy() -> None:
-    """AC #4: a radius the `π·r²` proxy admitted is now correctly rejected."""
-    radius = math.sqrt(500.0 / math.pi) * 0.999  # ~499.5 km² as a disk, ~635 km² as a box
-    with pytest.raises(BadCLIArgError):
-        validate_area_size(_resolve(radius=radius), area_cap_km2=500.0)
-
-
-def test_validate_area_size_rejects_above_cap() -> None:
-    """Area exceeding the cap raises BadCLIArgError naming --radius and --area-cap."""
-    with pytest.raises(BadCLIArgError) as exc_info:
-        validate_area_size(_resolve(radius=30.0), area_cap_km2=500.0)
-    msg = exc_info.value.user_message
-    assert "--radius" in msg
-    assert "30" in msg
-    assert "--area-cap" in msg
-    assert "500" in msg
-    assert "km" in msg
-    # True rectangle area (60x60), not the old π·30² ≈ 2827 disk proxy.
-    assert "3600" in msg
-
-
-def test_validate_area_size_rejects_oversize_rectangle_naming_its_own_flags() -> None:
-    """AC #4: a rotated box's rejection is copy-pasteable, never a bogus `--radius`."""
-    with pytest.raises(BadCLIArgError) as exc_info:
-        validate_area_size(_resolve(width=40.0, height=30.0, angle=25.0), area_cap_km2=500.0)
-    msg = exc_info.value.user_message
-    assert "--width 40" in msg
-    assert "--height 30" in msg
-    assert "--angle 25" in msg
-    assert "1200" in msg  # 40 x 30
-    assert "--radius" not in msg
-
-
-def test_validate_area_size_area_is_bearing_independent() -> None:
-    """Rotation preserves area, so the cap verdict cannot depend on `--angle`."""
-    validate_area_size(_resolve(width=20.0, height=20.0, angle=37.0), area_cap_km2=401.0)
-    with pytest.raises(BadCLIArgError):
-        validate_area_size(_resolve(width=20.0, height=20.0, angle=37.0), area_cap_km2=399.0)
 
 
 # --- validate_setup_area: shape-aware setup ceiling (Story 15.3 AC #5) ---
@@ -437,7 +376,7 @@ def test_ensure_output_dir_rejects_parent_that_is_a_file(tmp_path: pathlib.Path)
     assert "--output-dir" in exc_info.value.user_message
 
 
-# --- Query CLI end-to-end (CliRunner): area-cap + happy path (AC #2, #5) ---
+# --- Query CLI end-to-end (CliRunner): validation + happy path (AC #2, #5) ---
 
 
 def test_query_cli_rejects_out_of_range_n() -> None:
@@ -517,7 +456,7 @@ def test_query_cli_threads_workers_to_run_parallel_grasp(tmp_path: pathlib.Path)
 def test_query_cli_happy_path_passes_parsing_then_hits_coverage_check(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Valid args clear parse + area-cap, then surface `CacheNotFoundError` from `check_coverage`.
+    """Valid args clear parsing + validation, then surface `CacheNotFoundError` from `check_coverage`.
 
     Story 2.10 wired the query CLI through `cache.check_coverage` (FR24). With
     no prepared cache under the (test-isolated) `--cache-dir`, the wired CLI
@@ -538,41 +477,6 @@ def test_query_cli_happy_path_passes_parsing_then_hits_coverage_check(
             str(tmp_path),
         ],
     )
-    assert isinstance(result.exception, CacheNotFoundError)
-
-
-def test_query_cli_rejects_radius_exceeding_area_cap() -> None:
-    """True rectangle area > --area-cap surfaces BadCLIArgError."""
-    runner = CliRunner()
-    result = runner.invoke(query_cli, ["--center", "45.0716,6.1079", "--radius", "30"])
-    assert isinstance(result.exception, BadCLIArgError)
-    assert "--area-cap" in result.exception.user_message
-
-
-def test_query_cli_accepts_radius_just_below_custom_cap(tmp_path: pathlib.Path) -> None:
-    """User-overridden --area-cap is honored; radius producing area below cap passes validation.
-
-    Post-Story-2.10 the CLI now goes through `check_coverage` after passing
-    `validate_area_size`. With an isolated empty `--cache-dir`, success past
-    the area-cap guard is signalled by reaching `CacheNotFoundError` rather
-    than a `BadCLIArgError` from the cap.
-    """
-    runner = CliRunner()
-    radius = math.sqrt(100.0 / 4.0) * 0.999
-    result = runner.invoke(
-        query_cli,
-        [
-            "--center",
-            "45.0716,6.1079",
-            "--radius",
-            f"{radius:.6f}",
-            "--area-cap",
-            "100",
-            "--cache-dir",
-            str(tmp_path),
-        ],
-    )
-    # Area-cap passed (no BadCLIArgError); coverage check then raises.
     assert isinstance(result.exception, CacheNotFoundError)
 
 
@@ -703,7 +607,7 @@ def test_query_cli_rejects_out_of_range_latitude() -> None:
     assert "latitude" in result.exception.user_message
 
 
-# --- Setup CLI: lat/lon range applies; area-cap does not (AC #6) ---
+# --- Setup CLI: lat/lon range validation (AC #6) ---
 
 
 def test_setup_cli_inherits_lat_lon_range_validation() -> None:
@@ -755,34 +659,6 @@ def test_setup_cli_rejects_non_positive_dem_fetch_workers() -> None:
             f"--dem-fetch-workers {bad} should raise BadCLIArgError; got {result.exception!r}"
         )
         assert "--dem-fetch-workers" in result.exception.user_message
-
-
-def test_setup_cli_does_not_enforce_area_cap(tmp_path: pathlib.Path) -> None:
-    """Setup CLI has no --area-cap flag and does not call validate_area_size.
-
-    A 30 km radius (3600 km² as a true box) would be rejected by the query CLI's default
-    cap of 500 km², but setup accepts it because area-cap enforcement is query-only. The
-    setup CLI does apply its own `validate_setup_area` ceiling (Story 2.8), set at a 50 km
-    half-side — 30 is below that. We patch `osm_load` (the first pipeline step) with a sentinel: any area-cap
-    check would raise `BadCLIArgError` at the CLI boundary before the pipeline starts,
-    so the sentinel propagating proves the 30 km radius passed validation with no
-    area-cap rejection — without ever touching the network. (Patching a later step
-    such as `resolve_dem` would first run the real stage-1 Overpass download for this
-    30 km area: minutes of live network per suite run.)
-    """
-    from unittest.mock import patch
-
-    runner = CliRunner()
-    sentinel = RuntimeError("reached OSM download")
-    with patch("steeproute.pipeline.osm_load", side_effect=sentinel):
-        result = runner.invoke(
-            setup_cli,
-            ["--center", "45.0716,6.1079", "--radius", "30", "--cache-dir", str(tmp_path)],
-            catch_exceptions=True,
-        )
-    # The run got past `validate_setup_radius` and any would-be area-cap check,
-    # reaching stage 1 (the sentinel) — confirming no area-cap rejection.
-    assert result.exception is sentinel
 
 
 def test_setup_cli_threads_dem_fetch_workers_to_resolve_dem(tmp_path: pathlib.Path) -> None:

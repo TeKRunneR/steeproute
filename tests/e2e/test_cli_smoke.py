@@ -28,7 +28,6 @@ QUERY_FLAGS = [
     "--elevation-deadband",
     "--j-max",
     "--n",
-    "--area-cap",
     "--untagged-trails",
     "--seed",
     "--iter-budget",
@@ -136,12 +135,11 @@ def test_query_malformed_center_exits_2() -> None:
     assert result.stderr.startswith("error:")
 
 
-def test_query_area_cap_exceeded_exits_2() -> None:
-    # π·30² ≈ 2827 km² > default --area-cap 500 km²
-    result = _run_cli("steeproute", "--center", "45.07,6.11", "--radius", "30")
+def test_query_area_cap_flag_removed() -> None:
+    """`--area-cap` was deleted outright (not deprecated): unknown-option, exit 2."""
+    result = _run_cli("steeproute", "--center", "45.07,6.11", "--radius", "30", "--area-cap", "500")
     assert result.returncode == 2
-    assert result.stderr.startswith("error:")
-    assert "--area-cap" in result.stderr
+    assert "no such option" in result.stderr.lower()
 
 
 # --- Task 5: query CLI surface ---

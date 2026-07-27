@@ -76,7 +76,6 @@ def _make_solver_params() -> SolverParams:
         min_climb_ground_length=300.0,
         j_max=0.5,
         n=5,
-        area_cap=100.0,
         untagged_policy="include",
         seed=42,
         iter_budget=1000,
@@ -237,7 +236,7 @@ def test_contracted_graph_round_trip() -> None:
 
 
 def test_solver_params_round_trip() -> None:
-    """All 13 Cat 9 metadata-block fields are present and addressable by name."""
+    """All 12 Cat 9 metadata-block fields are present and addressable by name."""
     sp = _make_solver_params()
     assert math.isclose(sp.theta, 0.15)
     assert math.isclose(sp.min_climb_slope, 0.16)
@@ -246,7 +245,6 @@ def test_solver_params_round_trip() -> None:
     assert math.isclose(sp.min_climb_ground_length, 300.0)
     assert math.isclose(sp.j_max, 0.5)
     assert sp.n == 5
-    assert math.isclose(sp.area_cap, 100.0)
     assert sp.untagged_policy == "include"
     assert sp.seed == 42
     assert sp.iter_budget == 1000

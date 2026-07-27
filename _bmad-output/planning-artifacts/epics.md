@@ -21,7 +21,7 @@ This document provides the complete epic and story breakdown for bmad-test (prod
 **Area Specification & Invocation**
 
 - FR1: User can specify a search area via center point and radius.
-- FR2: System rejects search areas exceeding the configured area-size cap with a descriptive error.
+<!-- FR2 (area-size cap rejection) removed 2026-07-27 — dead weight nobody used. -->
 
 **Route Search & Solver**
 
@@ -181,7 +181,6 @@ Not applicable — CLI-only project, no UI. UX Design spec deliberately omitted 
 | FR | Primary epic | Notes |
 |---|---|---|
 | FR1 (area: rectangle, opt. rotated) | Epic 1 (square) / Epic 15 (rotated rect) | Area flag surface + custom click type; rotated model + `graph_from_polygon` in Epic 15 |
-| FR2 (area-cap rejection) | Epic 1 (initial) / Epic 15 (true area) | Validation at CLI layer; `BadCLIArgError` path; true rectangle area (not disk proxy) in Epic 15 |
 | FR3 (route-level slope floor θ) | Epic 1 (flag) / Epic 3 (initial) / Epic 4 (corrected to route-level) | Flag in `cli/_shared.py`; route-level `(D+ + D−)/length` floor enforced at solve + validate |
 | FR3b (climb-detection slope) | Epic 4 (flag) / Epic 3 (climb detection) | New `--min-climb-slope`; running-avg `d_plus/length` in `detect_climbs` |
 | FR4 (difficulty cap SAC) | Epic 1 (flag) / Epic 3 (enforcement) | Enforced per-edge in validator + pipeline filter |
@@ -232,7 +231,7 @@ Not applicable — CLI-only project, no UI. UX Design spec deliberately omitted 
 
 | Epic | Title | Outcome | FRs |
 |---|---|---|---|
-| 1 | Project Foundation & CLI Shell | Scaffolded installable project, full flag surface, 3-layer test structure, CI gates, exit-code-2 on bad args | FR1, FR2, FR20, FR30 (scaffolding); flag surface for FR3–9 |
+| 1 | Project Foundation & CLI Shell | Scaffolded installable project, full flag surface, 3-layer test structure, CI gates, exit-code-2 on bad args | FR1, FR20, FR30 (scaffolding); flag surface for FR3–9 |
 | 2 | Data Preparation & Caching | `steeproute-setup` end-to-end, atomic cache, OSM-age warning, fail-fast on unprepared query area | FR23, FR24, FR25 |
 | 3 | Query Pipeline, Solver, Validation & Report Rendering | Journey 1 happy path end-to-end; seeded reproducibility; validation banners; oracle/GRASP/metamorphic test stack | FR3–9 (enforcement), FR10, FR11, FR15–21, FR26–29, FR30 (exit 1) |
 | 4 | Route-Level Slope-Floor Correction | θ corrected to a route-level `(D++D−)/length` floor; new `--min-climb-slope` flag. *Correct-course 2026-06-03* | FR3 (corrected), FR3b (new) |
@@ -268,7 +267,7 @@ regression golden (per the AGENTS.md solver/golden policy). Arbitrary free-form 
 scope. Inserted via correct-course 2026-07-24 (`sprint-change-proposal-2026-07-24-rotated-rectangle-areas.md`);
 no epic renumber.
 
-**FRs covered:** FR1 (generalized to rotated rectangle), FR2 (true-area cap), FR10 (rotated containment).
+**FRs covered:** FR1 (generalized to rotated rectangle), FR10 (rotated containment).
 Supports the whole-range ambition behind NFR1/NFR2 by trimming pre-processed area.
 
 ### Story 15.1: Generalize the Area model and geometry helpers
@@ -344,11 +343,6 @@ So that the capability is usable and honestly visualized.
 **When** area flags are parsed,
 **Then** a rotated rectangle can be specified (width / height / angle) and `--radius` still produces a
 centered square; both CLIs accept the identical area surface (FR23).
-
-**Given** the area-cap check,
-**When** it validates,
-**Then** it uses the true rectangle area (`width × height`), rejecting oversize boxes with a descriptive
-`BadCLIArgError` (exit 2).
 
 **Given** a rendered report,
 **When** the search-area overlay draws,

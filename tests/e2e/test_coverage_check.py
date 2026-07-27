@@ -117,7 +117,6 @@ def _invoke_query(
     *,
     center: tuple[float, float],
     radius_km: float,
-    area_cap_km2: float = 500.0,
 ) -> Result:
     """Run `query_cli` in-process against the seeded cache (success path only).
 
@@ -125,7 +124,7 @@ def _invoke_query(
     mirrors `run_entry_point`'s `PreExecutionError → exit 2` mapping in-process.
     """
     runner = CliRunner()
-    args = _query_args(cache_dir, center=center, radius_km=radius_km, area_cap_km2=area_cap_km2)
+    args = _query_args(cache_dir, center=center, radius_km=radius_km)
     return runner.invoke(query_cli, args, catch_exceptions=False)
 
 
@@ -134,7 +133,6 @@ def _query_args(
     *,
     center: tuple[float, float],
     radius_km: float,
-    area_cap_km2: float = 500.0,
 ) -> list[str]:
     return [
         "--center",
@@ -143,8 +141,6 @@ def _query_args(
         f"{radius_km}",
         "--cache-dir",
         str(cache_dir),
-        "--area-cap",
-        f"{area_cap_km2}",
     ]
 
 

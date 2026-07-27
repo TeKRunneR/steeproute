@@ -68,7 +68,6 @@ def _params(*, iter_budget: int, stagnation_iters: int) -> SolverParams:
         min_climb_ground_length=300.0,
         j_max=0.30,
         n=3,
-        area_cap=500.0,
         untagged_policy="include",
         seed=42,
         iter_budget=iter_budget,
@@ -180,7 +179,6 @@ def test_admission_with_unchanged_total_still_advances_convergence_iteration() -
         min_climb_ground_length=300.0,
         j_max=0.0,  # any shared base segment overlaps → drives the evict-many branch
         n=3,
-        area_cap=500.0,
         untagged_policy="include",
         seed=3,
         iter_budget=200,

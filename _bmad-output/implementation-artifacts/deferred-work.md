@@ -54,7 +54,7 @@ Items deferred during code review that are owned by a future story.
 | 3 | Concurrent test runs mutate shared `osmnx.settings.useful_tags_way` | Future (test-infra) | Not running parallel tests today; revisit if/when `pytest-xdist` or similar is adopted. Mitigation: a session-scoped autouse fixture that restores `useful_tags_way` after each test. |
 | 4 | Zero-length `LineString` when `u==v` or coincident endpoints in `normalize_edges` geometry synthesis | Story 2.2 | Stages 3-4 do polyline math (smoothing + resampling) where zero-length input may divide-by-zero or produce empty output. Decide there whether to skip self-loop edges, error out, or substitute a Point. |
 | 5 | `filter_trails` returns `graph.copy()` then removes edges → isolated/orphan nodes retained in output | Story 2.5 | Node-pruning policy is an orchestrator-level call (some downstream stages may want orphans for diagnostic context, others want a clean subgraph). Decide once stages 3-7 are wired. |
-| 6 | `out.copy()` in `filter_trails` may OOM on very large input graphs | Future (perf) | Premature optimization until benchmarks surface it. `--area-cap` mitigates indirectly by bounding input size. Could switch to `nx.subgraph_view` or `edge_subgraph` for streaming filtering if it becomes an issue. |
+| 6 | `out.copy()` in `filter_trails` may OOM on very large input graphs | Future (perf) | Premature optimization until benchmarks surface it. `validate_setup_radius`'s 50 km ceiling mitigates indirectly by bounding input size (the query-side `--area-cap` that used to be cited here was removed 2026-07-27 — dead weight, never used). Could switch to `nx.subgraph_view` or `edge_subgraph` for streaming filtering if it becomes an issue. |
 | 7 | Live-test drift tolerance ±10% on a 1208-edge fixture (~120 edges) may flap on bulk-edits in Le Sappey | Future (live-test maintenance) | Empirical — defer until observed. Mitigation if it flaps: widen the band, switch to a less-active area, or pin against a snapshot of Overpass's last-known-good state instead of live. |
 | 8 | `radius_km` exceeding Overpass query limits → opaque osmnx error | Story 2.8 | ✅ Resolved in Story 2.8 — `validate_setup_radius(r)` in `cli/_shared.py` rejects `r <= 0` or `r > 50 km` at the CLI boundary with `BadCLIArgError`. |
 
@@ -66,7 +66,7 @@ Items deferred during code review that are owned by a future story.
 
 | # | Finding | Target | Detail |
 |---|---------|--------|--------|
-| 1 | No upper bound on `n_intervals` in `_resample_meters` — pathological `total / spacing_m` could blow memory/CPU | Future (`--spacing-m`-bundled) | For a hypothetical 1000-km polyline at 0.001-m spacing, `n_intervals ≈ 10⁹`. Today: `--area-cap` + `validate_setup_radius` cap polyline length upstream, spacing is the internal default constant — combination not reachable without a future `--spacing-m` override. Land the cap together with that flag. [src/steeproute/pipeline/smoothing.py:190] |
+| 1 | No upper bound on `n_intervals` in `_resample_meters` — pathological `total / spacing_m` could blow memory/CPU | Future (`--spacing-m`-bundled) | For a hypothetical 1000-km polyline at 0.001-m spacing, `n_intervals ≈ 10⁹`. Today: `validate_setup_radius` caps polyline length upstream, spacing is the internal default constant — combination not reachable without a future `--spacing-m` override. Land the cap together with that flag. [src/steeproute/pipeline/smoothing.py:190] |
 
 ---
 

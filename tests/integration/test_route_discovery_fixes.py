@@ -236,7 +236,6 @@ def _params(*, j_max: float) -> SolverParams:
         min_climb_ground_length=_MIN_CLIMB_GROUND_LENGTH_M,
         j_max=j_max,
         n=2,
-        area_cap=500.0,
         untagged_policy="include",
         seed=42,
         iter_budget=1000,

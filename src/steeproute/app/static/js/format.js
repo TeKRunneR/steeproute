@@ -3,7 +3,7 @@
 // area all describe a rotated box the same way.
 //
 // Long numeric values (iter
-// budget, stagnation iters, area cap) are shown space-grouped for readability —
+// budget, stagnation iters) are shown space-grouped for readability —
 // `1 000 000`, never commas (a comma is the French decimal separator, so it
 // would misread). Grouping is DISPLAY-ONLY: the value on the wire / in argv
 // stays a plain number. Factored out of config-form.js so the run-library
