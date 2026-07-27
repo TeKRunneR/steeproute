@@ -169,3 +169,4 @@ territory (noted there).
   **Done 2026-07-27:** `--area-cap` removed entirely from the query CLI (spec-remove-area-cap.md, quick-dev). The setup CLI's separate 50 km radius ceiling is unaffected.
 * Change default query CLI values to be closer to what I actually use
 * Being able to delete cached areas
+* Add timestamps to osmnx logs, to know how much each step takes
