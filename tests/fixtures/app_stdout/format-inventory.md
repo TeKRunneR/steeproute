@@ -96,12 +96,19 @@ stage: trail-filter ...
 
 **A2 — within-stage line** (indented 2 spaces)
 ```
+  osm: Overpass response served from cache (no download)
   tile 0/1
   tile 1/1
 ```
-- Only current instance: the DEM fetch loop's `  tile <done>/<total>`
-  (`src/steeproute/pipeline/dem_download.py`). Counter **starts at 0** then
-  increments. Not a stage boundary.
+- Two current instances, both `StageProgress.line`:
+  - the DEM fetch loop's `  tile <done>/<total>`
+    (`src/steeproute/pipeline/dem_download.py`). Counter **starts at 0** then
+    increments.
+  - the Overpass fetch outcome inside `osm-load`, `  osm: <outcome>`
+    (`cli/setup.py::_OsmnxFetchReporter`) — either the cache-hit wording above or
+    osmnx's own `Downloaded <n>kB from '<host>' with status <code>` on a live fetch.
+    At most one line per outcome kind per run; absent if osmnx logged neither.
+- Neither is a stage boundary.
 - → append to `log_tail` (optionally surface as sub-progress of the current
   stage). Does **not** change `stage_index`.
 

@@ -29,8 +29,13 @@ the cache-miss branch downloads; a cache hit touches neither OSM nor the DEM.
 The summary block emits the 16-hex `cache_key_hash`, the entry path, and the
 elapsed wall-clock. `--verbose` switches the stdlib `logging` root to DEBUG on
 stderr so the deferred pipeline `logger.debug(...)` and cache `logger.warning(...)`
-calls (Stories 2.5/2.7 deferreds) become visible — as do osmnx's own records,
-including its Overpass cache-hit line (`_configure_osmnx_logging`).
+calls (Stories 2.5/2.7 deferreds) become visible — as does osmnx's own INFO
+chatter (`_configure_osmnx_logging`).
+
+Independently of `--verbose`, a cache-miss run reports the Overpass fetch outcome
+as a within-stage line under `osm-load` (`_OsmnxFetchReporter`), because "did this
+actually download anything?" is not otherwise recoverable from a stage whose timing
+is dominated by graph-build CPU.
 """
 
 from __future__ import annotations
@@ -40,7 +45,7 @@ import importlib.metadata
 import logging
 import pathlib
 import time
-from typing import NoReturn
+from typing import NoReturn, final, override
 
 import click
 import osmnx
@@ -139,7 +144,7 @@ def cli(
 
     cache_root = resolve_cache_root(cache_dir)
     _configure_osmnx_cache(cache_root)
-    _configure_osmnx_logging()
+    _configure_osmnx_logging(verbose=verbose)
 
     # The DEM is auto-downloaded for the area on a cache miss; `dem_version` is a
     # stable IGN-layer tag (or the user's `--dem-version` override), so it's
@@ -192,6 +197,10 @@ def cli(
         # only times. `progress.timings` keeps the machine-readable per-stage
         # breakdown for profiling attribution (Story 11.2).
         progress = StageProgress(on_line=None if quiet else print)
+        # Report the Overpass fetch outcome inside the `osm-load` stage window —
+        # installed here rather than in the pipeline so the stage name stays the
+        # only `pipeline/**` edit (that package's bytes key the cache).
+        _install_osmnx_fetch_reporter(progress)
         # Build the graph geometry first (stages 1-4, DEM-independent), then size
         # the DEM from its *actual* extent so the raster covers every vertex
         # `sample_elevation` probes. osmnx `simplify=True` can push simplified edge
@@ -271,8 +280,8 @@ def _configure_osmnx_cache(cache_root: pathlib.Path) -> None:
     osmnx.settings.cache_folder = str(osmnx_cache_dir_for(cache_root))
 
 
-def _configure_osmnx_logging() -> None:
-    """Route osmnx's own log records into the stdlib `logging` tree (stderr under --verbose).
+def _configure_osmnx_logging(*, verbose: bool) -> None:
+    """Route osmnx's own log records into the stdlib `logging` tree.
 
     osmnx never logs through `logging` by default: `utils.log` has two sinks, both
     off. `settings.log_console` prints via `print(..., file=sys.__stdout__)` —
@@ -283,20 +292,81 @@ def _configure_osmnx_logging() -> None:
     that logger has no handlers yet. Pre-attaching a `NullHandler` satisfies that
     check, so we get the records with none of the file side-effects.
 
-    Verbosity needs no gate of its own: that same branch is where `_get_logger`
-    would call `setLevel(DEBUG)`, so the logger stays at `NOTSET` and inherits the
-    root level `configure_cli_logging` already set — DEBUG (records pass) under
-    `--verbose`, WARNING (osmnx's INFO records are dropped) otherwise. Do not set a
-    level on this logger; that inheritance *is* the mechanism.
+    The logger is pinned at INFO rather than left to inherit the root level,
+    because `_OsmnxFetchReporter` needs osmnx's INFO records even on a default
+    (non-`--verbose`) run — a logger drops sub-level records before any handler
+    sees them. `propagate` is what gates the raw text instead: only `--verbose`
+    lets osmnx's ~30 INFO lines per run reach the root's stderr handler.
 
-    Worth the two lines because osmnx logs `"Retrieved response from cache file
-    '<path>'"` at INFO on an Overpass cache hit — the only signal distinguishing a
-    warm `osm-load` stage (pure graph-build CPU) from a cold one that really fetched.
+    Trade-off of `propagate=False`: osmnx's own WARNING/ERROR records are also
+    stderr-invisible without `--verbose`. They were invisible on *every* run until
+    this plumbing existed, and the failure modes that matter (Overpass unreachable,
+    HTTP error) surface as steeproute exceptions anyway — so this loses nothing and
+    keeps a default run's stderr clean.
     """
     osmnx_logger = logging.getLogger(osmnx.settings.log_name)
     if not osmnx_logger.handlers:  # idempotent across repeated CliRunner invocations
         osmnx_logger.addHandler(logging.NullHandler())
+    osmnx_logger.setLevel(logging.INFO)
+    osmnx_logger.propagate = verbose
     osmnx.settings.log_file = True
+
+
+# osmnx's two Overpass-outcome messages, matched as substrings of the rendered
+# record: `_http._retrieve_from_cache` logs the first on a cache hit, and
+# `_http._parse_response` the second after a live download. Both are INFO and
+# neither is a public API, so `test_cli_setup.py` drives osmnx's real cache-read
+# path to catch the day an upgrade reworks the wording.
+_OSMNX_CACHE_HIT_MARKER = "Retrieved response from cache file"
+_OSMNX_DOWNLOAD_MARKER = "Downloaded "
+
+
+@final
+class _OsmnxFetchReporter(logging.Handler):
+    """Report the Overpass fetch outcome as a within-stage progress line on stdout.
+
+    The `osm-load` stage covers a (possibly cached) Overpass fetch *plus* osmnx's
+    graph build, and on a warm run the fetch is a no-op while the stage still
+    reports minutes — so "did this download anything?" is the one fact the timeline
+    can't otherwise convey. Reading it out of osmnx's own log records is what makes
+    it available without driving osmnx's private request API.
+
+    Emitted through `StageProgress.line`, so it lands indented inside the open
+    `osm-load` stage (the `  tile i/N` shape the App already tolerates) and
+    disappears under `--quiet` like every other progress line. At most one line per
+    outcome kind: a multi-request fetch would otherwise repeat itself.
+    """
+
+    def __init__(self, progress: StageProgress) -> None:
+        super().__init__(level=logging.INFO)
+        self._progress = progress
+        self._reported: set[str] = set()
+
+    @override
+    def emit(self, record: logging.LogRecord) -> None:
+        message = record.getMessage()
+        if _OSMNX_CACHE_HIT_MARKER in message:
+            self._report("cache-hit", "osm: Overpass response served from cache (no download)")
+        elif _OSMNX_DOWNLOAD_MARKER in message:
+            self._report("download", f"osm: {message}")
+
+    def _report(self, kind: str, line: str) -> None:
+        if kind in self._reported:
+            return
+        self._reported.add(kind)
+        self._progress.line(line)
+
+
+def _install_osmnx_fetch_reporter(progress: StageProgress) -> None:
+    """Attach a fresh `_OsmnxFetchReporter` for this run's progress seam.
+
+    Any reporter from an earlier run in the same process (repeated `CliRunner`
+    invocations in one test) is dropped first, so lines never go to a stale sink.
+    """
+    osmnx_logger = logging.getLogger(osmnx.settings.log_name)
+    for handler in [h for h in osmnx_logger.handlers if isinstance(h, _OsmnxFetchReporter)]:
+        osmnx_logger.removeHandler(handler)
+    osmnx_logger.addHandler(_OsmnxFetchReporter(progress))
 
 
 def _print_summary(

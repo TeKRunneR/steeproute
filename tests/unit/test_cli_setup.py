@@ -1,3 +1,6 @@
+# pyright: reportPrivateUsage=false
+# Reason: pins `cli/setup.py`'s private osmnx-logging helpers, and the drift canary
+# drives osmnx's own private `_http` cache functions on purpose.
 """Unit tests for the setup CLI's non-pipeline helpers.
 
 `emit_osm_age_warning` (Story 2.9) originally lived in `cli/setup.py`; Story 2.10
@@ -17,10 +20,18 @@ from collections.abc import Iterator
 import osmnx
 import pytest
 
+# The drift canary below drives osmnx's real cache read; `_http` is private and not
+# re-exported, so it must be imported as a submodule rather than off the package.
+from osmnx import _http as osmnx_http
+
 from steeproute.cache import Manifest
-from steeproute.cli._shared import configure_cli_logging, emit_osm_age_warning
-from steeproute.cli.setup import _configure_osmnx_logging  # pyright: ignore[reportPrivateUsage]
+from steeproute.cli._shared import emit_osm_age_warning
+from steeproute.cli.setup import (
+    _configure_osmnx_logging,
+    _install_osmnx_fetch_reporter,
+)
 from steeproute.models import Area
+from steeproute.progress import StageProgress
 
 
 def _manifest_with(osm_extract_date: str) -> Manifest:
@@ -147,10 +158,10 @@ def isolated_osmnx_logging(
 ) -> Iterator[logging.Logger]:
     """Yield osmnx's logger with all touched global state restored afterwards.
 
-    `osmnx.settings` is module-level and both the osmnx and root loggers are
-    process-global, so without this a run of these tests would leak into every
-    later test in the session — including the root level and handler set, which
-    `configure_cli_logging`'s `basicConfig(force=True)` rebinds wholesale.
+    `osmnx.settings` is module-level and the logger is process-global, so without
+    this a run of these tests would leak into every later test in the session —
+    handlers, level, and `propagate`, all three of which
+    `_configure_osmnx_logging` / `_install_osmnx_fetch_reporter` mutate.
     `logs_folder` is redirected into `tmp_path` so that a regression which *does*
     let osmnx build its `FileHandler` shows up as a file under `tmp_path` rather
     than polluting the repo.
@@ -159,15 +170,18 @@ def isolated_osmnx_logging(
     monkeypatch.setattr(osmnx.settings, "log_console", False)
     monkeypatch.setattr(osmnx.settings, "logs_folder", str(tmp_path / "logs"))
     logger = logging.getLogger(osmnx.settings.log_name)
-    root = logging.getLogger()
-    saved = [(lg, list(lg.handlers), lg.level) for lg in (logger, root)]
+    saved_handlers, saved_level, saved_propagate = (
+        list(logger.handlers),
+        logger.level,
+        logger.propagate,
+    )
     logger.handlers.clear()
     try:
         yield logger
     finally:
-        for lg, handlers, level in saved:
-            lg.handlers[:] = handlers
-            lg.setLevel(level)
+        logger.handlers[:] = saved_handlers
+        logger.setLevel(saved_level)
+        logger.propagate = saved_propagate
 
 
 def test_configure_osmnx_logging_opts_into_the_logging_tree_only(
@@ -178,7 +192,7 @@ def test_configure_osmnx_logging_opts_into_the_logging_tree_only(
     `log_console = True` would `print` to `sys.__stdout__`, bypassing redirection and
     colliding with the run summary that owns stdout (Architecture §Cat 8).
     """
-    _configure_osmnx_logging()
+    _configure_osmnx_logging(verbose=False)
 
     assert osmnx.settings.log_file is True
     assert osmnx.settings.log_console is False
@@ -188,22 +202,22 @@ def test_configure_osmnx_logging_opts_into_the_logging_tree_only(
     assert not (tmp_path / "logs").exists()
 
 
-def test_configure_osmnx_logging_leaves_level_inherited_from_root(
-    isolated_osmnx_logging: logging.Logger,
+@pytest.mark.parametrize("verbose", [False, True])
+def test_configure_osmnx_logging_admits_info_and_gates_stderr_on_propagate(
+    isolated_osmnx_logging: logging.Logger, verbose: bool
 ) -> None:
-    """Verbosity comes from the root level, not from a level set on osmnx's logger.
+    """INFO always reaches handlers; only `--verbose` propagates it on to stderr.
 
-    That inheritance IS the `--verbose` mechanism: `configure_cli_logging` puts the
-    root at DEBUG or WARNING, and osmnx's INFO records pass or are dropped
-    accordingly — no verbose flag is threaded into `_configure_osmnx_logging`.
+    The reporter needs osmnx's INFO records on a default run, and a logger drops
+    sub-level records before any handler sees them — hence a pinned INFO level with
+    `propagate` (not the level) deciding whether the raw text hits the root's stderr
+    handler.
     """
-    _configure_osmnx_logging()
+    _configure_osmnx_logging(verbose=verbose)
 
-    assert isolated_osmnx_logging.level == logging.NOTSET
-    configure_cli_logging(verbose=False)
-    assert isolated_osmnx_logging.isEnabledFor(logging.INFO) is False
-    configure_cli_logging(verbose=True)
+    assert isolated_osmnx_logging.level == logging.INFO
     assert isolated_osmnx_logging.isEnabledFor(logging.INFO) is True
+    assert isolated_osmnx_logging.propagate is verbose
 
 
 def test_configure_osmnx_logging_routes_osmnx_log_calls_into_logging(
@@ -212,7 +226,7 @@ def test_configure_osmnx_logging_routes_osmnx_log_calls_into_logging(
     tmp_path: pathlib.Path,
 ) -> None:
     """An `osmnx.utils.log(...)` INFO call — the cache-hit line's own path — arrives as a record."""
-    _configure_osmnx_logging()
+    _configure_osmnx_logging(verbose=True)
 
     with caplog.at_level(logging.INFO, logger=osmnx.settings.log_name):
         osmnx.utils.log("Retrieved response from cache file 'x.json'", logging.INFO)
@@ -229,8 +243,112 @@ def test_configure_osmnx_logging_is_idempotent(
     isolated_osmnx_logging: logging.Logger,
 ) -> None:
     """Repeated calls (one per `CliRunner` invocation in a test process) don't stack handlers."""
-    _configure_osmnx_logging()
-    _configure_osmnx_logging()
-    _configure_osmnx_logging()
+    _configure_osmnx_logging(verbose=False)
+    _configure_osmnx_logging(verbose=False)
+    _configure_osmnx_logging(verbose=False)
 
     assert len(isolated_osmnx_logging.handlers) == 1
+
+
+# --- `_OsmnxFetchReporter` (cache-hit visibility without --verbose) -----------
+
+
+def _reporting_progress(*, quiet: bool = False) -> list[str]:
+    """Install a reporter writing into a fresh line list; return the list."""
+    lines: list[str] = []
+    _configure_osmnx_logging(verbose=False)
+    _install_osmnx_fetch_reporter(StageProgress(on_line=None if quiet else lines.append))
+    return lines
+
+
+@pytest.mark.usefixtures("isolated_osmnx_logging")
+def test_fetch_reporter_announces_a_cache_hit_on_the_progress_sink() -> None:
+    """AC: the outcome shows WITHOUT `--verbose` — the reporter writes to the stdout sink."""
+    lines = _reporting_progress()
+
+    osmnx.utils.log("Retrieved response from cache file 'abc.json'", logging.INFO)
+
+    assert lines == ["  osm: Overpass response served from cache (no download)"]
+
+
+@pytest.mark.usefixtures("isolated_osmnx_logging")
+def test_fetch_reporter_forwards_a_real_download_verbatim() -> None:
+    """A live fetch keeps osmnx's own wording — size and host are the useful detail."""
+    lines = _reporting_progress()
+
+    osmnx.utils.log("Downloaded 516.2kB from 'overpass-api.de' with status 200", logging.INFO)
+
+    assert lines == ["  osm: Downloaded 516.2kB from 'overpass-api.de' with status 200"]
+
+
+@pytest.mark.usefixtures("isolated_osmnx_logging")
+def test_fetch_reporter_reports_each_outcome_once() -> None:
+    """A multi-request fetch must not repeat itself; both kinds may still appear."""
+    lines = _reporting_progress()
+
+    for _ in range(3):
+        osmnx.utils.log("Retrieved response from cache file 'a.json'", logging.INFO)
+        osmnx.utils.log("Downloaded 1.0kB from 'overpass-api.de' with status 200", logging.INFO)
+
+    assert lines == [
+        "  osm: Overpass response served from cache (no download)",
+        "  osm: Downloaded 1.0kB from 'overpass-api.de' with status 200",
+    ]
+
+
+@pytest.mark.usefixtures("isolated_osmnx_logging")
+def test_fetch_reporter_is_silent_under_quiet() -> None:
+    """`--quiet` installs no sink, so the line disappears with every other progress line."""
+    lines = _reporting_progress(quiet=True)
+
+    osmnx.utils.log("Retrieved response from cache file 'abc.json'", logging.INFO)
+
+    assert lines == []
+
+
+@pytest.mark.usefixtures("isolated_osmnx_logging")
+def test_fetch_reporter_ignores_osmnx_chatter() -> None:
+    """Only the two fetch-outcome messages are progress-worthy; the other ~30 are not."""
+    lines = _reporting_progress()
+
+    osmnx.utils.log("Requesting data from API in 1 request(s)", logging.INFO)
+    osmnx.utils.log("Created graph with 4,963 nodes and 10,069 edges", logging.INFO)
+    osmnx.utils.log("Retrieved all data from API in 1 request(s)", logging.INFO)
+
+    assert lines == []
+
+
+@pytest.mark.usefixtures("isolated_osmnx_logging")
+def test_fetch_reporter_reinstall_drops_the_previous_runs_sink() -> None:
+    """Two `CliRunner` invocations in one process must not write into the first run's list."""
+    first = _reporting_progress()
+    second = _reporting_progress()
+
+    osmnx.utils.log("Retrieved response from cache file 'abc.json'", logging.INFO)
+
+    assert first == []
+    assert second == ["  osm: Overpass response served from cache (no download)"]
+
+
+@pytest.mark.usefixtures("isolated_osmnx_logging")
+def test_fetch_reporter_matches_osmnxs_real_cache_read_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    """Drift canary: drive osmnx's OWN cache read, not a hand-written message.
+
+    `_OSMNX_CACHE_HIT_MARKER` is a substring of a private, undocumented log line. If
+    an osmnx upgrade rewords it, the reporter would silently go quiet — the failure
+    mode this whole change exists to remove. Writing a cache file through osmnx's own
+    `_save_to_cache` and reading it back through `_retrieve_from_cache` keeps that
+    honest, offline (both touch only the filesystem).
+    """
+    monkeypatch.setattr(osmnx.settings, "use_cache", True)
+    monkeypatch.setattr(osmnx.settings, "cache_folder", str(tmp_path / "osmnx"))
+    lines = _reporting_progress()
+
+    url = "http://overpass-api.de/api/interpreter?data=fixture"
+    osmnx_http._save_to_cache(url, {"elements": []}, ok=True)
+    assert osmnx_http._retrieve_from_cache(url) == {"elements": []}, "cache write/read failed"
+
+    assert lines == ["  osm: Overpass response served from cache (no download)"]
