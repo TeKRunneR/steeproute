@@ -77,6 +77,7 @@ from typing import NamedTuple
 import numpy as np
 
 from steeproute.models import (
+    HEAVY_EDGE_ATTRS,
     ContractedGraph,
     ConvergenceStatus,
     Solution,
@@ -100,16 +101,10 @@ __all__ = [
     "split_iter_budget",
 ]
 
-HEAVY_EDGE_ATTRS: frozenset[str] = frozenset({"vertices_resampled", "geometry"})
-"""Per-edge attributes stripped from the worker graph view.
-
-Both are pure rendering payloads (the resampled polyline vertices and the shapely
-geometry) that `GraspSolver` never reads — dropping them shrinks the r20 contracted
-graph from ~204 MB to ~72 MB per worker without changing a single solver decision.
-Everything else (numeric edge metrics, `sac_scale`, `base_segment_id`, `reusable`,
-`max_windowed_descent_grad`, and **all node attributes** incl. the
-`--start-at-junction` flag) is preserved.
-"""
+# `HEAVY_EDGE_ATTRS` moved to `models.py` in Story 16.1: stage 9 now produces a
+# lean graph, so the strip set is part of the `ContractedGraph` contract rather
+# than a parallel-solver detail. Kept in `__all__` above so it stays importable
+# from `solver.parallel` for existing callers.
 
 
 class _WorkerResult(NamedTuple):
@@ -220,13 +215,18 @@ def solver_graph_view(contracted: ContractedGraph) -> ContractedGraph:
     dominates wall-clock at r20+). Rebuilding the graph changes internal
     edge-insertion order, which is FR29-safe: the solver sorts nodes and pre-sorts
     adjacency by a total key, and the reuse/segment maps are order-independent.
+
+    Since Story 16.1 `contract_climbs` already produces a lean graph, so the
+    production path skips this rebuild (see `run_parallel_grasp`). It remains the
+    enforcement point for a `ContractedGraph` built anywhere else — a test
+    fixture, an external caller — which is why it stays public.
     """
     lean = contracted.graph.__class__()
     lean.add_nodes_from(contracted.graph.nodes(data=True))
     for node_u, node_v, key, data in contracted.graph.edges(keys=True, data=True):
         kept = {attr: value for attr, value in data.items() if attr not in HEAVY_EDGE_ATTRS}
         lean.add_edge(node_u, node_v, key=key, **kept)
-    return ContractedGraph(graph=lean, super_edge_to_base=contracted.super_edge_to_base)
+    return ContractedGraph(graph=lean, super_edge_to_base=contracted.super_edge_to_base, lean=True)
 
 
 def round_count(iter_budget: int, merge_interval: int, workers: int) -> int:
@@ -478,9 +478,13 @@ def run_parallel_grasp(
     # Acquire the parallel-specific resources before spinning up the pool, and route
     # any failure to `ParallelGraspFailed` → single-process fallback (same contract as
     # the BrokenProcessPool path below), rather than crashing with a raw traceback.
-    # `pickle.dumps(solver_graph_view(...))` serializes the lean graph once for the
-    # pool initializer; it can OOM on a large graph (the dominant setup cost at r20+)
-    # or raise `PicklingError`. The progress queue is a plain `context.Queue()` (not a
+    # `pickle.dumps(...)` serializes the lean graph once for the pool initializer; it
+    # can OOM on a large graph (the dominant setup cost at r20+) or raise
+    # `PicklingError`. A graph that already advertises the lean contract (everything
+    # from `contract_climbs` since Story 16.1) is serialized as-is; only a
+    # possibly-heavy graph from elsewhere pays the `solver_graph_view` rebuild, which
+    # cost a full ~327k-edge graph copy at r20. The progress queue is a plain
+    # `context.Queue()` (not a
     # `Manager().Queue()`): it reaches the workers via the pool initializer below —
     # the only channel through which a non-proxy queue can be shared — so we skip the
     # manager process a proxy queue would require; creating it can hit an OS
@@ -488,7 +492,8 @@ def run_parallel_grasp(
     # with the single-process solver, so failures there are not parallel-specific and
     # are left to propagate (falling back would just re-hit them).
     try:
-        graph_blob = pickle.dumps(solver_graph_view(contracted))
+        worker_graph = contracted if contracted.lean else solver_graph_view(contracted)
+        graph_blob = pickle.dumps(worker_graph)
         progress_queue: MpQueue[tuple[int, int, float]] | None = (
             context.Queue() if emit_progress else None
         )

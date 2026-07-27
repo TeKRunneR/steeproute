@@ -75,6 +75,8 @@ undirected reuse.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from steeproute.models import (
     ConstraintViolation,
     ContractedGraph,
@@ -101,18 +103,52 @@ from steeproute.solver.reuse import (
 __all__ = ["validate", "validate_route", "validate_set"]
 
 
+@dataclass(frozen=True, slots=True)
+class _GraphContext:
+    """Graph-wide invariants every route check needs, derived once per call.
+
+    All three are functions of the contracted graph alone — not of any route — so
+    deriving them per route meant N identical full-graph scans for an N-route set
+    (Story 16.1). Private and deliberately *not* in `models.py`: it is derived
+    state internal to validation, not stage data crossing a module boundary, and
+    `models.py` is content-hashed into every prepared cache key.
+
+    `non_exempt` is the set of base-segment ids subject to the once-only reuse
+    rule; `segment_map` maps each contracted edge to its undirected base ids for
+    the set-level Jaccard check. Both are read-only.
+    """
+
+    non_exempt: frozenset[tuple[int, int, int]]
+    segment_map: dict[tuple[int, int, int], frozenset[tuple[int, int, int]]]
+
+    @classmethod
+    def of(cls, graph: ContractedGraph) -> _GraphContext:
+        return cls(
+            non_exempt=non_exempt_base_segment_ids(graph),
+            segment_map=base_segment_id_map(graph),
+        )
+
+
 def validate_route(route: Route, graph: ContractedGraph, params: SolverParams) -> RouteValidation:
     """Validate one route against every per-route constraint (§Cat 6d).
 
     Reads `route.edges` only; `route.validation` is the *output* of this check,
     not an input (the orchestrator builds the `Route` with the result). Returns
     a `RouteValidation` whose `passed` is `True` iff no constraint is violated.
+
+    Standalone entry point: derives the graph invariants itself, so a single-route
+    check costs one graph scan. `validate` shares one `_GraphContext` across the
+    whole set instead; the verdicts are identical either way.
     """
     return _validate_edges(route.edges, graph, params)
 
 
 def validate_set(
-    routes: list[Route], params: SolverParams, graph: ContractedGraph | None = None
+    routes: list[Route],
+    params: SolverParams,
+    graph: ContractedGraph | None = None,
+    *,
+    context: _GraphContext | None = None,
 ) -> list[PairwiseViolation]:
     """Return one `PairwiseViolation` per route pair exceeding `j_max` (§Cat 6b).
 
@@ -126,8 +162,15 @@ def validate_set(
     matching `TopNTracker`'s admission so a GRASP-admitted set validates by
     construction. With `graph=None` it falls back to the directed
     `(node_u, node_v, key)` identity (pre-6.1 behaviour).
+
+    `context` is an internal fast path: `validate` passes the map it already built
+    so the whole-graph scan is not repeated. Public callers omit it and get
+    today's behaviour.
     """
-    segment_map = base_segment_id_map(graph) if graph is not None else None
+    if context is not None:
+        segment_map = context.segment_map
+    else:
+        segment_map = base_segment_id_map(graph) if graph is not None else None
     overlap_threshold = 1.0 - params.j_max
     violations: list[PairwiseViolation] = []
     for a in range(len(routes)):
@@ -164,23 +207,38 @@ def validate(
     them), so this only fires on an upstream bug — fail loud at the boundary,
     consistent with `TopNTracker`'s non-finite-objective guard.
     """
+    # One `_GraphContext` for the whole set (Story 16.1): the reuse invariants are
+    # functions of the graph, not of any route, so an N-route set derived them N
+    # times — ten identical ~327k-edge scans at r20. `metrics` is likewise built
+    # here and handed to the per-route check, which used to recompute it for the
+    # slope-floor test. Both are pure hoists: same values, same verdicts.
+    context = _GraphContext.of(graph)
     routes: list[Route] = []
     for solution in solutions:
         if not solution.edges:
             raise ValueError("validate() received a zero-edge Solution; empty routes are illegal")
         edges = list(solution.edges)
+        metrics = _route_metrics(edges)
         routes.append(
             Route(
                 edges=edges,
-                metrics=_route_metrics(edges),
-                validation=_validate_edges(edges, graph, params),
+                metrics=metrics,
+                validation=_validate_edges(edges, graph, params, context=context, metrics=metrics),
             )
         )
-    return ValidatedRouteSet(routes=routes, set_violations=validate_set(routes, params, graph))
+    return ValidatedRouteSet(
+        routes=routes,
+        set_violations=validate_set(routes, params, graph, context=context),
+    )
 
 
 def _validate_edges(
-    edges: list[Edge] | tuple[Edge, ...], graph: ContractedGraph, params: SolverParams
+    edges: list[Edge] | tuple[Edge, ...],
+    graph: ContractedGraph,
+    params: SolverParams,
+    *,
+    context: _GraphContext | None = None,
+    metrics: RouteMetrics | None = None,
 ) -> RouteValidation:
     """Run the per-route constraint checks over an edge sequence.
 
@@ -188,17 +246,23 @@ def _validate_edges(
     the `Route` from a `Solution`) so neither hits the frozen-dataclass
     chicken-and-egg of needing a `RouteValidation` to construct the `Route` it
     validates.
+
+    `context` and `metrics` let `validate` pass work it has already done for the
+    whole set; both are derived here when absent, so the standalone path is
+    unchanged.
     """
     cap_rank = parse_difficulty_cap(params.difficulty_cap)
     nx_graph = graph.graph
     violations: list[ConstraintViolation] = []
+    if context is None:
+        context = _GraphContext.of(graph)
 
     # Slope floor (FR3): the *whole-route* average gradient must clear θ. This is
     # a route-level constraint, not a per-edge one — a route may chain steep
     # climbs across flat valley connectors and still fail because its overall
     # (D+ + D−)/length dips below θ. Computed via `_route_metrics` so the
     # validator's slope check and the report's `avg_gradient` are single-sourced.
-    avg_gradient = _route_metrics(list(edges)).avg_gradient
+    avg_gradient = (metrics if metrics is not None else _route_metrics(list(edges))).avg_gradient
     if avg_gradient < params.theta:
         violations.append(
             ConstraintViolation(
@@ -307,7 +371,7 @@ def _validate_edges(
     # either direction) is not a violation. Edges absent from the operational
     # graph contribute nothing here — they are already flagged by
     # `graph_membership` above.
-    non_exempt = non_exempt_base_segment_ids(graph)
+    non_exempt = context.non_exempt
     segment_counts: dict[tuple[int, int, int], int] = {}
     for edge in edges:
         data = nx_graph.get_edge_data(edge.node_u, edge.node_v, edge.key)

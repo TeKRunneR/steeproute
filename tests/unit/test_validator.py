@@ -22,9 +22,12 @@ Coverage map (AC → test):
 
 from __future__ import annotations
 
+from unittest import mock
+
 import networkx as nx
 import pytest
 
+from steeproute import validator
 from steeproute.models import (
     ContractedGraph,
     Edge,
@@ -34,6 +37,7 @@ from steeproute.models import (
     Solution,
     SolverParams,
 )
+from steeproute.solver import reuse
 from steeproute.validator import validate, validate_route, validate_set
 
 # ----------------------------------------------------------------------------
@@ -499,6 +503,72 @@ def test_validate_rejects_empty_solution() -> None:
 
     with pytest.raises(ValueError, match="zero-edge Solution"):
         validate(solutions=[Solution(edges=(), objective=0.0)], graph=graph, params=_params())
+
+
+def test_validate_derives_graph_invariants_once_per_call() -> None:
+    """Story 16.1: the graph-wide reuse invariants are built once, not once per route.
+
+    They were derived inside the per-route check, so an N-route set paid N full
+    contracted-graph scans (10 identical ~327k-edge scans at r20).
+    """
+    edges_a = [_edge(0, 1, avg_gradient=0.3), _edge(1, 2, avg_gradient=0.3)]
+    edges_b = [_edge(2, 3, avg_gradient=0.3), _edge(3, 4, avg_gradient=0.3)]
+    graph = _graph(edges_a + edges_b, super_ids={(0, 1, 0), (1, 2, 0), (2, 3, 0), (3, 4, 0)})
+    solutions = [
+        Solution(edges=tuple(edges_a), objective=1.0),
+        Solution(edges=tuple(edges_b), objective=1.0),
+        Solution(edges=tuple(edges_a + edges_b), objective=1.0),
+    ]
+
+    # Patched on `validator` (where it resolves them), wrapping the real
+    # implementations from their defining module so behaviour is unchanged.
+    with (
+        mock.patch.object(
+            validator, "non_exempt_base_segment_ids", wraps=reuse.non_exempt_base_segment_ids
+        ) as non_exempt,
+        mock.patch.object(
+            validator, "base_segment_id_map", wraps=reuse.base_segment_id_map
+        ) as segment_map,
+    ):
+        validate(solutions, graph, _params())
+
+    assert non_exempt.call_count == 1, (
+        f"expected one non-exempt-id scan for {len(solutions)} routes, got {non_exempt.call_count}"
+    )
+    assert segment_map.call_count == 1, (
+        f"expected one segment-map build, got {segment_map.call_count}"
+    )
+
+
+def test_validate_matches_per_route_results_without_a_shared_context() -> None:
+    """Hoisting the invariants changes no verdict: `validate` == standalone per route.
+
+    The standalone `validate_route` path builds its own context, so this pins the
+    two paths together — the shared context must be a pure performance change.
+    """
+    clean = [_edge(0, 1)]
+    # Route avg_gradient is (D+ + D-)/length over the route, not the edge attr.
+    below_theta = [_edge(1, 2, length_m=1000.0, d_plus_m=10.0, d_minus_m=0.0)]
+    reused = [_edge(2, 3), _edge(2, 3)]
+    graph = _graph(clean + below_theta + reused, super_ids={(0, 1, 0), (1, 2, 0), (2, 3, 0)})
+    solutions = [
+        Solution(edges=tuple(clean), objective=1.0),
+        Solution(edges=tuple(below_theta), objective=1.0),
+        Solution(edges=tuple(reused), objective=1.0),
+    ]
+
+    validated = validate(solutions, graph, _params())
+
+    assert [r.validation.passed for r in validated.routes] == [True, False, False]
+    for route in validated.routes:
+        standalone = validate_route(route, graph, _params())
+        assert standalone.passed == route.validation.passed
+        assert [v.constraint_id for v in standalone.violations] == [
+            v.constraint_id for v in route.validation.violations
+        ]
+        assert [v.detail for v in standalone.violations] == [
+            v.detail for v in route.validation.violations
+        ]
 
 
 def test_validate_route_does_not_mutate_inputs() -> None:

@@ -164,6 +164,37 @@ def test_box_equals_curve_for_every_route(
         )
 
 
+def test_rendered_vertices_identical_when_render_graph_is_filtered_in_place(
+    query_run: tuple[nx.MultiDiGraph, nx.MultiDiGraph, ContractedGraph, list[Route]],
+) -> None:
+    """Rendering off the consumed (in-place filtered) graph resolves identical vertices.
+
+    Story 16.1 made the CLI's render graph *be* the filtered graph rather than an
+    unfiltered superset. `output._edge_vertices` returns `[]` for an edge absent
+    from the graph instead of raising, so a route edge lost to the filter would
+    silently shorten a rendered curve — this pins vertex-for-vertex equality
+    against the superset path rather than arguing the invariant.
+    """
+    _raw, operational, contracted, routes = query_run
+    assert routes, "expected >= 1 route"
+
+    # Same predicate the CLI applies, but consuming: `consumed is owned`.
+    owned = operational.copy()
+    consumed = filter_trails(owned, "include", _DIFFICULTY_CAP, consume=True)
+    assert consumed is owned
+    assert consumed.number_of_edges() < operational.number_of_edges(), (
+        "fixture sanity: the cap must reject at least one edge for this to prove anything"
+    )
+
+    for i, route in enumerate(routes):
+        superset = output._route_vertices(route, operational, contracted.super_edge_to_base)
+        filtered = output._route_vertices(route, consumed, contracted.super_edge_to_base)
+        assert filtered == superset, (
+            f"route {i}: rendered vertices changed under in-place filtering"
+        )
+        assert len(filtered) >= 2, f"route {i}: no geometry resolved"
+
+
 def test_profile_has_no_manufactured_spikes(
     query_run: tuple[nx.MultiDiGraph, nx.MultiDiGraph, ContractedGraph, list[Route]],
 ) -> None:

@@ -500,6 +500,16 @@ goldens pass untouched (no rebake expected — graph identity)
 **And** warm-ingestion wall-clock and peak RSS are recorded (review anchor: ~132 → 99 s warm
 `osm_load`); the osmnx version pin and the private-API risk are documented, and Category 4c is noted
 only if on-disk content changes
+**And** because this story is already driving osmnx's lower-level calls, it reports the stage's
+**fetch-vs-build split** rather than one opaque total — the `osm-download` stage currently prints its
+whole duration under a name that downloads nothing on a warm run (Story 16.1 measured 169.76 s of it
+as pure graph-building CPU with the Overpass response cache-hit). Splitting the timing needs exactly
+the lower-level access this adapter introduces, so it rides along here; the independent cheap fixes
+(honest stage name, surfacing osmnx's own cache-hit log) are recorded in `future-ideas.md` and are
+**not** blocked on this story
+**And** the r20 warm-ingestion baseline is re-measured on the target machine rather than inherited —
+Story 16.1's warm run measured ~170 s for this stage where the review's machine saw ~132 s, so the
+review's `→ 99 s` figure is a *shape*, not a target
 
 ### Story 16.5: Solver static-context reuse + pure-Python loop cleanup
 

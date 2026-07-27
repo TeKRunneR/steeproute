@@ -17,9 +17,11 @@ Super-edges carry the same numeric attribute schema as base edges (`length_m`,
 `avg_gradient = (d_plus_m + d_minus_m) / length_m` (stage 7's absolute-churn
 definition). `sac_scale` aggregates as the maximum SAC rank across the climb's
 edges per `pipeline.osm.SAC_SCALE_RANK`, with `None` entries treated as
-below-`hiking` (so they never raise the aggregate). `geometry` and
-`vertices_resampled` stay on the base edges — consumers reach them via
-`super_edge_to_base` when they need geometry, never off the super-edge.
+below-`hiking` (so they never raise the aggregate). `models.HEAVY_EDGE_ATTRS`
+(`geometry`, `vertices_resampled`) stay on the base edges and appear nowhere in
+the contracted graph — not on super-edges and, since Story 16.1, not on
+connectors either; consumers reach them via `super_edge_to_base` against the
+base graph when they need geometry.
 
 **Undirected base-segment reuse tagging (Story 5.1, FR5).** Every contracted
 edge additionally carries two attributes the solver / oracle / validator
@@ -55,7 +57,7 @@ from __future__ import annotations
 
 import networkx as nx
 
-from steeproute.models import Climb, ContractedGraph, Edge
+from steeproute.models import HEAVY_EDGE_ATTRS, Climb, ContractedGraph, Edge
 from steeproute.pipeline.osm import (
     SAC_SCALE_RANK,
     has_road_highway,
@@ -80,9 +82,10 @@ def contract_climbs(
 
     For each `Climb`, emit one directed super-edge per contiguous sub-segment
     (see `split_at_junctions`) carrying summed metrics. **All** non-climb edges
-    are carried over from `base_graph` unchanged (entire edge-data dict,
-    including `geometry`, `vertices_resampled`, `highway`, `osm_way_id`) — no
-    length-based drop. Every contracted edge is additionally tagged with a
+    are carried over from `base_graph` (whole edge-data dict except
+    `models.HEAVY_EDGE_ATTRS`, so `highway` / `osm_way_id` survive but
+    `geometry` / `vertices_resampled` do not) — no length-based drop. The result
+    is therefore `lean=True`. Every contracted edge is additionally tagged with a
     `base_segment_id` (undirected, see module docstring) and a `reusable` flag.
 
     **Junction-aware splitting (Story 6.1, FR10).** A climb is collapsed into
@@ -148,20 +151,27 @@ def contract_climbs(
     for u, v, k, data in base_graph.edges(data=True, keys=True):
         if (u, v, k) in climb_edge_ids:
             continue
-        # `**data` unpacking creates a fresh outer attribute dict for the
-        # contracted edge — but mutable values inside (`vertices_resampled`
-        # list, `geometry` LineString, list-valued `highway` / `osm_way_id`)
-        # remain aliased to `base_graph`'s. `contract_climbs` itself never
-        # mutates any of these, so the purity contract holds on the call.
-        # `base_segment_id` / `reusable` are NEW keys written onto the fresh
-        # contracted dict only — never back onto `base_graph`'s.
+        # The connector's attribute dict is rebuilt WITHOUT `HEAVY_EDGE_ATTRS`
+        # (Story 16.1): `geometry` / `vertices_resampled` are rendering-only
+        # payloads, and no contracted-graph consumer reads them — the solver,
+        # detection, contraction and the validator are geometry-blind, and
+        # `output.render` resolves geometry off the operational graph through
+        # `super_edge_to_base`. Carrying them here only to have
+        # `solver_graph_view` rebuild the whole graph to strip them again cost a
+        # full ~327k-edge rebuild per r20 run.
+        #
+        # Mutable values that DO carry over (list-valued `highway` /
+        # `osm_way_id`) remain aliased to `base_graph`'s. `contract_climbs`
+        # itself never mutates any of these, so the purity contract holds on the
+        # call. `base_segment_id` / `reusable` are NEW keys written onto the
+        # fresh contracted dict only — never back onto `base_graph`'s.
         # Downstream consumers reading the contracted graph must treat edge
         # data as read-only — same convention as `pipeline.climbs`.
         contracted.add_edge(
             u,
             v,
             key=k,
-            **data,
+            **{attr: value for attr, value in data.items() if attr not in HEAVY_EDGE_ATTRS},
             base_segment_id=frozenset({_base_segment_id(u, v, k)}),
             reusable=data["length_m"] < l_connector,
         )
@@ -233,7 +243,11 @@ def contract_climbs(
     # common flag-off query skips it. Deterministic, no RNG.
     if annotate_junctions:
         _annotate_junctions(contracted, super_edge_to_base)
-    return ContractedGraph(graph=contracted, super_edge_to_base=super_edge_to_base)
+    # `lean=True`: neither branch above ever writes a `HEAVY_EDGE_ATTRS` key —
+    # connectors filter them out and super-edges carry an explicit whitelist — so
+    # the parallel solver can ship this graph to its workers without rebuilding a
+    # stripped copy (Story 16.1).
+    return ContractedGraph(graph=contracted, super_edge_to_base=super_edge_to_base, lean=True)
 
 
 def is_junction_node(graph: ContractedGraph, node: int) -> bool:

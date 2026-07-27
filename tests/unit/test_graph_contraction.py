@@ -17,6 +17,7 @@ import copy
 import math
 
 import networkx as nx
+import shapely
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -210,6 +211,48 @@ def test_all_connectors_retained_short_tagged_reusable() -> None:
     # The short connector is reuse-exempt; the long one is not.
     assert contracted.graph[2][3][0]["reusable"] is True
     assert contracted.graph[0][1][0]["reusable"] is False
+
+
+def test_contracted_connectors_carry_no_heavy_render_attrs_but_keep_the_rest() -> None:
+    """Story 16.1: contraction is lean — `geometry`/`vertices_resampled` stay on the base graph.
+
+    The contracted graph exists for the solver and validator, neither of which
+    reads those two attributes; `output.render` resolves geometry off the
+    operational graph via `super_edge_to_base`. Every *other* base attribute must
+    still pass through untouched.
+    """
+    connector = _make_edge(0, 1, length_m=300.0, d_plus_m=10.0, d_minus_m=10.0)
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    _add_edge_from(g, connector)
+    g.edges[0, 1, 0]["geometry"] = shapely.LineString([(5.0, 45.0), (5.001, 45.001)])
+    g.edges[0, 1, 0]["vertices_resampled"] = [(45.0, 5.0, 100.0), (45.001, 5.001, 110.0)]
+    g.edges[0, 1, 0]["highway"] = "path"
+    g.edges[0, 1, 0]["osm_way_id"] = 42
+
+    contracted = contract_climbs(g, [], l_connector=_L_CONNECTOR)
+
+    data = contracted.graph[0][1][0]
+    assert "geometry" not in data
+    assert "vertices_resampled" not in data
+    # Everything else survives, including the contraction-added reuse tags.
+    assert data["highway"] == "path"
+    assert data["osm_way_id"] == 42
+    assert data["sac_scale"] == "hiking"
+    assert data["length_m"] == 300.0
+    assert data["reusable"] is False
+    assert data["base_segment_id"] == frozenset({(0, 1, 0)})
+    # The base graph keeps them — the render path still resolves geometry.
+    assert "geometry" in g.edges[0, 1, 0]
+    assert "vertices_resampled" in g.edges[0, 1, 0]
+
+
+def test_contracted_graph_advertises_the_lean_contract() -> None:
+    """`ContractedGraph.lean` is what lets the parallel path skip `solver_graph_view`."""
+    connector = _make_edge(0, 1, length_m=300.0, d_plus_m=10.0, d_minus_m=10.0)
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    _add_edge_from(g, connector)
+
+    assert contract_climbs(g, [], l_connector=_L_CONNECTOR).lean is True
 
 
 def test_connector_exactly_at_l_connector_is_not_reusable() -> None:

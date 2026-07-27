@@ -305,13 +305,23 @@ def cli(
     # query-side cap keeps the prepared cache difficulty-independent (setup pins
     # T6; the cache key omits `difficulty_cap`), so `--difficulty-cap` stays a
     # fast query knob. `filter_trails` re-applies the trail-highway + untagged
-    # filters too — idempotent on the already-setup-filtered graph — and never
-    # mutates its input. The filtered graph feeds detection and contraction;
-    # `output.render` keeps the full `operational_graph` for geometry lookups
-    # (read-only, strictly a superset — so FR28 failed-route rendering can never
-    # lose a route edge's geometry, and the rendered curve matches the box).
+    # filters too — idempotent on the already-setup-filtered graph.
+    #
+    # `consume=True` (Story 16.1): the redux rejects only a small minority of an
+    # already-setup-filtered graph, so removing those edges from the graph we
+    # already own beats rebuilding it to keep the rest (~4.6 s → ~0.3 s at r20).
+    # `routable_graph` IS `operational_graph` from here on — one object under two
+    # names — so `output.render` reads the *filtered* graph. That is safe, and
+    # this is the invariant to preserve (not the old "strictly a superset"
+    # claim): every base edge a rendered route expands to came from the filtered
+    # graph, because contraction was built from it and `output.render` resolves
+    # only route edges and their `super_edge_to_base` base edges. So no route —
+    # including an FR28 failed one — can name an edge the filter removed, and
+    # the rendered curve still matches the metric box.
     with stage_progress.stage("trail-filter", note="difficulty-cap redux"):
-        routable_graph = filter_trails(operational_graph, untagged_trails, difficulty_cap)
+        routable_graph = filter_trails(
+            operational_graph, untagged_trails, difficulty_cap, consume=True
+        )
 
     # Progress UI (Story 7.1, FR13): install a throttled stdout renderer unless
     # `--quiet`. The throttle is a pure reporting side-effect — `seed` threads

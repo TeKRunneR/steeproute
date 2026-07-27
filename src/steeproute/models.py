@@ -163,6 +163,24 @@ class Climb:
     avg_slope: float
 
 
+HEAVY_EDGE_ATTRS: frozenset[str] = frozenset({"vertices_resampled", "geometry"})
+"""Per-edge attributes that never appear on a lean contracted graph.
+
+Both are pure rendering payloads — the resampled polyline vertices and the
+shapely geometry — that no contracted-graph consumer reads: the solver, climb
+detection, contraction and the validator are geometry-blind (Architecture
+§Cat 5), and `output.render` resolves geometry off the *operational* graph via
+`super_edge_to_base`. Dropping them shrinks the r20 contracted graph from
+~204 MB to ~72 MB.
+
+Lives here rather than in `solver/parallel.py` (its original home) because it is
+now part of the `ContractedGraph` contract that stage 9 produces and
+`solver_graph_view` enforces for graphs built elsewhere — `pipeline/` must not
+import from `solver/`. Re-exported from `solver.parallel` for its existing
+callers.
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class ContractedGraph:
     """The climb-contracted graph the GRASP solver consumes (Architecture §Cat 3, stage 9).
@@ -175,9 +193,8 @@ class ContractedGraph:
 
     On top of the base edge-attribute contract (`length_m`, `d_plus_m`,
     `d_minus_m`, `avg_gradient`, `sac_scale`, and — on connectors only —
-    `geometry`/`vertices_resampled`/`highway`/`osm_way_id`), every edge in
-    `graph` carries two reuse-tagging attributes set at contraction
-    (Story 5.1, FR5):
+    `highway`/`osm_way_id`), every edge in `graph` carries two reuse-tagging
+    attributes set at contraction (Story 5.1, FR5):
 
     - `base_segment_id`: `frozenset[tuple[int, int, int]]` of undirected
       base-segment identities (canonical sorted node-pair + key, so a segment
@@ -198,10 +215,21 @@ class ContractedGraph:
     ordered `Edge` sequence the super-edge contracts. Used by the validator
     (Story 3.9) to expand a solver `Solution` back to base edges for
     constraint checks.
+
+    `lean` advertises that no edge carries `solver.parallel.HEAVY_EDGE_ATTRS`
+    (`geometry` / `vertices_resampled`) — the rendering-only payloads no
+    contracted-graph consumer reads (Story 16.1). `contract_climbs` produces a
+    lean graph, so `run_parallel_grasp` serializes it straight to its workers
+    instead of rebuilding a stripped copy. It defaults to `False` so a graph
+    hand-built by a test or an external caller is treated as possibly-heavy and
+    still routed through `solver_graph_view` — the conservative direction, since
+    a false `False` costs one rebuild while a false `True` would ship the heavy
+    payload to every worker.
     """
 
     graph: Any  # networkx.MultiDiGraph — partial type stubs (Architecture §"Type hints and data" boundary).
     super_edge_to_base: dict[tuple[int, int, int], tuple[Edge, ...]]
+    lean: bool = False
 
 
 @dataclass(frozen=True, slots=True)

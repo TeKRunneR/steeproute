@@ -220,6 +220,8 @@ def filter_trails(
     graph: nx.MultiDiGraph,
     untagged_policy: str,
     difficulty_cap: str,
+    *,
+    consume: bool = False,
 ) -> nx.MultiDiGraph:
     """Stage 2: drop edges that aren't trails, exceed the SAC cap, or fail the policy.
 
@@ -229,15 +231,54 @@ def filter_trails(
             "exclude" to drop them.
         difficulty_cap: "T1".."T6" (case-insensitive); edges whose `sac_scale`
             ranks strictly above the cap are dropped.
+        consume: when True, remove the rejected edges from `graph` in place and
+            return `graph` itself instead of building a new graph — the
+            ownership path (Story 16.1). The caller then forfeits the
+            *unfiltered* graph: after the call there is only the filtered one.
+            Only safe when the caller owns `graph` exclusively and never needs
+            the rejected edges again. Default False keeps the pure "input never
+            mutated" contract every other caller (and the purity test) relies on.
 
     Returns:
-        New MultiDiGraph; the input graph is never mutated.
+        The filtered graph — a new MultiDiGraph, leaving the input untouched;
+        or, with `consume=True`, `graph` itself with the rejected edges removed.
     """
     if untagged_policy not in {"include", "exclude"}:
         raise BadCLIArgError(
             f"--untagged-trails must be 'include' or 'exclude' (got {untagged_policy!r})"
         )
     cap_rank = parse_difficulty_cap(difficulty_cap)
+
+    def keep(data: dict[str, object]) -> bool:
+        kind = classify_highway(data.get("highway"))
+        if kind == "trail":
+            sac = data.get("sac_scale")
+            if sac is None:
+                return untagged_policy != "exclude"
+            rank = max_sac_rank(sac)
+            return rank is not None and rank <= cap_rank
+        if kind == "connector":
+            # Roads aren't subject to the untagged policy (they carry no SAC
+            # grade by nature). A road that *does* carry an over-cap sac_scale
+            # respects the difficulty cap, like a trail; an untagged or
+            # unrecognized-sac road is admitted as a connector (Story 6.2).
+            rank = max_sac_rank(data.get("sac_scale"))
+            return rank is None or rank <= cap_rank
+        return False
+
+    if consume:
+        # Ownership path (Story 16.1): the query has just operationalized this
+        # graph and the difficulty-cap redux rejects only a small minority of its
+        # edges, so collecting the rejects and removing them beats rebuilding the
+        # whole graph to keep the majority (4.6 s → ~0.3 s on an r20 graph).
+        # Removal preserves the surviving edges' insertion order, so the result is
+        # order-identical to the rebuild below. Nodes are never removed here
+        # either — orphan pruning stays the orchestrator's job.
+        rejected = [
+            (u, v, k) for u, v, k, data in graph.edges(data=True, keys=True) if not keep(data)
+        ]
+        graph.remove_edges_from(rejected)
+        return graph
 
     # Build the output from the KEPT edges rather than copy-then-remove (Story
     # 14.2, S3): stage 2 drops most edges (all non-trail/non-connector, over-cap,
@@ -246,26 +287,8 @@ def filter_trails(
     # edge/node iteration order is preserved so downstream output is unchanged.
     out = empty_like(graph)
     for u, v, k, data in graph.edges(data=True, keys=True):
-        kind = classify_highway(data.get("highway"))
-        if kind == "trail":
-            sac = data.get("sac_scale")
-            if sac is None:
-                if untagged_policy != "exclude":
-                    out.add_edge(u, v, key=k, **data)
-                continue
-            rank = max_sac_rank(sac)
-            if rank is not None and rank <= cap_rank:
-                out.add_edge(u, v, key=k, **data)
-            continue
-        if kind == "connector":
-            # Roads aren't subject to the untagged policy (they carry no SAC
-            # grade by nature). A road that *does* carry an over-cap sac_scale
-            # respects the difficulty cap, like a trail; an untagged or
-            # unrecognized-sac road is admitted as a connector (Story 6.2).
-            rank = max_sac_rank(data.get("sac_scale"))
-            if rank is None or rank <= cap_rank:
-                out.add_edge(u, v, key=k, **data)
-            continue
+        if keep(data):
+            out.add_edge(u, v, key=k, **data)
     return out
 
 

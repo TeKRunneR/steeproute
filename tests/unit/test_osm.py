@@ -115,6 +115,74 @@ def test_filter_trails_does_not_mutate_input(
     assert fixture_graph.number_of_edges() == original_edges
 
 
+# --- consuming path (Story 16.1) ---
+
+
+def test_filter_trails_consume_returns_the_same_object_filtered(
+    fixture_graph: nx.MultiDiGraph,
+) -> None:
+    """`consume=True` filters the caller's graph in place and hands it back.
+
+    The ownership contract: the caller forfeits the *unfiltered* view, so there is
+    no second graph to compare against — the returned object IS the input.
+    """
+    owned = fixture_graph.copy()
+    expected_edges = filter_trails(fixture_graph, "include", "T2").number_of_edges()
+    assert expected_edges < fixture_graph.number_of_edges(), (
+        "Fixture sanity check: T2 must reject at least one edge for this to prove anything."
+    )
+
+    out = filter_trails(owned, "include", "T2", consume=True)
+
+    assert out is owned
+    assert out.number_of_edges() == expected_edges
+
+
+def test_filter_trails_consume_matches_copying_path_exactly(
+    fixture_graph: nx.MultiDiGraph,
+) -> None:
+    """Both paths yield the same ordered edge list, node order, and edge data.
+
+    Edge *order* is load-bearing (the review's POC pinned "identical ordered edge
+    list"): downstream contraction and the solver's adjacency build iterate raw
+    networkx order, so a reordering would be a silent behaviour change.
+    """
+    for policy in ("include", "exclude"):
+        for cap in ("T1", "T3", "T6"):
+            copied = filter_trails(fixture_graph, policy, cap)
+            consumed = filter_trails(fixture_graph.copy(), policy, cap, consume=True)
+
+            assert list(consumed.edges(keys=True)) == list(copied.edges(keys=True)), (
+                f"edge order diverged at policy={policy} cap={cap}"
+            )
+            assert list(consumed.nodes()) == list(copied.nodes()), (
+                f"node order diverged at policy={policy} cap={cap}"
+            )
+            for u, v, k, data in copied.edges(keys=True, data=True):
+                assert consumed.edges[u, v, k] == data
+
+
+def test_filter_trails_consume_keeps_all_nodes(
+    fixture_graph: nx.MultiDiGraph,
+) -> None:
+    """Orphan pruning stays the orchestrator's job — the filter never drops a node."""
+    owned = fixture_graph.copy()
+    node_count = owned.number_of_nodes()
+    out = filter_trails(owned, "exclude", "T1", consume=True)
+    assert out.number_of_nodes() == node_count
+
+
+def test_filter_trails_consume_rejects_bad_policy_before_mutating(
+    fixture_graph: nx.MultiDiGraph,
+) -> None:
+    """Argument validation fires before any edge is removed, so a bad call is a no-op."""
+    owned = fixture_graph.copy()
+    original_edges = owned.number_of_edges()
+    with pytest.raises(BadCLIArgError):
+        filter_trails(owned, "nonsense", "T3", consume=True)
+    assert owned.number_of_edges() == original_edges
+
+
 # --- difficulty-cap sweep ---
 
 
@@ -505,9 +573,7 @@ def _stub_osmnx_fetches(
         point_calls.append(kwargs)
         return nx.MultiDiGraph()
 
-    def _fake_graph_from_polygon(
-        polygon: shapely.Polygon, **_kwargs: object
-    ) -> nx.MultiDiGraph:
+    def _fake_graph_from_polygon(polygon: shapely.Polygon, **_kwargs: object) -> nx.MultiDiGraph:
         polygon_calls.append(polygon)
         return nx.MultiDiGraph()
 

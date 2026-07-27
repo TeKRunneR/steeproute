@@ -26,11 +26,12 @@ from __future__ import annotations
 import pathlib
 
 import networkx as nx
+import numpy as np
 import osmnx
 import pytest
 
 from steeproute.cache import check_coverage
-from steeproute.models import Area, Climb, ContractedGraph, SolverParams
+from steeproute.models import Area, Climb, ContractedGraph, Solution, SolverParams
 from steeproute.pipeline import _drop_orphan_nodes, _drop_short_edges, operationalize_graph
 from steeproute.pipeline.climbs import compute_edge_metrics, detect_climbs
 from steeproute.pipeline.graph import contract_climbs
@@ -41,6 +42,7 @@ from steeproute.pipeline.smoothing import (
     resample_edges,
     smooth_polylines,
 )
+from steeproute.solver.grasp import GraspSolver
 
 _TESTS_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
@@ -199,15 +201,41 @@ def metrics_input_graph(smoothed_elevation_graph: nx.MultiDiGraph) -> nx.MultiDi
 
 
 @pytest.fixture(scope="session")
+def operational_graph(metrics_input_graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
+    """Post-stage-7 operational graph — the input the *query-side* filter redux sees.
+
+    Distinct from `filtered_graph` (the setup-side stage-2 input at `T6` over the
+    raw graph): the query re-filters this metrics-bearing graph at the user's
+    `--difficulty-cap`, which is the seam Story 16.1's consuming path targets.
+    """
+    return compute_edge_metrics(metrics_input_graph)
+
+
+@pytest.fixture(scope="session")
 def routable_and_climbs(
-    metrics_input_graph: nx.MultiDiGraph,
+    operational_graph: nx.MultiDiGraph,
 ) -> tuple[nx.MultiDiGraph, list[Climb]]:
     """`(routable_graph, climbs)` — the two inputs to `contract_climbs` (stage 9)."""
-    operational = compute_edge_metrics(metrics_input_graph)
-    routable = filter_trails(operational, BENCH_UNTAGGED_POLICY, BENCH_DIFFICULTY_CAP)
+    routable = filter_trails(operational_graph, BENCH_UNTAGGED_POLICY, BENCH_DIFFICULTY_CAP)
     climbs = detect_climbs(
         routable,
         min_climb_slope=BENCH_PARAMS.min_climb_slope,
         min_climb_ground_length=BENCH_PARAMS.min_climb_ground_length,
     )
     return routable, climbs
+
+
+@pytest.fixture(scope="session")
+def solved_route_set(contracted_graph: ContractedGraph) -> list[Solution]:
+    """A real seeded GRASP result — the input to the `validate` benchmark.
+
+    Solved once at `BENCH_PARAMS.iter_budget` (1000 iterations, the same pinned
+    budget the throughput benchmark uses). `validate` is read-only over both the
+    solutions and the graph, so one session-scoped solve feeds every round.
+    """
+    solutions = GraspSolver(
+        contracted_graph, BENCH_PARAMS, np.random.default_rng(BENCH_PARAMS.seed)
+    ).run()
+    if not solutions:
+        pytest.skip("grenoble_small yielded no routes at the pinned bench params.")
+    return solutions

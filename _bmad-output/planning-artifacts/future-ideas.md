@@ -121,6 +121,42 @@ stays out of the expensive setup phase. One unified model — axis-aligned recta
 and square are the `angle=0`/equal-extents cases. Arbitrary free-form polygons
 remain **out of scope** (per-query map-drawing cost not justified).
 
+# Setup observability: the `osm-download` stage lies
+
+Noticed while measuring Story 16.1 (2026-07-26). The stage prints
+`stage: osm-download: 169.76 s` even when it downloads **nothing** — a warm r20 run
+with the Overpass response already in osmnx's HTTP cache spent essentially all of
+that on graph-building CPU (91 MB JSON parse, graph construction,
+`truncate_graph_polygon`, `simplify_graph`, `largest_component` ×2,
+`normalize_edges`). Verified the response really was cache-hit: osmnx writes a cache
+file on every live request and no new file appeared across two full setup runs.
+
+Two cheap fixes, independent of each other:
+
+* **Rename the stage.** The label is one string at `pipeline/__init__.py:183`
+  (`seam.stage("osm-download", note="one Overpass request; typically takes minutes")`).
+  Something like `osm-load` with a note naming both halves ("Overpass fetch — cached
+  responses reused — plus graph build") would stop misleading. **Catch:** the stage
+  name is a contract with the web App — `app/cli_adapter/progress_parse.py:36` matches
+  the literal `"osm-download"` — so it is a two-site change plus any tests asserting
+  the name.
+* **Surface osmnx's own cache log.** osmnx *already* logs
+  `"Retrieved response from cache file '<path>'"` at INFO from
+  `_http._retrieve_from_cache`; it just never reaches us. Non-obvious reason:
+  `osmnx.utils.log` is gated behind `settings.log_file` / `settings.log_console` and
+  **does not route into the standard `logging` tree**, so steeproute's
+  `logging.basicConfig(level=DEBUG)` under `--verbose` (`cli/_shared.py:44`) has no
+  effect on it. Enabling it is a one-liner beside the existing `use_cache` /
+  `cache_folder` assignments (`cli/setup.py:263`). **Catch:** `log_console = True`
+  prints via `print(..., file=sys.__stdout__)` — straight to stdout, bypassing
+  redirection — which collides with the CLI's stdout/stderr discipline (the run
+  summary owns stdout; e2e tests assert on it). Confine to `--verbose` and re-run the
+  smoke tests, or route osmnx's output to stderr instead.
+
+A real fetch-vs-build *timing* split is not cheap and is **not** part of this — it
+needs osmnx's lower-level calls driven directly, which is Story 16.4's adapter
+territory (noted there).
+
 # Misc
 * Fix CI ==> actually it's pretty much pointless for a personal tool with no build nor deployment, it should probably just be replaced by pre-commit hooks.
 * Remove area cap: I don't use that for anything, I typically just set it to a very high value so that it doesn't bother me

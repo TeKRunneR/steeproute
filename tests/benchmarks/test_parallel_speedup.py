@@ -35,7 +35,14 @@ def _edge_id_sequences(solutions: list[Solution]) -> list[list[tuple[int, int, i
 
 
 def test_contracted_graph_pickle_size(contracted_graph: ContractedGraph) -> None:
-    """Report the per-worker pickle payload — the dominant spawn startup cost (AC #3)."""
+    """Report the per-worker pickle payload — the dominant spawn startup cost (AC #3).
+
+    Since Story 16.1 this measures the payload workers *actually* receive:
+    `contract_climbs` emits a lean graph (`HEAVY_EDGE_ATTRS` never attached), so
+    this is the same blob `run_parallel_grasp` ships — previously it measured the
+    heavy graph, which was rebuilt into a lean view before being sent.
+    """
+    assert contracted_graph.lean, "stage 9 must advertise the lean contract"
     blob = pickle.dumps(contracted_graph)
     # A reported measurement, not a gate. `-s` surfaces the number; it is also the
     # figure recorded in the story close-out. Sanity-bound only: non-trivial and far

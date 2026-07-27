@@ -26,6 +26,7 @@ these run the exact pickling + fresh-import path on every OS (not just Windows).
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Iterable, Iterator
 from concurrent.futures import Future
 from concurrent.futures import as_completed as _real_as_completed
@@ -34,7 +35,7 @@ import numpy as np
 import pytest
 from conftest import make_toy_contracted_graph, make_toy_solver_params
 
-from steeproute.models import Solution
+from steeproute.models import ContractedGraph, Solution
 from steeproute.solver.grasp import GraspSolver
 from steeproute.solver.parallel import (
     ParallelGraspFailed,
@@ -179,6 +180,38 @@ def test_solver_graph_view_strips_heavy_attrs_but_preserves_solver_output() -> N
     from_view = GraspSolver(view, params, np.random.default_rng(42)).run()
     assert _edge_id_sequences(from_full) == _edge_id_sequences(from_view)
     assert [s.objective for s in from_full] == [s.objective for s in from_view]
+
+
+def test_lean_graph_skips_the_solver_graph_view_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Story 16.1: a graph advertising `lean=True` is shipped as-is, not rebuilt.
+
+    The rebuild was a full ~327k-edge graph copy at r20. A possibly-heavy graph
+    (`lean=False`, the default for anything not from `contract_climbs`) must still
+    be routed through `solver_graph_view` — the conservative direction.
+    """
+    calls: list[ContractedGraph] = []
+
+    def _counting_view(contracted: ContractedGraph) -> ContractedGraph:
+        calls.append(contracted)
+        return solver_graph_view(contracted)
+
+    heavy = make_toy_contracted_graph(9)
+    params = make_toy_solver_params(iter_budget=60, seed=7)
+    lean = dataclasses.replace(heavy, lean=True)
+
+    monkeypatch.setattr("steeproute.solver.parallel.solver_graph_view", _counting_view)
+
+    from_lean = run_parallel_grasp(lean, params, seed=7, workers=2)
+    assert calls == [], "a lean graph must not be rebuilt"
+
+    from_heavy = run_parallel_grasp(heavy, params, seed=7, workers=2)
+    assert len(calls) == 1, "a possibly-heavy graph must still be stripped"
+
+    # Skipping the rebuild cannot change the solve: same graph content either way.
+    assert _edge_id_sequences(from_lean.solutions) == _edge_id_sequences(from_heavy.solutions)
+    assert [s.objective for s in from_lean.solutions] == [s.objective for s in from_heavy.solutions]
 
 
 def test_aggregate_progress_folds_latest_per_worker() -> None:
