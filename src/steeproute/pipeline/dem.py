@@ -41,6 +41,7 @@ import shapely
 # submodule (including spawned solver workers) would otherwise pay for them at
 # import time (Story 14.4 follow-up; see the matching NOTE in `pipeline/osm.py`).
 from steeproute.errors import DataSourceUnavailableError, DEMCoverageError
+from steeproute.pipeline._common import flat_coordinates
 
 # Graph-side CRS: shapely geometries from stages 1-4 are WGS84 lon/lat.
 WGS84_EPSG: int = 4326
@@ -49,6 +50,8 @@ WGS84_EPSG: int = 4326
 def sample_elevation(
     graph: nx.MultiDiGraph,
     dem_path: pathlib.Path,
+    *,
+    inplace: bool = False,
 ) -> nx.MultiDiGraph:
     """Stage 5: sample DEM elevation at every vertex of every edge's geometry.
 
@@ -63,9 +66,19 @@ def sample_elevation(
             edge in WGS84 lon/lat (output of stage 4).
         dem_path: path to a local DEM GeoTIFF. CRS is read from the raster
             header; nodata is honoured if defined.
+        inplace: when True, attach `vertices_resampled` to `graph` itself instead
+            of copying it first, saving one full-graph `copy()` (~5.4 s on an r20
+            graph — Story 16.2). Architecture §Cat 3 3a-bis: `inplace` rather than
+            `consume` because the stage only *adds* an attribute — nothing the
+            caller had before is forfeited, so the returned graph is the same
+            content either way. Only safe when the caller owns `graph`; the sole
+            such caller is `pipeline.attach_elevation`. Every coverage check runs
+            before the first write, so a `DEMCoverageError` leaves `graph`
+            un-annotated.
 
     Returns:
-        A new MultiDiGraph; the input is never mutated.
+        A new MultiDiGraph; the input is never mutated — unless `inplace=True`,
+        in which case `graph` itself is annotated and returned.
 
     Raises:
         DEMCoverageError: if any edge vertex falls outside the DEM's bounds or
@@ -85,7 +98,7 @@ def sample_elevation(
     import rasterio.errors
     import rasterio.transform
 
-    out: nx.MultiDiGraph = graph.copy()
+    out: nx.MultiDiGraph = graph if inplace else graph.copy()
     try:
         dataset_ctx = rasterio.open(dem_path)
     except (rasterio.errors.RasterioIOError, OSError) as exc:
@@ -151,10 +164,13 @@ def sample_elevation(
         # become vectorized masks that still fail fast on the first offending
         # edge with the identical message shape. Output is bit-identical to the
         # old path (proven over the grenoble_small fixture in tests/unit/test_dem.py).
+        # Story 16.2: the per-edge `np.asarray(geom.coords)` + `np.concatenate`
+        # gather became one bulk `shapely.get_coordinates` call (`flat_coordinates`),
+        # measured 3.77 s → 1.51 s over r20's 2.86 M coordinates with bit-identical
+        # values. The type-check loop stays here so the message keeps its
+        # `pipeline.dem:` prefix.
         edge_refs: list[tuple[object, object, object, dict[str, object]]] = []
-        lon_chunks: list[np.ndarray] = []
-        lat_chunks: list[np.ndarray] = []
-        offsets: list[int] = [0]
+        geoms: list[shapely.LineString] = []
         for u, v, k, data in out.edges(data=True, keys=True):
             geom = data.get("geometry")
             if not isinstance(geom, shapely.LineString):
@@ -162,19 +178,16 @@ def sample_elevation(
                     "pipeline.dem: edge geometry must be a shapely.LineString, "
                     f"got {type(geom).__name__}"
                 )
-            coords = np.asarray(geom.coords, dtype=np.float64)  # (n, 2) as (lon, lat)
-            lon_chunks.append(coords[:, 0])
-            lat_chunks.append(coords[:, 1])
-            offsets.append(offsets[-1] + coords.shape[0])
+            geoms.append(geom)
             edge_refs.append((u, v, k, data))
 
         if not edge_refs:
             # Empty graph: nothing to sample (defensive — matches the old no-op).
             return out
 
-        lons = np.concatenate(lon_chunks)
-        lats = np.concatenate(lat_chunks)
-        offset_arr = np.asarray(offsets, dtype=np.int64)
+        flat, offset_arr = flat_coordinates(geoms)
+        lons = flat[:, 0]
+        lats = flat[:, 1]
 
         xs, ys = transformer.transform(lons, lats)
         xs = np.asarray(xs, dtype=np.float64)
@@ -224,7 +237,7 @@ def sample_elevation(
             )
 
         for i, (_u, _v, _k, data) in enumerate(edge_refs):
-            start, end = offsets[i], offsets[i + 1]
+            start, end = int(offset_arr[i]), int(offset_arr[i + 1])
             data["vertices_resampled"] = [
                 (float(lats[j]), float(lons[j]), float(elevs[j])) for j in range(start, end)
             ]

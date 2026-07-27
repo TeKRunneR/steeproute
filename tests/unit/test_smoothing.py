@@ -8,6 +8,7 @@ import math
 import pathlib
 
 import networkx as nx
+import numpy as np
 import osmnx
 import pytest
 import shapely
@@ -20,11 +21,14 @@ from steeproute.pipeline.smoothing import (
     ELEVATION_SMOOTHING_DEFAULT_M,
     RESAMPLE_SPACING_M,
     SMOOTHING_WINDOW,
+    collect_polylines,
     graph_deadband_elevation,
     graph_smooth_elevation,
     is_valid_polyline,
     resample_edges,
+    resample_polylines_flat,
     smooth_polylines,
+    smooth_polylines_flat,
 )
 
 _FIXTURE_PATH = (
@@ -332,6 +336,37 @@ def test_smooth_polylines_keeps_valid_edges_when_one_is_degenerate() -> None:
     assert (1, 2, 0) not in out.edges
 
 
+def test_resample_edges_drops_degenerate_edge_without_corrupting_its_neighbours() -> None:
+    """Story 16.2: a non-finite edge must not poison other edges' arc length.
+
+    Resampling accumulates arc length with ONE global `np.cumsum`, so a NaN
+    coordinate anywhere used to propagate into every subsequent edge. Degenerate
+    edges are now dropped before the array math, which pins that: the good edge
+    resamples exactly as it would have alone.
+    """
+    good = shapely.LineString([(0.0, 0.0), (1e-3, 0.0), (2e-3, 0.0)])
+
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    g.add_node(0, x=0.0, y=0.0)
+    g.add_node(1, x=1e-3, y=0.0)
+    g.add_node(2, x=2e-3, y=0.0)
+    g.add_node(3, x=3e-3, y=0.0)
+    # Degenerate edge FIRST, so any leakage lands on the good edge that follows.
+    g.add_edge(2, 3, key=0, geometry=shapely.LineString([(2e-3, 0.0), (float("inf"), 0.0)]))
+    g.add_edge(0, 1, key=0, geometry=good)
+
+    alone: nx.MultiDiGraph = nx.MultiDiGraph()
+    alone.add_node(0, x=0.0, y=0.0)
+    alone.add_node(1, x=1e-3, y=0.0)
+    alone.add_edge(0, 1, key=0, geometry=good)
+
+    out = resample_edges(g)
+    assert (2, 3, 0) not in out.edges
+    assert list(out.edges[0, 1, 0]["geometry"].coords) == list(
+        resample_edges(alone).edges[0, 1, 0]["geometry"].coords
+    )
+
+
 # --- real OSM fixture: attribute-contract preservation ---
 
 
@@ -369,6 +404,57 @@ def test_fixture_smoothed_then_resampled_preserves_contract(
         assert data.get("sac_scale") == in_sac
         assert data.get("highway") == in_hwy
         assert data.get("osm_way_id") == in_way
+
+
+def test_fused_path_bit_equal_to_two_stage_composition(
+    fixture_graph: nx.MultiDiGraph,
+) -> None:
+    """Story 16.2 AC #3: the fused stage-3→4 path equals `resample_edges(smooth_polylines(g))`.
+
+    The gate for removing the intermediate graph build. Compares the real OSM
+    fixture's full output: same node set, same ordered edge list, and every
+    coordinate bit-equal (`==`, not `approx`) — the LineString round-trip the
+    fusion removes is exact, so anything less than equality is a defect.
+    """
+    two_stage = resample_edges(smooth_polylines(fixture_graph))
+    fused = resample_polylines_flat(smooth_polylines_flat(collect_polylines(fixture_graph)))
+
+    assert list(fused.nodes) == list(two_stage.nodes)
+    assert list(fused.edges(keys=True)) == list(two_stage.edges(keys=True))
+    assert two_stage.number_of_edges() > 0
+
+    total_vertices = 0
+    for u, v, k, data in two_stage.edges(data=True, keys=True):
+        expected = np.asarray(data["geometry"].coords, dtype=np.float64)
+        produced = np.asarray(fused.edges[u, v, k]["geometry"].coords, dtype=np.float64)
+        assert np.array_equal(produced, expected), f"coords diverged on edge {(u, v, k)}"
+        total_vertices += len(expected)
+    # Guard against a vacuous pass.
+    assert total_vertices > 1000, f"expected a substantial fixture, got {total_vertices} vertices"
+
+
+def test_fused_path_drops_the_same_degenerate_edges() -> None:
+    """Story 16.2 AC #3: both stages' validity masks still apply in the fused path.
+
+    Stage 3 drops edges degenerate in their raw coordinates and stage 4 drops those
+    degenerate after smoothing; fused, both masks must still be honoured.
+    """
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    for n in range(4):
+        g.add_node(n, x=n * 1e-3, y=0.0)
+    g.add_edge(0, 1, key=0, geometry=shapely.LineString([(0.0, 0.0), (1e-3, 0.0)]))
+    g.add_edge(
+        1, 2, key=0, geometry=shapely.LineString([(1e-3, 0.0), (1e-3, 0.0)])
+    )  # raw-degenerate
+    g.add_edge(2, 3, key=0, geometry=shapely.LineString([(2e-3, 0.0), (float("inf"), 0.0)]))
+
+    fused = resample_polylines_flat(smooth_polylines_flat(collect_polylines(g)))
+    assert list(fused.edges(keys=True)) == list(
+        resample_edges(smooth_polylines(g)).edges(keys=True)
+    )
+    assert list(fused.edges(keys=True)) == [(0, 1, 0)]
+    # Nodes survive edge dropping — the orphan prune is the orchestrator's job.
+    assert list(fused.nodes) == [0, 1, 2, 3]
 
 
 def test_fixture_pipeline_endpoints_match_node_coords(

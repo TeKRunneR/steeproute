@@ -33,13 +33,14 @@ Resample-spacing contract: vertex spacing is uniform within float roundoff —
 
 from __future__ import annotations
 
+import dataclasses
 import math
 
 import networkx as nx
 import numpy as np
 import shapely
 
-from steeproute.pipeline._common import empty_like, per_edge_searchsorted
+from steeproute.pipeline._common import empty_like, flat_coordinates, per_edge_searchsorted
 
 # Symmetric moving-average window for stage 3, in vertices. Window = 3 means each
 # interior vertex is the mean of itself and its two neighbours; endpoints pinned.
@@ -74,43 +75,62 @@ _EARTH_RADIUS_M: float = 6_378_137.0
 _DEG_TO_M_LAT: float = _EARTH_RADIUS_M * math.radians(1.0)
 
 
-def smooth_polylines(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
-    """Stage 3: moving-average smooth each edge's 2D polyline, preserving endpoints.
+@dataclasses.dataclass(frozen=True, slots=True)
+class FlatPolylines:
+    """Edge polylines in flat-array form, the hand-off between stages 3 and 4.
 
-    Each interior vertex is replaced with the mean of itself and its
-    `SMOOTHING_WINDOW // 2` neighbours on either side. First and last vertices
-    are pinned to their input values (topology preserved).
+    Story 16.2: the two stages each already work in flat numpy arrays internally,
+    but the boundary between them used to materialize a 327k-edge NetworkX +
+    Shapely graph that the next stage immediately flattened again (~7.4 s / ~7.8 s
+    of profiled rebuild at r20). Passing this instead lets the setup orchestrator
+    run stage 3 → stage 4 with the coordinates staying flat and the graph built
+    **once**, while `smooth_polylines` / `resample_edges` remain available as pure
+    graph-in/graph-out stage functions for tests and external callers.
 
-    Edges with degenerate geometry (fewer than 2 distinct finite points) are
-    dropped from the output graph. Stages 5-7 may then assume non-degenerate
-    polylines.
+    Fields:
+        source: the graph the polylines came from; supplies nodes + graph attrs to
+            the eventual rebuild (`empty_like`), independent of which edges survive.
+        meta: `(u, v, k, data)` per edge in edge-iteration order. Only edges that
+            passed `_valid_edges_mask` are present — degenerate edges are dropped
+            here rather than carried as poison rows (a non-finite coordinate would
+            otherwise contaminate every later edge through resampling's global
+            `cumsum`).
+        coords: `(V, 2)` float64 lon/lat of every retained vertex.
+        offs: `(len(meta) + 1,)` prefix sum — edge `e` owns `coords[offs[e]:offs[e+1]]`.
+    """
+
+    source: nx.MultiDiGraph
+    meta: list[tuple[int, int, int, dict[str, object]]]
+    coords: np.ndarray
+    offs: np.ndarray
+
+
+def collect_polylines(graph: nx.MultiDiGraph) -> FlatPolylines:
+    """Gather `graph`'s edge geometry into `FlatPolylines`, dropping degenerate edges.
 
     Raises:
-        TypeError: if any edge's `geometry` is not a `shapely.LineString`
-            (upstream contract violation; fail-fast).
-
-    Returns a new `MultiDiGraph`; the input graph is never mutated.
-
-    Vectorization (Story 14.2): coordinates for the whole graph are gathered in
-    ONE `shapely.get_coordinates` call, the window-3 moving average is a handful
-    of flat numpy array ops over every vertex at once (per-edge numpy dispatch
-    was measured to *regress* on these light loops — the win comes from
-    amortizing the overhead across the whole graph), and the smoothed geometries
-    are rebuilt in ONE `shapely.linestrings` call. Degenerate edges are dropped;
-    all nodes and edge iteration order are preserved. The output is numerically
-    equivalent to the pre-14.2 per-vertex formulation to within floating-point
-    reordering (the naive `(a+b+c)/3` mean replaces the compensated builtin
-    `sum()`; measured max ~1.4e-14 deg on the fixture) — small enough that the
-    regression goldens stay byte-identical, so no rebake was needed.
+        TypeError: if any edge's `geometry` is not a `shapely.LineString`.
     """
-    out = empty_like(graph)
     meta, coords, offs = _collect_linestrings(graph)
     if not meta:
-        return out
-    valid = _valid_edges_mask(coords, offs)
+        return FlatPolylines(graph, meta, coords, offs)
+    return _compact(graph, meta, coords, offs, _valid_edges_mask(coords, offs))
+
+
+def smooth_polylines_flat(flat: FlatPolylines) -> FlatPolylines:
+    """Stage 3 over flat arrays: window-3 moving average, endpoints pinned.
+
+    The array formulation `smooth_polylines` uses; see its docstring for the
+    numerics. Returns a new `FlatPolylines` (degenerate edges were already dropped
+    by `collect_polylines`, and smoothing an interior vertex cannot create a
+    degenerate edge that its raw coordinates did not already have).
+    """
+    coords, offs = flat.coords, flat.offs
+    if not flat.meta:
+        return flat
     # Window-3 moving average: each interior vertex → mean of its two neighbours
-    # and itself; endpoints pinned. `a`/`c` are the left/right neighbour shifts;
-    # the edge-boundary rows they cross are never read (masked out by `isint`).
+    # and itself; endpoints pinned. `left`/`right` are the neighbour shifts; the
+    # edge-boundary rows they cross are never read (masked out by `isint`).
     left = np.empty_like(coords)
     left[1:] = coords[:-1]
     right = np.empty_like(coords)
@@ -121,52 +141,25 @@ def smooth_polylines(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
     isint[offs[1:] - 1] = False
     smoothed = coords.copy()
     smoothed[isint] = mean[isint]
-    _build_from_flat(out, meta, smoothed, offs, valid)
-    return out
+    return dataclasses.replace(flat, coords=smoothed)
 
 
-def resample_edges(
-    graph: nx.MultiDiGraph,
+def resample_polylines_flat(
+    flat: FlatPolylines,
     spacing_m: float = RESAMPLE_SPACING_M,
 ) -> nx.MultiDiGraph:
-    """Stage 4: replace each edge's geometry with vertices at ~`spacing_m` ground meters.
+    """Stage 4 over flat arrays, returning the rebuilt graph — the single graph build.
 
-    Vertex spacing is uniform along the polyline. First and last coordinates
-    are returned exactly equal to the input's first and last (topology
-    preserved); interior vertices land at evenly-divided fractions of the
-    polyline's total length.
-
-    Edges with degenerate geometry (fewer than 2 distinct finite points) are
-    dropped from the output graph.
-
-    Args:
-        graph: input graph with `shapely.LineString` `geometry` on every edge.
-        spacing_m: target ground-meter spacing between consecutive vertices;
-            must be a positive finite number.
-
-    Returns:
-        New `MultiDiGraph`; the input graph is never mutated.
+    The array formulation `resample_edges` uses; see its docstring for the numerics
+    and the spacing contract. Edges that smoothing left degenerate are dropped here.
 
     Raises:
         ValueError: if `spacing_m` is non-positive or non-finite.
-        TypeError: if any edge's `geometry` is not a `shapely.LineString`.
-
-    Vectorization (Story 14.2): the whole graph is resampled in flat numpy array
-    ops — one `shapely.get_coordinates` gather, a per-edge equirectangular
-    projection, `np.hypot` segment lengths + a per-edge-reset `np.cumsum` arc
-    length, and one `np.searchsorted` locating every uniform sample's segment
-    across all edges at once (a per-edge monotone offset keeps each search inside
-    its own edge). Geometries are rebuilt in one `shapely.linestrings` call. This
-    is numerically equivalent to the pre-14.2 per-vertex loop to within
-    floating-point reordering (`np.hypot` ≠ CPython's `math.hypot` by up to a ULP,
-    which could in principle nudge a sample across a segment boundary; measured
-    max ~1.4e-14 deg on the fixture, zero boundary flips) — small enough that the
-    regression goldens stay byte-identical, so no rebake was needed.
     """
     if not math.isfinite(spacing_m) or spacing_m <= 0:
         raise ValueError(f"spacing_m must be a positive finite number (got {spacing_m})")
-    out = empty_like(graph)
-    meta, coords, offs = _collect_linestrings(graph)
+    out = empty_like(flat.source)
+    meta, coords, offs = flat.meta, flat.coords, flat.offs
     if not meta:
         return out
     ne = len(meta)
@@ -223,6 +216,93 @@ def resample_edges(
 
     _build_from_flat(out, meta, out_coords, out_offs, valid)
     return out
+
+
+def smooth_polylines(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
+    """Stage 3: moving-average smooth each edge's 2D polyline, preserving endpoints.
+
+    Each interior vertex is replaced with the mean of itself and its
+    `SMOOTHING_WINDOW // 2` neighbours on either side. First and last vertices
+    are pinned to their input values (topology preserved).
+
+    Edges with degenerate geometry (fewer than 2 distinct finite points) are
+    dropped from the output graph. Stages 5-7 may then assume non-degenerate
+    polylines.
+
+    Raises:
+        TypeError: if any edge's `geometry` is not a `shapely.LineString`
+            (upstream contract violation; fail-fast).
+
+    Returns a new `MultiDiGraph`; the input graph is never mutated.
+
+    Vectorization (Story 14.2): coordinates for the whole graph are gathered in
+    ONE `shapely.get_coordinates` call, the window-3 moving average is a handful
+    of flat numpy array ops over every vertex at once (per-edge numpy dispatch
+    was measured to *regress* on these light loops — the win comes from
+    amortizing the overhead across the whole graph), and the smoothed geometries
+    are rebuilt in ONE `shapely.linestrings` call. Degenerate edges are dropped;
+    all nodes and edge iteration order are preserved. The output is numerically
+    equivalent to the pre-14.2 per-vertex formulation to within floating-point
+    reordering (the naive `(a+b+c)/3` mean replaces the compensated builtin
+    `sum()`; measured max ~1.4e-14 deg on the fixture) — small enough that the
+    regression goldens stay byte-identical, so no rebake was needed.
+
+    Story 16.2: a thin wrapper over `collect_polylines` → `smooth_polylines_flat`
+    → one graph rebuild, so this and the setup orchestrator's fused stage-3→4 path
+    share a single copy of the numerics and cannot drift.
+    """
+    flat = smooth_polylines_flat(collect_polylines(graph))
+    out = empty_like(graph)
+    if not flat.meta:
+        return out
+    _build_from_flat(out, flat.meta, flat.coords, flat.offs, np.ones(len(flat.meta), dtype=bool))
+    return out
+
+
+def resample_edges(
+    graph: nx.MultiDiGraph,
+    spacing_m: float = RESAMPLE_SPACING_M,
+) -> nx.MultiDiGraph:
+    """Stage 4: replace each edge's geometry with vertices at ~`spacing_m` ground meters.
+
+    Vertex spacing is uniform along the polyline. First and last coordinates
+    are returned exactly equal to the input's first and last (topology
+    preserved); interior vertices land at evenly-divided fractions of the
+    polyline's total length.
+
+    Edges with degenerate geometry (fewer than 2 distinct finite points) are
+    dropped from the output graph.
+
+    Args:
+        graph: input graph with `shapely.LineString` `geometry` on every edge.
+        spacing_m: target ground-meter spacing between consecutive vertices;
+            must be a positive finite number.
+
+    Returns:
+        New `MultiDiGraph`; the input graph is never mutated.
+
+    Raises:
+        ValueError: if `spacing_m` is non-positive or non-finite.
+        TypeError: if any edge's `geometry` is not a `shapely.LineString`.
+
+    Vectorization (Story 14.2): the whole graph is resampled in flat numpy array
+    ops — one `shapely.get_coordinates` gather, a per-edge equirectangular
+    projection, `np.hypot` segment lengths + a per-edge-reset `np.cumsum` arc
+    length, and one `np.searchsorted` locating every uniform sample's segment
+    across all edges at once (a per-edge monotone offset keeps each search inside
+    its own edge). Geometries are rebuilt in one `shapely.linestrings` call. This
+    is numerically equivalent to the pre-14.2 per-vertex loop to within
+    floating-point reordering (`np.hypot` ≠ CPython's `math.hypot` by up to a ULP,
+    which could in principle nudge a sample across a segment boundary; measured
+    max ~1.4e-14 deg on the fixture, zero boundary flips) — small enough that the
+    regression goldens stay byte-identical, so no rebake was needed.
+
+    Story 16.2: a thin wrapper over `collect_polylines` → `resample_polylines_flat`,
+    shared with the setup orchestrator's fused stage-3→4 path.
+    """
+    if not math.isfinite(spacing_m) or spacing_m <= 0:
+        raise ValueError(f"spacing_m must be a positive finite number (got {spacing_m})")
+    return resample_polylines_flat(collect_polylines(graph), spacing_m)
 
 
 def graph_smooth_elevation(
@@ -492,14 +572,37 @@ def _collect_linestrings(
             )
         meta.append((u, v, k, data))
         geoms.append(geom)
-    if not geoms:
-        return meta, np.empty((0, 2), dtype=np.float64), np.zeros(1, dtype=np.intp)
-    coords, idx = shapely.get_coordinates(geoms, return_index=True)
-    coords = np.asarray(coords, dtype=np.float64)
-    counts = np.bincount(idx, minlength=len(geoms))
-    offs = np.zeros(len(geoms) + 1, dtype=np.intp)
-    np.cumsum(counts, out=offs[1:])
+    coords, offs = flat_coordinates(geoms)
     return meta, coords, offs
+
+
+def _compact(
+    source: nx.MultiDiGraph,
+    meta: list[tuple[int, int, int, dict[str, object]]],
+    coords: np.ndarray,
+    offs: np.ndarray,
+    valid: np.ndarray,
+) -> FlatPolylines:
+    """Drop `~valid` edges from the flat arrays, preserving row and edge order.
+
+    Degenerate edges are removed *before* the array math rather than masked at the
+    rebuild, because resampling's arc length is a single global `np.cumsum`: one
+    non-finite coordinate in a doomed edge would otherwise propagate NaN into
+    every edge after it. When every edge is valid (the overwhelmingly common case)
+    this returns the input arrays untouched — no copy.
+    """
+    if bool(valid.all()):
+        return FlatPolylines(source, meta, coords, offs)
+    kept = np.flatnonzero(valid)
+    counts = np.diff(offs)
+    new_offs = np.zeros(len(kept) + 1, dtype=np.intp)
+    np.cumsum(counts[kept], out=new_offs[1:])
+    return FlatPolylines(
+        source,
+        [meta[int(e)] for e in kept],
+        coords[np.repeat(valid, counts)],
+        new_offs,
+    )
 
 
 def _valid_edges_mask(coords: np.ndarray, offs: np.ndarray) -> np.ndarray:

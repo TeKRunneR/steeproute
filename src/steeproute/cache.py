@@ -541,7 +541,7 @@ def write_json_atomic(path: pathlib.Path, obj: object) -> None:
     write_text_atomic(path, json.dumps(obj, sort_keys=True, indent=2) + "\n")
 
 
-def _graph_to_payload(graph: nx.MultiDiGraph) -> dict[str, Any]:
+def _graph_to_payload(graph: nx.MultiDiGraph, *, consume: bool = False) -> dict[str, Any]:
     """Build the schema-v2 `graph.pkl` payload: graph-minus-geometry + ragged coord arrays.
 
     Story 13.2: unpickling shapely geometries reconstructs each LineString
@@ -553,16 +553,27 @@ def _graph_to_payload(graph: nx.MultiDiGraph) -> dict[str, Any]:
     graph: the payload pickles the stripped graph alongside one flat coords
     array + per-edge offsets, in `graph.edges()` iteration order.
 
-    Pure — operates on `graph.copy()` (fresh attribute dicts, shared values),
-    so the caller's graph keeps its `geometry` attributes. The copy costs a
-    few seconds on a large graph, which is acceptable on the rarely-run
-    setup/write path; the payoff is on the every-query read path.
+    Pure by default — operates on `graph.copy()` (fresh attribute dicts, shared
+    values), so the caller's graph keeps its `geometry` attributes.
+
+    Args:
+        graph: the post-stage-5 graph to serialize.
+        consume: when True, pop `geometry` straight off `graph` instead of copying
+            it first, saving one full-graph `copy()` (~5.4 s of the r20 cache-write
+            stage's 7.7 s — Story 16.2). Architecture §Cat 3 3a-bis: `consume`
+            rather than `inplace` because the caller forfeits content — its edges
+            lose `geometry`. Only safe when the caller owns `graph` and is done
+            with it; the sole such caller is `cli/setup.py` via
+            `write_entry(consume=True)`. Payload content is identical either way.
 
     Raises:
         ValueError: an edge is missing `geometry` or it is not a LineString —
-            the post-stage-5 contract every cached graph must satisfy.
+            the post-stage-5 contract every cached graph must satisfy. Raised
+            before any further edge is touched, so a `consume=True` failure
+            leaves the caller's graph partially stripped — acceptable because
+            the contract violation is unrecoverable for that caller anyway.
     """
-    stripped = graph.copy()
+    stripped = graph if consume else graph.copy()
     geometries: list[shapely.LineString] = []
     for u, v, key, data in stripped.edges(keys=True, data=True):
         geometry = data.pop("geometry", None)
@@ -644,6 +655,8 @@ def write_entry(
     cache_root: pathlib.Path,
     manifest: Manifest,
     graph: nx.MultiDiGraph,
+    *,
+    consume: bool = False,
 ) -> pathlib.Path:
     """Atomically write a cache entry per Architecture §Cat 4d.
 
@@ -656,6 +669,15 @@ def write_entry(
     key; a Ctrl-C between the manifest write and the index rebuild means
     the entry is readable via `read_entry` but `rebuild_index` will pick it
     up on the next setup run.
+
+    `consume=True` forwards to `_graph_to_payload`, taking ownership of `graph`
+    (its edges lose `geometry`) to skip a full-graph copy — see that function.
+    The payload **content** is identical either way; the `graph.pkl` **bytes** are
+    not, and must not be asserted equal. networkx caches its lazily built
+    `adj` / `succ` / `edges` view objects in the graph's `__dict__`, and
+    `MultiDiGraph.copy()` materializes a different subset of them than a
+    caller-owned graph does, so those incidental views ride along in the pickle.
+    Compare what `read_entry` returns instead (Story 16.2; Architecture §Cat 4c).
 
     Returns the final entry directory path.
     """
@@ -678,7 +700,11 @@ def write_entry(
     # Step 1: graph.pkl + bounds.geojson into the staging directory. The graph
     # is stored as the schema-v2 ragged-array payload (see `_graph_to_payload`).
     with (staging_dir / _GRAPH_FILENAME).open("wb") as graph_fp:
-        pickle.dump(_graph_to_payload(graph), graph_fp, protocol=pickle.HIGHEST_PROTOCOL)
+        pickle.dump(
+            _graph_to_payload(graph, consume=consume),
+            graph_fp,
+            protocol=pickle.HIGHEST_PROTOCOL,
+        )
     write_json_atomic(staging_dir / _BOUNDS_FILENAME, _bounds_geojson(manifest.area))
 
     # Step 2-3: swap staging → final via `<hash>.old/` shuffle (Windows-safe).

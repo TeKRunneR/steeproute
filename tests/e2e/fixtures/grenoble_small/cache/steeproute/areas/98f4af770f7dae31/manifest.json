@@ -1,0 +1,19 @@
+{
+  "area": {
+    "center": [
+      45.26,
+      5.788
+    ],
+    "mode": "center_radius",
+    "radius_km": 2.0
+  },
+  "cache_key_hash": "98f4af770f7dae31",
+  "created_at": "2026-07-27T20:53:24Z",
+  "dem_version": "ign-rgealti-highres",
+  "osm_extract_date": "2026-07-27T20:53:24Z",
+  "pipeline_content_hash": "a7c41055941f14eddab74bdc560a6601a061b8eea8945978117dd08f3f4bb72d",
+  "schema_version": 3,
+  "steeproute_commit": "ac26635-dirty",
+  "steeproute_version": "0.0.1.dev122+2cbcf8d",
+  "untagged_policy": "include"
+}

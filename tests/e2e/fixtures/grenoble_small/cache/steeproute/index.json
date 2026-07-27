@@ -9,7 +9,7 @@
         "mode": "center_radius",
         "radius_km": 2.0
       },
-      "cache_key_hash": "4c348169d4d0bb0c"
+      "cache_key_hash": "98f4af770f7dae31"
     },
     {
       "area": {
@@ -22,7 +22,7 @@
         "half_width_km": 1.7,
         "mode": "center_extents_angle"
       },
-      "cache_key_hash": "d0bb61a840431553"
+      "cache_key_hash": "cb392681518224d8"
     }
   ],
   "schema_version": 1

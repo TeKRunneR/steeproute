@@ -8,9 +8,15 @@
 
     osm_load                 (stage 1)
       → filter_trails        (stage 2)         + non-empty + orphan-prune guards
-      → smooth_polylines     (stage 3)
-      → resample_edges       (stage 4)         + short-edge prune guard
+      → smooth_polylines_flat (stage 3)        flat arrays, no graph built
+      → resample_polylines_flat (stage 4)      + short-edge prune guard
       → sample_elevation     (stage 5)         + finite-elevation guard
+
+Stages 3-4 are **fused** (Story 16.2): the orchestrator carries the polylines as
+flat coordinate arrays (`smoothing.FlatPolylines`) across the two stages and the
+output graph is built once. `smooth_polylines` / `resample_edges` remain the pure
+graph-in/graph-out stage functions for tests and external callers, wrapping the
+same internals. Stage 5 runs `inplace=True` — `attach_elevation` owns the graph.
 
 Output is the cached `networkx.MultiDiGraph` carrying the **raw** post-stage-5
 edge-attribute contract (`geometry`, `vertices_resampled` with raw elevation,
@@ -65,10 +71,11 @@ from steeproute.pipeline.osm import filter_trails, osm_load
 from steeproute.pipeline.smoothing import (
     ELEVATION_DEADBAND_DEFAULT_M,
     ELEVATION_SMOOTHING_DEFAULT_M,
+    collect_polylines,
     graph_deadband_elevation,
     graph_smooth_elevation,
-    resample_edges,
-    smooth_polylines,
+    resample_polylines_flat,
+    smooth_polylines_flat,
 )
 from steeproute.progress import StageProgress
 
@@ -186,10 +193,19 @@ def build_graph_geometry(
         graph = filter_trails(graph, untagged_policy, _SETUP_DIFFICULTY_CAP)
         _assert_non_empty(graph, area, untagged_policy)
         graph = _drop_orphan_nodes(graph)
+    # Stages 3-4 fused (Story 16.2): the coordinates stay in flat arrays across
+    # both stages and the graph is built ONCE, instead of stage 3 materializing a
+    # 327k-edge NetworkX + Shapely graph that stage 4 immediately flattens again
+    # (~7.4 s / ~7.8 s of profiled rebuild at r20). The two stage *seams* are
+    # deliberately kept — `polyline-smoothing` times the gather + smooth,
+    # `resampling` the resample + single rebuild — so the timeline, the App's
+    # SETUP_STAGES list, and the e2e stage assertions are unchanged. The public
+    # `smooth_polylines` / `resample_edges` wrap the same two internals, so this
+    # path cannot drift from them.
     with seam.stage("polyline-smoothing"):
-        graph = smooth_polylines(graph)
+        flat = smooth_polylines_flat(collect_polylines(graph))
     with seam.stage("resampling"):
-        graph = resample_edges(graph)
+        graph = resample_polylines_flat(flat)
         graph = _drop_short_edges(graph)
         # Re-assert non-empty after the post-stage-4 prunes: stage-3 (smooth) and
         # stage-4 (resample) drop degenerate edges, and `_drop_short_edges` adds
@@ -210,10 +226,17 @@ def attach_elevation(
     `dem_path` must cover every edge-geometry vertex — `cli/setup.py` ensures this
     by sizing the raster from `graph_dem_bounds(graph)`. A vertex outside the DEM
     raises `DEMCoverageError` from `sample_elevation`.
+
+    **Consumes `graph`** (Story 16.2): stage 5 runs `inplace=True`, so `graph` is
+    annotated rather than copied (~5.4 s saved on an r20 graph). The only caller is
+    `cli/setup.py` — directly and via `run_setup_stages` — which built the graph
+    itself and hands it straight on to `write_entry`; it never reads a pre-stage-5
+    version. Callers who need the input preserved should call `sample_elevation`
+    directly with its copying default.
     """
     seam = progress if progress is not None else StageProgress()
     with seam.stage("elevation-sampling"):
-        graph = sample_elevation(graph, dem_path)
+        graph = sample_elevation(graph, dem_path, inplace=True)
         _assert_finite_elevations(graph)
     return graph
 

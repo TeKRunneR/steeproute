@@ -5,11 +5,13 @@ Atomic write + read + entry-overwrite paths are exercised in
 file covers the smaller primitives + recovery branches.
 """
 
-# pyright: reportPrivateUsage=false
+# pyright: reportPrivateUsage=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportMissingTypeArgument=false
 # Reason: this tier is the intended consumer of `cache.py`'s module-private
 # geometry/parse helpers (`_area_to_polygon`, `_read_indexed_entries`) — they are
 # private so other call sites don't reach in, not so tests can't pin them. Same
-# rationale as `tests/unit/test_check_coverage.py`.
+# rationale as `tests/unit/test_check_coverage.py`. The `reportUnknown*` /
+# `reportMissingTypeArgument` relaxations cover the networkx boundary in the
+# Story 16.2 payload tests, same pattern as `tests/unit/test_smoothing.py`.
 
 from __future__ import annotations
 
@@ -18,7 +20,10 @@ import json
 import pathlib
 import re
 
+import networkx as nx
+import numpy as np
 import pytest
+import shapely
 
 from steeproute import cache as cache_mod
 from steeproute.cache import (
@@ -37,6 +42,108 @@ _INDEX_SCHEMA_VERSION = 1
 # the on-disk-format change is a deliberate, reviewed edit. v3 = Story 15.2's
 # rotated `area` block.
 _MANIFEST_SCHEMA_VERSION = 3
+
+
+# --- Story 16.2: consuming graph payload build --------------------------------
+
+
+def _two_edge_graph() -> nx.MultiDiGraph:
+    """A minimal post-stage-5 graph: LineString `geometry` + `vertices_resampled`."""
+    g: nx.MultiDiGraph = nx.MultiDiGraph()
+    g.add_node(0, x=5.78, y=45.26)
+    g.add_node(1, x=5.79, y=45.27)
+    g.add_node(2, x=5.80, y=45.28)
+    g.add_edge(
+        0,
+        1,
+        key=0,
+        geometry=shapely.LineString([(5.78, 45.26), (5.785, 45.265), (5.79, 45.27)]),
+        vertices_resampled=[(45.26, 5.78, 600.0), (45.265, 5.785, 610.0), (45.27, 5.79, 620.0)],
+        highway="path",
+    )
+    g.add_edge(
+        1,
+        2,
+        key=0,
+        geometry=shapely.LineString([(5.79, 45.27), (5.80, 45.28)]),
+        vertices_resampled=[(45.27, 5.79, 620.0), (45.28, 5.80, 640.0)],
+        highway="track",
+    )
+    return g
+
+
+def _assert_payloads_equal(produced: dict[str, object], expected: dict[str, object]) -> None:
+    assert produced.keys() == expected.keys()
+    for part in ("geometry_coords", "geometry_offsets"):
+        assert np.array_equal(np.asarray(produced[part]), np.asarray(expected[part]))
+    pg, eg = produced["graph"], expected["graph"]
+    assert isinstance(pg, nx.MultiDiGraph) and isinstance(eg, nx.MultiDiGraph)
+    assert list(pg.nodes(data=True)) == list(eg.nodes(data=True))
+    assert list(pg.edges(keys=True, data=True)) == list(eg.edges(keys=True, data=True))
+
+
+def test_graph_to_payload_consume_matches_the_copying_path() -> None:
+    """AC #5: the consuming payload build is content-identical to the copying one."""
+    expected = cache_mod._graph_to_payload(_two_edge_graph())
+    produced = cache_mod._graph_to_payload(_two_edge_graph(), consume=True)
+    _assert_payloads_equal(produced, expected)
+
+
+def test_graph_to_payload_default_leaves_caller_geometry_intact() -> None:
+    """AC #5: the copying default keeps its purity contract for every other caller."""
+    graph = _two_edge_graph()
+    _ = cache_mod._graph_to_payload(graph)
+    assert all("geometry" in d for _u, _v, d in graph.edges(data=True))
+
+
+def test_graph_to_payload_consume_strips_geometry_from_the_caller_graph() -> None:
+    """AC #5: opting in forfeits `geometry` on the caller's own graph."""
+    graph = _two_edge_graph()
+    _ = cache_mod._graph_to_payload(graph, consume=True)
+    assert all("geometry" not in d for _u, _v, d in graph.edges(data=True))
+    # Everything else survives — only geometry moves into the ragged arrays.
+    assert all("vertices_resampled" in d for _u, _v, d in graph.edges(data=True))
+
+
+@pytest.mark.parametrize("consume", [False, True])
+def test_graph_to_payload_rejects_non_linestring_geometry_on_both_paths(consume: bool) -> None:
+    """AC #5: the post-stage-5 contract check is identical on both paths."""
+    graph = _two_edge_graph()
+    graph.edges[0, 1, 0]["geometry"] = "not-a-linestring"
+    with pytest.raises(ValueError, match="requires a shapely LineString"):
+        _ = cache_mod._graph_to_payload(graph, consume=consume)
+
+
+def test_write_entry_consume_round_trips_to_the_same_graph(tmp_path: pathlib.Path) -> None:
+    """AC #5: an entry written the consuming way reads back identical to the copying way.
+
+    Content equality, not `graph.pkl` byte equality: networkx caches its lazily
+    built `adj` / `succ` / `edges` view objects in the graph's `__dict__`, and
+    `MultiDiGraph.copy()` materializes a different subset of them than the graph
+    the setup CLI hands over — so the pickled bytes carry incidental view
+    artifacts that say nothing about the cached data. What must match is what
+    `read_entry` gives a query.
+    """
+    area = Area(center=(45.26, 5.78), radius_km=2.0)
+    manifest = dataclasses.replace(
+        Manifest.from_dict(_manifest_payload()), area=area, cache_key_hash="0" * 16
+    )
+    copying_root = tmp_path / "copying"
+    consuming_root = tmp_path / "consuming"
+
+    _ = cache_mod.write_entry(copying_root, manifest, _two_edge_graph())
+    consumed_graph = _two_edge_graph()
+    _ = cache_mod.write_entry(consuming_root, manifest, consumed_graph, consume=True)
+
+    expected = read_entry(copying_root, manifest.cache_key_hash).graph
+    produced = read_entry(consuming_root, manifest.cache_key_hash).graph
+    assert list(produced.nodes(data=True)) == list(expected.nodes(data=True))
+    assert list(produced.edges(keys=True)) == list(expected.edges(keys=True))
+    for u, v, k, data in expected.edges(keys=True, data=True):
+        got = produced.edges[u, v, k]
+        assert got["vertices_resampled"] == data["vertices_resampled"]
+        assert got["geometry"].equals_exact(data["geometry"], 0.0)
+    assert all("geometry" not in d for _u, _v, d in consumed_graph.edges(data=True))
 
 
 # --- write_json_atomic --------------------------------------------------------

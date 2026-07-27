@@ -41,15 +41,19 @@ from conftest import (
 )
 from pytest_benchmark.fixture import BenchmarkFixture
 
+from steeproute import cache
 from steeproute.models import Climb
 from steeproute.pipeline.climbs import compute_edge_metrics
 from steeproute.pipeline.dem import sample_elevation
 from steeproute.pipeline.graph import contract_climbs
 from steeproute.pipeline.osm import filter_trails, normalize_edges
 from steeproute.pipeline.smoothing import (
+    collect_polylines,
     graph_deadband_elevation,
     resample_edges,
+    resample_polylines_flat,
     smooth_polylines,
+    smooth_polylines_flat,
 )
 
 pytestmark = pytest.mark.benchmark
@@ -82,6 +86,64 @@ def test_stage5_sample_elevation(
     benchmark: BenchmarkFixture, resampled_graph: nx.MultiDiGraph
 ) -> None:
     benchmark(sample_elevation, resampled_graph, DEM_FIXTURE_PATH)
+
+
+# --- Story 16.2: setup ownership / fusion pairs -------------------------------
+#
+# Each pair measures the old shape and the new one in the SAME run, so the
+# comparison is immune to the machine's between-run wall-clock drift (Story 16.1
+# saw untouched stages move up to 33% between adjacent runs). The consuming
+# variants use `benchmark.pedantic(setup=...)` so the `graph.copy()` each round
+# needs — to hand the consumer a graph it may destroy — stays outside the measured
+# region. These are component baselines only: per AGENTS.md §Scale target the
+# acceptance number comes from the real r20 setup replay, not from scaling these.
+
+
+def test_stage34_two_stage_smooth_then_resample(
+    benchmark: BenchmarkFixture, filtered_graph: nx.MultiDiGraph
+) -> None:
+    """Stages 3→4 the old way: build the intermediate graph, then flatten it again."""
+    benchmark(lambda: resample_edges(smooth_polylines(filtered_graph)))
+
+
+def test_stage34_fused_smooth_resample(
+    benchmark: BenchmarkFixture, filtered_graph: nx.MultiDiGraph
+) -> None:
+    """Stages 3→4 fused: coordinates stay flat, the graph is built once."""
+    benchmark(
+        lambda: resample_polylines_flat(smooth_polylines_flat(collect_polylines(filtered_graph)))
+    )
+
+
+def test_stage5_sample_elevation_inplace(
+    benchmark: BenchmarkFixture, resampled_graph: nx.MultiDiGraph
+) -> None:
+    """Stage 5 without the input copy — the `attach_elevation` path."""
+    benchmark.pedantic(
+        lambda graph: sample_elevation(graph, DEM_FIXTURE_PATH, inplace=True),
+        setup=lambda: ((resampled_graph.copy(),), {}),
+        rounds=20,
+        warmup_rounds=1,
+    )
+
+
+def test_cache_write_payload_copying(
+    benchmark: BenchmarkFixture, prepared_grenoble_graph: nx.MultiDiGraph
+) -> None:
+    """Cache-write payload build the old way: copy the whole graph, then pop geometry."""
+    benchmark(cache._graph_to_payload, prepared_grenoble_graph)
+
+
+def test_cache_write_payload_consuming(
+    benchmark: BenchmarkFixture, prepared_grenoble_graph: nx.MultiDiGraph
+) -> None:
+    """Cache-write payload build from an owned graph — the `steeproute-setup` path."""
+    benchmark.pedantic(
+        lambda graph: cache._graph_to_payload(graph, consume=True),
+        setup=lambda: ((prepared_grenoble_graph.copy(),), {}),
+        rounds=20,
+        warmup_rounds=1,
+    )
 
 
 # --- Query-side stages (6b / 7 / 9) — Story 14.2 (Q2, Q3) --------------------

@@ -46,10 +46,15 @@ square area gets the committed graphml untouched (it *is* the square bbox fetch)
 non-square area is passed through osmnx's own `truncate_graph_polygon` +
 `largest_component`, the same two steps `graph_from_polygon` finishes with.
 
-**The rotated entry was added to the committed tree without rewriting the square one**
-(Story 15.3): the square entry's `manifest.json` and `graph.pkl` are byte-for-byte as
-committed, only `index.json` gained a row. Re-running the script above regenerates both
-from scratch, which is equivalent but rewrites the square manifest's timestamps.
+**Both entries were regenerated from scratch on 2026-07-27 (Story 16.2)**, so the whole cache
+root now carries one current `pipeline_content_hash`. Before that, the rotated entry had been
+added without rewriting the square one (Story 15.3), and the square entry had gone unrebuilt
+long enough to drift from what the pipeline actually produces: at regeneration it differed by
+up to 2.8e-14 deg on 9,855 coordinates — the float-reordering drift Story 14.2 documented and
+accepted. **No golden moved** (all 10 pinned regressions, fast + realistic tiers), because the
+goldens pin route metrics and canonical edge hashes, not raw coordinates. The lesson worth
+keeping: while this cache is stale, the goldens cover the query and solver but **not** setup —
+a setup-side regression cannot move a golden whose input never gets rebuilt.
 
 Regenerate after the setup-side pipeline or the OSM/DEM source fixtures change. Each `graph.pkl`
 holds the schema-v2 pickled payload (graph minus geometry + ragged coordinate arrays,
@@ -63,4 +68,6 @@ rejects any non-current version. Unlike the other three fixtures this cache *can
 rebuilt offline via `regenerate_cache.py`, but the manifest was migrated by editing
 `schema_version` alone for consistency with them and to keep the diff auditable: a square's
 `area` block is byte-identical across v2 and v3, and `graph.pkl` was not touched. Verified:
-the golden passes unchanged, **no rebake**.
+the golden passes unchanged, **no rebake**. (Superseded for this fixture by the Story 16.2
+full regeneration above, which writes current-schema manifests directly; the note stands as
+the migration recipe for the three fixtures that cannot be rebuilt offline.)

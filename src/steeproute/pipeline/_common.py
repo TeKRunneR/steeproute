@@ -10,11 +10,36 @@ searchsorted trick) lands in one place instead of drifting across copies.
 
 from __future__ import annotations
 
-from collections.abc import Container
+from collections.abc import Container, Sequence
 from typing import Literal
 
 import networkx as nx
 import numpy as np
+import shapely
+
+
+def flat_coordinates(
+    geoms: Sequence[shapely.LineString],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Gather `geoms`' coordinates into ONE flat `(V, 2)` array + per-geometry offsets.
+
+    Returns `(coords, offs)` where geometry `i`'s vertices are `coords[offs[i]:offs[i+1]]`
+    and `offs` has length `len(geoms) + 1`. One `shapely.get_coordinates` call for the
+    whole batch replaces per-geometry `np.asarray(geom.coords)` + `np.concatenate`
+    (measured 3.77 s → 1.51 s over an r20 graph's 2.86 M coordinates, bit-identical
+    values — Story 16.2). Callers keep their own geometry-type validation so their
+    error messages stay module-specific.
+
+    z is dropped (shapely's 2D default), matching the `coords[:, 0]` / `coords[:, 1]`
+    slicing every caller applies.
+    """
+    if not geoms:
+        return np.empty((0, 2), dtype=np.float64), np.zeros(1, dtype=np.intp)
+    coords, idx = shapely.get_coordinates(geoms, return_index=True)
+    counts = np.bincount(idx, minlength=len(geoms))
+    offs = np.zeros(len(geoms) + 1, dtype=np.intp)
+    np.cumsum(counts, out=offs[1:])
+    return np.asarray(coords, dtype=np.float64), offs
 
 
 def empty_like(

@@ -221,7 +221,12 @@ def cli(
             created_at=now,
         )
         with progress.stage("cache-write"):
-            entry_dir = write_entry(cache_root, manifest, graph)
+            # `consume=True` (Story 16.2): this graph is ours — built by
+            # `build_graph_geometry`/`attach_elevation` above — and nothing reads it
+            # after this call (the summary below prints only cache metadata), so
+            # let the payload build pop `geometry` off it instead of copying the
+            # whole graph first (~5.4 s of the r20 cache-write stage).
+            entry_dir = write_entry(cache_root, manifest, graph, consume=True)
 
     elapsed_s = time.perf_counter() - start
     assert entry_dir is not None  # both branches assign it; tells basedpyright

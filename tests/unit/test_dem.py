@@ -145,6 +145,54 @@ def test_sample_elevation_does_not_mutate_input(tmp_path: pathlib.Path) -> None:
     assert "vertices_resampled" not in data_in
 
 
+def test_sample_elevation_inplace_returns_the_same_object_with_vertices_attached(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Story 16.2 AC #1: the ownership opt-in skips the copy and annotates the caller's graph."""
+    data = np.full((4, 4), 600.0, dtype=np.float32)
+    transform = from_origin(west=5.78, north=45.27, xsize=0.001, ysize=0.001)
+    dem_path = _write_dem(tmp_path / "flat.tif", data, transform, "EPSG:4326")
+
+    coords = [(5.7805, 45.2695), (5.7815, 45.2685)]
+    graph = _single_edge_graph(coords)
+    out = sample_elevation(graph, dem_path, inplace=True)
+
+    assert out is graph
+    assert "vertices_resampled" in graph.get_edge_data(0, 1, key=0)
+
+
+def test_sample_elevation_inplace_matches_the_copying_path(tmp_path: pathlib.Path) -> None:
+    """Story 16.2 AC #1/#2: both paths produce identical `vertices_resampled`."""
+    data = np.array(
+        [[610.0, 620.0, 630.0], [640.0, 650.0, 660.0], [670.0, 680.0, 690.0]], dtype=np.float32
+    )
+    transform = from_origin(west=5.78, north=45.27, xsize=0.001, ysize=0.001)
+    dem_path = _write_dem(tmp_path / "ramp.tif", data, transform, "EPSG:4326")
+
+    coords = [(5.7805, 45.2695), (5.7812, 45.2688), (5.7818, 45.2683)]
+    copied = sample_elevation(_single_edge_graph(coords), dem_path)
+    consumed = sample_elevation(_single_edge_graph(coords), dem_path, inplace=True)
+
+    assert (
+        consumed.get_edge_data(0, 1, key=0)["vertices_resampled"]
+        == copied.get_edge_data(0, 1, key=0)["vertices_resampled"]
+    )
+
+
+def test_sample_elevation_inplace_validates_before_mutating(tmp_path: pathlib.Path) -> None:
+    """Story 16.2 AC #1: coverage failures still fire before any edge is annotated."""
+    data = np.full((4, 4), 500.0, dtype=np.float32)
+    transform = from_origin(west=0.0, north=1.0, xsize=0.25, ysize=0.25)
+    dem_path = _write_dem(tmp_path / "tiny.tif", data, transform, "EPSG:4326")
+
+    graph = _single_edge_graph([(10.0, 10.0), (10.1, 10.1)])
+    with pytest.raises(DEMCoverageError) as excinfo:
+        _ = sample_elevation(graph, dem_path, inplace=True)
+
+    assert "(0, 1, 0)" in excinfo.value.user_message
+    assert "vertices_resampled" not in graph.get_edge_data(0, 1, key=0)
+
+
 def test_sample_elevation_returns_finite_floats(tmp_path: pathlib.Path) -> None:
     """AC #3: no silent NaN — every returned elevation is finite."""
     data = np.array([[100.0, 200.0], [300.0, 400.0]], dtype=np.float32)
