@@ -531,6 +531,20 @@ manual cumulative arrays are not generally bit-identical — do not remove the g
 Story 12.2's prose)
 **And** single-process 100k-iter throughput is recorded (review anchor: ~13.58 → 11.43 s, −15.8%) and
 the four-worker end-to-end effect is measured at close-out
+**And**, as a **conditional rider** once the solver work above is landed and measured, the review's
+last unassigned finding — §10, keeping query elevation data flat across stages 6-7 — is either taken
+or explicitly declined in this story's close-out. It is the query-side twin of Story 16.2's setup
+stage-3→4 fusion: stage 6a rebuilds every `vertices_resampled` tuple list, 6b reads and rebuilds them
+again, and stage 7 re-gathers them into arrays. **Measured on r20 post-16.1/16.2** (2026-07-27):
+stages 6-7 total 11.89 s (6a 5.67 / 6b 1.59 at `--elevation-deadband 1` / 7 4.63), of which one gather
+costs 1.20 s and one tuple rebuild 0.65 s. One rebuild is **mandatory** — `output.render` and the
+validator consume the tuple lists — so only the two intermediate boundaries are removable and the
+ceiling is **~3 s at demo params, ~2 s at the default deadband 0** (which short-circuits 6b), against
+a ~78 s query whose remaining ~50 s is the solve itself. Take it only if it is genuinely cheap
+alongside the solver work; the bar for taking it is the same bit-equality gating Story 16.2 used, and
+the delicate part is that stage 6 is the home of the box==curve guarantee (the deadband's hysteresis
+is sequential and must not be "vectorized"). Declining is a valid outcome — record the reason and let
+Story 16.7 carry it as a residual
 
 ### Story 16.6: Shared-memory array solver state (structural, POC-gated)
 

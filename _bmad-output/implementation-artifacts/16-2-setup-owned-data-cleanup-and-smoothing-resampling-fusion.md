@@ -1,6 +1,6 @@
 # Story 16.2: Setup owned-data cleanup + smoothing/resampling fusion (one content-hash batch)
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
