@@ -191,9 +191,9 @@ def build_graph_geometry(
     # osmnx's graph build (JSON parse, truncation, simplification, largest-component),
     # and on a warm run the request is served from osmnx's HTTP cache — Story 16.1
     # measured 169.76 s of this stage at r20 with the response already cached, i.e.
-    # essentially all graph-building CPU. `--verbose` surfaces osmnx's own cache-hit
-    # log line on stderr (`cli/setup.py:_configure_osmnx_logging`) so the two halves
-    # are at least distinguishable; a real timing split needs Story 16.4's adapter.
+    # essentially all graph-building CPU. Which of the two happened is reported as a
+    # within-stage line by `cli/setup.py:_OsmnxFetchReporter`; a real timing *split*
+    # needs Story 16.4's adapter.
     with seam.stage("osm-load", note="Overpass fetch (cached responses reused) plus graph build"):
         graph = osm_load(area)
     with seam.stage("trail-filter"):
