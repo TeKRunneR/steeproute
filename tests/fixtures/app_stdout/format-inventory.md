@@ -64,7 +64,7 @@ The CLI stage lines carry **only a stage name — never an `n/total` count.** So
 must derive them from a **known, ordered stage list per job kind** and increment
 as each `stage: … ...` start line arrives:
 
-- **setup (cache-miss), 7 stages, in order:** `osm-download`, `trail-filter`,
+- **setup (cache-miss), 7 stages, in order:** `osm-load`, `trail-filter`,
   `polyline-smoothing`, `resampling`, `dem-resolve`, `elevation-sampling`,
   `cache-write`.
 - **query, 6 stages, in order:** `load-prepared-area`, `elevation-reshape`,
@@ -84,12 +84,14 @@ Emitted by the `StageProgress` seam (`src/steeproute/progress.py`), sink is
 
 **A1 — stage start**
 ```
-stage: osm-download (one Overpass request; typically takes minutes) ...
+stage: osm-load (Overpass fetch (cached responses reused) plus graph build) ...
 stage: trail-filter ...
 ```
 - Shape: `stage: <name>[ (<note>)] ...`  (the ` (<note>)` is optional).
 - `<note>` is a human honesty annotation on the **start line only** — strip it.
   Canonical `stage_name` = text between `stage: ` and the first ` (` or ` ...`.
+  The note may itself contain parentheses (as `osm-load`'s does), which is harmless:
+  splitting at the **first** ` (` and keeping the head still yields the clean name.
 - → enter phase `setup`; set `stage_name`; advance `stage_index`.
 
 **A2 — within-stage line** (indented 2 spaces)
@@ -105,7 +107,7 @@ stage: trail-filter ...
 
 **A3 — stage done**
 ```
-stage: osm-download: 7.69 s
+stage: osm-load: 7.69 s
 ```
 - Shape: `stage: <name>: <elapsed> s`, `<elapsed>` is `%.2f`. Name here is the
   **clean** name (never carries the note).

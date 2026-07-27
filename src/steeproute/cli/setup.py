@@ -29,7 +29,8 @@ the cache-miss branch downloads; a cache hit touches neither OSM nor the DEM.
 The summary block emits the 16-hex `cache_key_hash`, the entry path, and the
 elapsed wall-clock. `--verbose` switches the stdlib `logging` root to DEBUG on
 stderr so the deferred pipeline `logger.debug(...)` and cache `logger.warning(...)`
-calls (Stories 2.5/2.7 deferreds) become visible.
+calls (Stories 2.5/2.7 deferreds) become visible — as do osmnx's own records,
+including its Overpass cache-hit line (`_configure_osmnx_logging`).
 """
 
 from __future__ import annotations
@@ -138,6 +139,7 @@ def cli(
 
     cache_root = resolve_cache_root(cache_dir)
     _configure_osmnx_cache(cache_root)
+    _configure_osmnx_logging()
 
     # The DEM is auto-downloaded for the area on a cache miss; `dem_version` is a
     # stable IGN-layer tag (or the user's `--dem-version` override), so it's
@@ -267,6 +269,34 @@ def _configure_osmnx_cache(cache_root: pathlib.Path) -> None:
     """
     osmnx.settings.use_cache = True
     osmnx.settings.cache_folder = str(osmnx_cache_dir_for(cache_root))
+
+
+def _configure_osmnx_logging() -> None:
+    """Route osmnx's own log records into the stdlib `logging` tree (stderr under --verbose).
+
+    osmnx never logs through `logging` by default: `utils.log` has two sinks, both
+    off. `settings.log_console` prints via `print(..., file=sys.__stdout__)` —
+    unusable here, it bypasses redirection and collides with the run summary that
+    owns stdout (Architecture §Cat 8). `settings.log_file` *does* route into a real
+    `logging.Logger` named `settings.log_name`, but osmnx's `_get_logger` bolts a
+    `FileHandler` onto it and creates a `logs/` folder — and it does so *only* when
+    that logger has no handlers yet. Pre-attaching a `NullHandler` satisfies that
+    check, so we get the records with none of the file side-effects.
+
+    Verbosity needs no gate of its own: that same branch is where `_get_logger`
+    would call `setLevel(DEBUG)`, so the logger stays at `NOTSET` and inherits the
+    root level `configure_cli_logging` already set — DEBUG (records pass) under
+    `--verbose`, WARNING (osmnx's INFO records are dropped) otherwise. Do not set a
+    level on this logger; that inheritance *is* the mechanism.
+
+    Worth the two lines because osmnx logs `"Retrieved response from cache file
+    '<path>'"` at INFO on an Overpass cache hit — the only signal distinguishing a
+    warm `osm-load` stage (pure graph-build CPU) from a cold one that really fetched.
+    """
+    osmnx_logger = logging.getLogger(osmnx.settings.log_name)
+    if not osmnx_logger.handlers:  # idempotent across repeated CliRunner invocations
+        osmnx_logger.addHandler(logging.NullHandler())
+    osmnx.settings.log_file = True
 
 
 def _print_summary(

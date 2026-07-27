@@ -33,7 +33,7 @@ from steeproute.app.models import GraspProgress, JobKind, Phase, ProgressModel
 # position is tracked by incrementing, not by name lookup (`trail-filter` occurs
 # in both setup and query kinds, so a name→index map would be ambiguous).
 SETUP_STAGES: tuple[str, ...] = (
-    "osm-download",
+    "osm-load",
     "trail-filter",
     "polyline-smoothing",
     "resampling",

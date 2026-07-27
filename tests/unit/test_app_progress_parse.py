@@ -6,6 +6,11 @@ Driven against the pinned Story 1.1 spike fixtures
 (`tests/fixtures/app_stdout/*.stdout.txt`) — the same files the classifiers were
 specified from, so these assertions verify the real captured line shapes map to
 the expected `ProgressModel` fields.
+
+Those captures predate the `osm-download` → `osm-load` stage rename and are left
+byte-faithful: they are recordings of real runs, and keeping them also pins the
+backward compatibility the App needs for job logs stored before the rename
+(`test_pre_rename_setup_capture_still_parses_positionally`).
 """
 
 from __future__ import annotations
@@ -42,11 +47,13 @@ def _feed_query(name: str) -> list[ProgressModel]:
 
 def test_setup_stage_start_enters_stage_and_strips_note() -> None:
     parser = SetupProgressParser()
-    model = parser.feed("stage: osm-download (one Overpass request; typically takes minutes) ...")
+    # The real `osm-load` note carries nested parentheses; stripping at the *first*
+    # " (" keeps that harmless.
+    model = parser.feed("stage: osm-load (Overpass fetch (cached responses reused) plus build) ...")
     assert model is not None
     assert model.phase is Phase.SETUP
     # Note is stripped to the clean canonical name.
-    assert model.stage_name == "osm-download"
+    assert model.stage_name == "osm-load"
     assert model.stage_index == 1
     assert model.stage_total == len(SETUP_STAGES) == 7
     assert model.grasp is None
@@ -55,18 +62,18 @@ def test_setup_stage_start_enters_stage_and_strips_note() -> None:
 
 def test_setup_stage_done_records_elapsed_without_advancing() -> None:
     parser = SetupProgressParser()
-    _ = parser.feed("stage: osm-download (note) ...")
-    done = parser.feed("stage: osm-download: 7.69 s")
+    _ = parser.feed("stage: osm-load (note) ...")
+    done = parser.feed("stage: osm-load: 7.69 s")
     assert done is not None
-    assert done.stage_name == "osm-download"
+    assert done.stage_name == "osm-load"
     assert done.stage_index == 1  # done line does not advance the index
     assert done.elapsed == pytest.approx(7.69)
 
 
 def test_tile_within_stage_line_lands_in_log_tail_without_advancing() -> None:
     parser = SetupProgressParser()
-    _ = parser.feed("stage: osm-download ...")  # index 1
-    _ = parser.feed("stage: osm-download: 7.69 s")
+    _ = parser.feed("stage: osm-load ...")  # index 1
+    _ = parser.feed("stage: osm-load: 7.69 s")
     _ = parser.feed("stage: trail-filter ...")  # index 2
     _ = parser.feed("stage: trail-filter: 0.02 s")
     _ = parser.feed("stage: polyline-smoothing ...")  # index 3
@@ -114,6 +121,24 @@ def test_full_fixture_run_reaches_seventh_stage() -> None:
     assert all(m.phase is Phase.SETUP for m in models)
     # Last recorded stage elapsed is cache-write's (the final `stage: … : t s`).
     assert final.elapsed == pytest.approx(0.05)
+
+
+def test_pre_rename_setup_capture_still_parses_positionally() -> None:
+    """A job log stored before the `osm-download` → `osm-load` rename keeps parsing.
+
+    `SETUP_STAGES` supplies `stage_total` only — `_enter_stage` increments rather
+    than looking the name up — so a renamed stage is not a wire-format break. The
+    pinned capture still carries the old name, which is exactly the case to pin:
+    the App reports whatever the log says at the right index out of the right total.
+    """
+    lines = _FIXTURE.read_text(encoding="utf-8").splitlines()
+    assert lines[0].startswith("stage: osm-download "), (
+        "fixture is no longer the pre-rename capture"
+    )
+
+    first = _feed_all(lines[:1])[0]
+    assert first.stage_name == "osm-download"
+    assert (first.stage_index, first.stage_total) == (1, 7)
 
 
 def test_stage_index_progression_over_fixture() -> None:

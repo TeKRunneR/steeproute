@@ -32,8 +32,8 @@ _FAKE_CLI = textwrap.dedent(
     import sys, time
     sleep_s = float(sys.argv[1])
     lines = [
-        "stage: osm-download (one Overpass request; typically takes minutes) ...",
-        "stage: osm-download: 0.01 s",
+        "stage: osm-load (Overpass fetch (cached responses reused) plus graph build) ...",
+        "stage: osm-load: 0.01 s",
         "stage: trail-filter ...",
         "stage: trail-filter: 0.00 s",
         "steeproute-setup: cache-miss",
@@ -120,7 +120,7 @@ def test_sse_snapshot_replay_after_terminal(tmp_path: pathlib.Path) -> None:
         assert len(progress) == _EXPECTED_PROGRESS_EVENTS
         assert len(status) == 1
         # Progress carries the classified model; the setup stages are present.
-        assert any('"stage_name":"osm-download"' in d.replace(" ", "") for d in progress)
+        assert any('"stage_name":"osm-load"' in d.replace(" ", "") for d in progress)
         assert any('"stage_name":"trail-filter"' in d.replace(" ", "") for d in progress)
         # Terminal status event reports done.
         assert '"status":"done"' in status[0].replace(" ", "")

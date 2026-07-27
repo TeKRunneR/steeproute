@@ -123,6 +123,12 @@ remain **out of scope** (per-query map-drawing cost not justified).
 
 # Setup observability: the `osm-download` stage lies
 
+**Done 2026-07-27:** both cheap fixes landed (spec-setup-observability-osm-load.md,
+quick-dev). The stage is now `osm-load` with a note naming both halves, and osmnx's
+own records — including its Overpass cache-hit line — reach stderr under `--verbose`
+via `settings.log_file` plus a pre-attached `NullHandler` (no stdout writes, no
+`logs/` dir). The fetch-vs-build *timing* split remains Story 16.4's.
+
 Noticed while measuring Story 16.1 (2026-07-26). The stage prints
 `stage: osm-download: 169.76 s` even when it downloads **nothing** — a warm r20 run
 with the Overpass response already in osmnx's HTTP cache spent essentially all of

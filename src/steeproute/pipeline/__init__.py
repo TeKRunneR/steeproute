@@ -187,7 +187,14 @@ def build_graph_geometry(
     elevation yet — and at least one edge (the non-empty guard).
     """
     seam = progress if progress is not None else StageProgress()
-    with seam.stage("osm-download", note="one Overpass request; typically takes minutes"):
+    # Named `osm-load`, not `osm-download`: the stage is one Overpass request *plus*
+    # osmnx's graph build (JSON parse, truncation, simplification, largest-component),
+    # and on a warm run the request is served from osmnx's HTTP cache — Story 16.1
+    # measured 169.76 s of this stage at r20 with the response already cached, i.e.
+    # essentially all graph-building CPU. `--verbose` surfaces osmnx's own cache-hit
+    # log line on stderr (`cli/setup.py:_configure_osmnx_logging`) so the two halves
+    # are at least distinguishable; a real timing split needs Story 16.4's adapter.
+    with seam.stage("osm-load", note="Overpass fetch (cached responses reused) plus graph build"):
         graph = osm_load(area)
     with seam.stage("trail-filter"):
         graph = filter_trails(graph, untagged_policy, _SETUP_DIFFICULTY_CAP)

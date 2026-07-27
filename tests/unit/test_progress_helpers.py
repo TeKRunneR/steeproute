@@ -131,21 +131,21 @@ def test_stage_emits_start_and_done_lines_and_records_timing() -> None:
     clock = _FakeClock(10.0)
     lines: list[str] = []
     progress = StageProgress(lines.append, clock=clock)
-    with progress.stage("osm-download"):
+    with progress.stage("osm-load"):
         clock.t = 12.5
-    assert lines == ["stage: osm-download ...", "stage: osm-download: 2.50 s"]
-    assert progress.timings == {"osm-download": pytest.approx(2.5)}
+    assert lines == ["stage: osm-load ...", "stage: osm-load: 2.50 s"]
+    assert progress.timings == {"osm-load": pytest.approx(2.5)}
 
 
 def test_stage_note_is_rendered_on_the_start_line_only() -> None:
-    """The honest "takes minutes" annotation rides the start line, not the done line."""
+    """The honest both-halves annotation rides the start line, not the done line."""
     clock = _FakeClock(0.0)
     lines: list[str] = []
     progress = StageProgress(lines.append, clock=clock)
-    with progress.stage("osm-download", note="one Overpass request; typically takes minutes"):
+    with progress.stage("osm-load", note="Overpass fetch plus graph build"):
         clock.t = 1.0
-    assert lines[0] == "stage: osm-download (one Overpass request; typically takes minutes) ..."
-    assert lines[1] == "stage: osm-download: 1.00 s"
+    assert lines[0] == "stage: osm-load (Overpass fetch plus graph build) ..."
+    assert lines[1] == "stage: osm-load: 1.00 s"
 
 
 def test_silent_seam_records_timings_without_any_output() -> None:
@@ -184,11 +184,11 @@ def test_multiple_stages_accumulate_timings_in_execution_order() -> None:
     """The timings dict keeps insertion order — Story 11.2 reads it as the timeline."""
     clock = _FakeClock(0.0)
     progress = StageProgress(clock=clock)
-    with progress.stage("osm-download"):
+    with progress.stage("osm-load"):
         clock.t = 2.0
     with progress.stage("trail-filter"):
         clock.t = 2.5
-    assert list(progress.timings) == ["osm-download", "trail-filter"]
+    assert list(progress.timings) == ["osm-load", "trail-filter"]
     assert progress.timings["trail-filter"] == pytest.approx(0.5)
 
 

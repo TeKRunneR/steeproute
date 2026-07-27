@@ -11,7 +11,7 @@ re-running them across rounds is sound). No live network anywhere:
 
 - Stage 1 is benchmarked as its offline stand-in — graphml parse + `normalize_edges`
   of the committed fixture — NOT the Overpass download it replaces in production.
-- The two network stages (`osm-download`, `dem-resolve`) are out of benchmark
+- The two network-touching stages (`osm-load`, `dem-resolve`) are out of benchmark
   scope by construction; their baseline is Story 11.2's cold-cache capture
   (~81% of a 54 s real setup), recorded in
   `_bmad-output/planning-artifacts/research/profiling/setup-timeline.txt`.

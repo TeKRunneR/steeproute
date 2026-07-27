@@ -177,7 +177,7 @@ def test_setup_cache_miss_prints_per_stage_timeline(shared_runs: _SharedRuns) ->
     result = shared_runs.miss
     assert result.exit_code == 0, result.output
     for stage in (
-        "osm-download",
+        "osm-load",
         "trail-filter",
         "polyline-smoothing",
         "resampling",
@@ -191,8 +191,12 @@ def test_setup_cache_miss_prints_per_stage_timeline(shared_runs: _SharedRuns) ->
         assert re.search(rf"stage: {stage}: \d+\.\d{{2}} s", result.output), (
             f"missing elapsed line for {stage}"
         )
-    # The blocking Overpass download carries the honest "takes minutes" annotation.
-    assert "stage: osm-download (one Overpass request; typically takes minutes)" in result.output
+    # The OSM stage names both halves it covers: the (possibly cached) Overpass fetch
+    # and osmnx's graph build, which dominates a warm run.
+    assert (
+        "stage: osm-load (Overpass fetch (cached responses reused) plus graph build)"
+        in result.output
+    )
 
 
 def test_setup_quiet_suppresses_stage_lines_but_keeps_summary(tmp_path: pathlib.Path) -> None:
