@@ -559,7 +559,7 @@ def _collect_linestrings(
     prefix-sum so edge `e`'s vertices are `coords[offs[e]:offs[e+1]]`.
 
     Raises `TypeError` on any non-LineString geometry (upstream contract
-    violation, fail-fast — same message shape as the old per-edge `_extract_coords`).
+    violation, fail-fast).
     """
     meta: list[tuple[int, int, int, dict[str, object]]] = []
     geoms: list[shapely.LineString] = []

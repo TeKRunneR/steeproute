@@ -191,8 +191,9 @@ def resolve_area(
 def _validate_extent(flag: str, value_km: float) -> None:
     """Reject a non-finite or non-positive area dimension, naming `flag`.
 
-    Message wording is carried over verbatim from the pre-Epic-15
-    `validate_setup_radius` so every existing `--radius` diagnostic is unchanged.
+    The single size guard behind every spelling (`--radius`, `--width`,
+    `--height`) on both CLIs, so a bad dimension reports identically whichever
+    flag the user typed.
     """
     if not math.isfinite(value_km):
         raise BadCLIArgError(
@@ -258,7 +259,7 @@ def validate_solver_options(
     (`iter_budget < 1`, `n < 1`, `j_max ∉ [0, 1]`). A `ValueError` is not a
     `PreExecutionError`, so without this guard it escapes `run_entry_point` as a
     raw traceback (exit 1) instead of the documented `BadCLIArgError → exit 2`.
-    Non-finite floats are caught first for the same reason `validate_setup_radius`
+    Non-finite floats are caught first for the same reason `_validate_extent`
     does: `click.FLOAT` parses `"nan"`/`"inf"`, and `nan` then slips past every
     downstream comparison (IEEE-754), silently yielding zero/garbage climbs.
 

@@ -49,9 +49,12 @@ class ProgressEvent:
       degradation), so this value may step down as well as up.
     - `estimated_remaining_s`: rough ETA against the iteration budget, or `None`
       when no rate is yet measurable (no elapsed time recorded).
-    - `stagnation_counter`: consecutive iterations whose top-N total objective
-      was unchanged. Resets to 0 on any change. Story 7.2 turns this into an
-      early-termination signal; here it is reported only.
+    - `stagnation_counter`: consecutive iterations in which no candidate was
+      admitted to the top-N — iterations since the held set last changed,
+      resetting to 0 on an admission. It is NOT a total-objective delta: the
+      tracker's evict-many-admit-one branch can change the held set while
+      leaving the total equal (see `solver/grasp.py` `run`). The solver also
+      terminates on this once it reaches `--stagnation-iters`.
     """
 
     iteration: int

@@ -487,16 +487,3 @@ def test_grasp_rejects_non_positive_iter_budget() -> None:
         params = _params(iter_budget=bad_budget)
         with pytest.raises(ValueError, match="iter_budget must be >= 1"):
             GraspSolver(graph, params, np.random.default_rng(42))
-
-
-def test_anytime_module_imports() -> None:
-    """`solver.anytime` is a Story 3.6 stub for Epic 4 — just verify it imports.
-
-    AC #3: keep the import surface stable for Story 4.3. This test catches a
-    regression where the module accidentally grows a syntax error or a broken
-    dependency before Epic 4 fleshes it out. Asserts `__all__` is a list (not
-    that it is empty) so legitimate Epic 4 exports do not trip this test.
-    """
-    from steeproute.solver import anytime  # noqa: PLC0415
-
-    assert isinstance(anytime.__all__, list)

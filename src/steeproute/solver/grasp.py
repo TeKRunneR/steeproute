@@ -157,10 +157,10 @@ well inside NFR1's budget. `--stagnation-iters 0` disables the check entirely
 RCL_SIZE: int = 5
 """Restricted candidate list cap (cardinality-based GRASP).
 
-Pinned module-scope for FR29 determinism — Epic 4 may surface this as a CLI
-flag once the Story 3.7 quality gate establishes a baseline. Five is the
-classic "small but not greedy" default; smaller values starve diversity,
-larger values approach uniform-random construction.
+Pinned module-scope rather than exposed as a CLI flag, so it cannot vary per
+run and perturb FR29 determinism. Five is the classic "small but not greedy"
+default; smaller values starve diversity, larger values approach
+uniform-random construction.
 """
 
 

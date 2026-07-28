@@ -23,13 +23,12 @@ edge-attribute contract (`geometry`, `vertices_resampled` with raw elevation,
 `sac_scale`, `highway`, `osm_way_id`). The per-edge metrics (`length_m`,
 `d_plus_m`, `d_minus_m`, `avg_gradient`) are **not** computed here.
 
-**Stages 6-7 are query-side (Story 6.3).** Elevation smoothing + deadband
-reshaping (stage 6) and naive-sum metrics (stage 7) move out of setup into
-`operationalize_graph`, called by `cli/query.py`. This keeps the cache
-smoothing-independent: `--elevation-smoothing` / `--elevation-deadband` become
-free query knobs and the cache key need not include them. Moving the code out of
-setup changes `compute_pipeline_content_hash`, so prepared areas re-prepare once
-when this ships (the same one-time cost the roads change incurred).
+**Stages 6-7 are query-side.** Elevation smoothing + deadband reshaping
+(stage 6) and naive-sum metrics (stage 7) live in `operationalize_graph`,
+called by `cli/query.py` — deliberately not in the setup pipeline. That keeps
+the cache smoothing-independent: `--elevation-smoothing` /
+`--elevation-deadband` stay free query knobs and the cache key need not
+include them.
 
 **Difficulty-cap policy (Architecture §Cat 3b + §Cat 4b).** Stages 1-5 are
 cached parameter-independent over `difficulty_cap` — the cache key omits it.

@@ -261,8 +261,8 @@ class SolverParams:
       here so the report's metadata block carries the full input fingerprint.
     - `seed`: explicit RNG seed (FR29); `None` only at the CLI-flag boundary
       before the seed resolver fills in a value.
-    - `iter_budget`: GRASP iteration ceiling (Epic 4 termination).
-    - `time_budget`: wall-clock ceiling in seconds (Epic 4 termination).
+    - `iter_budget`: GRASP iteration ceiling (Architecture §Cat 5e termination).
+    - `time_budget`: wall-clock ceiling in seconds (§Cat 5e termination).
     - `stagnation_iters`: consecutive-stagnant-iterations threshold; `0`
       disables (Architecture §Cat 5e).
     - `start_at_junction`: opt-in FR31 flag (default off). When `True`, GRASP

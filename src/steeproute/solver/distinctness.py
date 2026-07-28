@@ -150,10 +150,12 @@ class TopNTracker:
     held. `j_max = 0.0` requires fully-disjoint routes (any shared edge is an
     overlap). Both are inside the validated `[0.0, 1.0]` range.
 
-    Stagnation hook: `total_objective()` returns the sum of held objectives
-    (`0.0` when empty). The Epic 4 termination watcher polls this between
-    GRASP iterations; an unchanged value across `--stagnation-iters`
-    iterations triggers `convergence_status = "converged"`.
+    `total_objective()` returns the sum of held objectives (`0.0` when empty).
+    It is a **reporting** value only — `GraspSolver` puts it on each
+    `ProgressEvent`. Stagnation termination deliberately does NOT read it: it
+    counts iterations since `consider()` last returned `True`, because the
+    evict-many-admit-one branch below can change the held set while leaving this
+    sum equal (or lowering it). See `solver/grasp.py` `run`.
 
     Mutability: holds `Solution` references directly. `Solution` is
     `frozen=True, slots=True` (Story 3.1) so this is safe — the tracker
@@ -188,9 +190,9 @@ class TopNTracker:
         Raises `ValueError` on a non-finite objective: a `NaN` objective would
         be admitted unconditionally (the under-capacity branch does no
         comparison) yet never evictable (no value satisfies `> NaN`), and would
-        poison `total_objective()` — silently breaking the Epic 4 stagnation
-        watcher. Fail loud at the boundary instead, consistent with the
-        constructor's `n` / `j_max` guards. Producers (the GRASP solver) score
+        poison `total_objective()` — silently corrupting every progress readout
+        for the rest of the run. Fail loud at the boundary instead, consistent
+        with the constructor's `n` / `j_max` guards. Producers (the GRASP solver) score
         objectives as finite `D+ + D-` sums, so this only fires on an upstream
         bug.
         """
@@ -232,7 +234,7 @@ class TopNTracker:
         return sorted((entry.solution for entry in self._held), key=_sort_key)
 
     def total_objective(self) -> float:
-        """Sum of held objectives. `0.0` on an empty tracker (stagnation hook)."""
+        """Sum of held objectives — a progress readout. `0.0` on an empty tracker."""
         return sum(entry.solution.objective for entry in self._held)
 
     def _worst_held(self) -> _HeldEntry:

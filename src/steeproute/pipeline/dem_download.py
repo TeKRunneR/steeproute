@@ -14,9 +14,9 @@ float32 GeoTIFF in WGS84 (EPSG:4326).
 raster always covers the vertices `sample_elevation` probes — osmnx
 `simplify=True` can push simplified edge geometry past the nominal OSM fetch bbox
 by an unbounded amount near switchbacks, which a fixed radius+padding ring cannot
-safely cover. `resolve_dem` tiles the request so any area up to the setup radius
-ceiling stays at native 5 m, mosaics the tiles, and caches the result keyed on the
-bbox under `<cache-root>/steeproute/dem/`. A cached raster is reused unless
+safely cover. `resolve_dem` tiles the request so an area of any size stays at
+native 5 m, mosaics the tiles, and caches the result keyed on the bbox under
+`<cache-root>/steeproute/dem/`. A cached raster is reused unless
 `force_refresh` is set. Every network / payload failure maps to
 `DataSourceUnavailableError("DEM source unreachable.", …)` so `run_entry_point`
 surfaces it as exit 2 with the same wording as the existing DEM-open failure
@@ -157,8 +157,8 @@ _TILE_BACKOFF_BASE_S: float = _env_float("STEEPROUTE_DEM_FETCH_BACKOFF_S", 0.5)
 # earth model (`EARTH_RADIUS_M = 6_371_009` → 2π·R/360 ≈ 111_194.93 m/deg) rather
 # than the WGS84-equatorial 111_320, so the DEM bbox is computed on the SAME model
 # `osm_load` uses for its `dist_type="bbox"` fetch. With a matched constant the
-# `_PADDING_M` ring is a true ~100 m margin over the OSM bbox at every radius
-# (using 111_320 eroded it to ~44 m at the 50 km ceiling — review finding).
+# `_PADDING_M` ring is a true ~100 m margin over the OSM bbox at every size; the
+# mismatched 111_320 erodes it proportionally (to ~44 m over a 50 km span).
 # Longitude degrees scale by cos(lat); computed from the area center so the bbox
 # is correct away from the fixture's specific 45.26° N.
 _M_PER_DEG_LAT: float = 111_194.93

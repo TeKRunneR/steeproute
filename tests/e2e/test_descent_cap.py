@@ -11,9 +11,8 @@ Runs the real `steeproute` query against the committed `grenoble_small` cache wi
 2. **Regression** — the deterministic route set matches its committed golden.
 
 The fixture is deliberately NOT in `regression.FIXTURES` (the zero-tolerance CI
-gate) yet — folding it in alongside the realistic tier is Story 8.5's job. The
-existing default-param goldens are untouched (no rebake); that non-regression proof
-is `tests/e2e/test_pinned_regressions.py`.
+gate): it lives in `FLAG_ON_FIXTURES` so the default-param goldens stay untouched
+by it, and that non-regression proof is `tests/e2e/test_pinned_regressions.py`.
 """
 
 from __future__ import annotations

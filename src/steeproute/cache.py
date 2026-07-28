@@ -61,9 +61,13 @@ _AREA_MODE_LITERAL: str = "center_radius"
 _AREA_MODE_ROTATED: str = "center_extents_angle"
 
 # Files whose byte content flows into the pipeline content hash. Architecture
-# §Cat 4b: changes here effectively invalidate all cached entries (the key
-# shifts). `cache.py` and `provenance.py` are deliberately excluded — they
-# touch *how* graphs are persisted, not what the graph contains.
+# §Cat 4b: editing any of them shifts the cache key, so the next
+# `steeproute-setup` for an area computes a new key, re-prepares, and evicts the
+# superseded entry (`_gc_superseded_entries`). Existing entries are NOT
+# invalidated for readers — `check_coverage` selects by geometry, and the query
+# CLI only echoes the manifest's hash into report provenance. `cache.py` and
+# `provenance.py` are deliberately excluded — they touch *how* graphs are
+# persisted, not what the graph contains.
 _PIPELINE_CONTENT_GLOBS: tuple[str, ...] = ("pipeline/**/*.py", "models.py")
 
 # Cache layout — Architecture §Cat 4a. The `steeproute/` subdir under the cache
@@ -1001,8 +1005,8 @@ def _area_to_polygon(area: Area) -> shapely.Polygon:
     The 5-point ring closes the polygon (first vertex repeated last). Empty /
     degenerate extents (≤0) would produce a zero-area or self-intersecting
     polygon and downstream `.contains` would return False for everything —
-    acceptable since `validate_setup_radius` rejects non-positive radii at the
-    CLI boundary (Story 2.8).
+    acceptable since `cli/_shared.py`'s `_validate_extent` rejects non-positive
+    dimensions at the CLI boundary.
     """
     lat, lon = area.center
     half_width_km, half_height_km = area.half_extents_km
@@ -1530,7 +1534,7 @@ def list_prepared_areas(cache_root: pathlib.Path) -> list[CoverageEntry]:
 
 
 def find_covering_entry(cache_root: pathlib.Path, query_area: Area) -> CoverageEntry | None:
-    """Smallest prepared entry whose bbox strictly contains `query_area`, or `None`.
+    """Smallest prepared entry whose footprint strictly contains `query_area`, or `None`.
 
     A graph-free coverage probe for the web App's map overlay (`GET /regions/resolve`):
     it answers "would a query at this area be covered?" without loading the chosen

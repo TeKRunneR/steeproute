@@ -7,7 +7,7 @@ explicitly-pinned param set. `tests/e2e/test_pinned_regressions.py` and
 `uv run update-regression` both go through this module, so the comparison and the
 writer can never disagree on what a golden *should* contain (Architecture §Cat 11d).
 
-Two deliberate design choices (Story 8.1):
+Two deliberate design choices:
 
 - **`objective` is derived, not read.** The JSON sidecar (`output.py`) carries
   `metrics` + `edges` but no `objective`; the solver defines
@@ -23,8 +23,7 @@ Two deliberate design choices (Story 8.1):
 
 This is a repo-local dev tool: `FIXTURES` and the golden/cache paths resolve against
 the source tree, so `update-regression` is meant to be run via `uv run` from the repo,
-not from an installed wheel. Story 8.1 ships one proof fixture (`grenoble_small`);
-Story 8.2 adds the 2–3 Grenoble cutouts and the zero-tolerance CI gate.
+not from an installed wheel.
 """
 
 from __future__ import annotations
@@ -226,14 +225,14 @@ REALISTIC_FIXTURES: tuple[Fixture, ...] = tuple(
 )
 
 
-# Flag-on goldens (Epic 10): each pins one new opt-in constraint *on*, on a real
-# cache, leaving the default-param goldens above untouched (the non-regression
-# proof). Deliberately kept OUT of `FIXTURES` for now — folding these into the
-# zero-tolerance CI gate + the realistic tier is Story 8.5's job; Story 10.1 only
-# creates the fixture, its committed golden, and the junction-start property
-# assertion (`tests/e2e/test_junction_start.py`). `--start-at-junction` is a
-# boolean pinned param (`"true"`/`"false"`); `run_fixture` renders it as a bare
-# flag rather than a `--flag value` pair.
+# Flag-on goldens: each pins one opt-in constraint *on*, on a real cache, leaving
+# the default-param goldens above untouched — that non-inference is the point, so
+# these are deliberately kept OUT of `FIXTURES` and therefore out of the bulk/CI
+# set and the realistic tier. They stay individually regenerable by name, and
+# each carries its own property assertion (`tests/e2e/test_junction_start.py`,
+# `tests/e2e/test_descent_cap.py`). `--start-at-junction` is a boolean pinned
+# param (`"true"`/`"false"`); `run_fixture` renders it as a bare flag rather than
+# a `--flag value` pair.
 FLAG_ON_FIXTURES: tuple[Fixture, ...] = (
     Fixture(
         name="grenoble_small_junction",
@@ -262,8 +261,8 @@ FLAG_ON_FIXTURES: tuple[Fixture, ...] = (
 def canonical_edge_sequence_hash(edges: Iterable[Sequence[int]]) -> str:
     """SHA256 over a route's edges sorted by `(node_u, node_v, key)` (Architecture §Cat 11d).
 
-    Sorting by the canonical edge-identity tuple (Implementation Patterns §"Numerical
-    and data discipline") makes the hash capture graph-level edge identity independent
+    Sorting by the canonical edge-identity tuple (Architecture §"Numerical and
+    data discipline") makes the hash capture graph-level edge identity independent
     of traversal-order serialization — `(objective, D+, D−, edge_count)` can collide
     while the underlying route silently changes, so this field is what notices.
     """
@@ -445,9 +444,9 @@ def diff_goldens(old: Golden | None, new: Golden) -> str:
 def _select(fixture_name: str | None, all_fixtures: bool, tier: str) -> list[Fixture]:
     pool = REALISTIC_FIXTURES if tier == "realistic" else FIXTURES
     if all_fixtures:
-        # `--all` regenerates the standard tier only — the Epic 10 `FLAG_ON_FIXTURES`
-        # are not yet part of the bulk/CI set (folded in by Story 8.5). They remain
-        # individually regenerable by name below.
+        # `--all` regenerates the standard tier only — `FLAG_ON_FIXTURES` are
+        # deliberately outside the bulk/CI set (see their definition above). They
+        # remain individually regenerable by name below.
         return list(pool)
     # Named lookup also searches the fast-tier flag-on fixtures, so
     # `update-regression --fixture grenoble_small_junction` works.

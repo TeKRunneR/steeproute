@@ -9,11 +9,9 @@ The wire contract and the persisted `job.json` share these shapes. Conventions
 - Timestamps are ISO-8601 UTC strings, never epoch numbers.
 - `id` is a time-sortable opaque string so a plain directory listing (and the
   run library, later) orders by creation without a separate index.
-- `interrupted` is NOT a status: it is `status=failed` + `failure_reason`
-  (restart recovery lands in Story app-3-3; the field is defined here).
-
-Only `setup` jobs are exercised in Story 1.3; the enums define the full set so
-later stories (query kind, stopped, progress model) extend rather than redefine.
+- `interrupted` is NOT a status: it is `status=failed` + `failure_reason`, set
+  both by the worker's graceful-shutdown branch (`queue.py`) and by boot-time
+  restart recovery (`store.recover_interrupted`).
 """
 
 from __future__ import annotations
@@ -38,8 +36,8 @@ class JobKind(enum.StrEnum):
 class JobStatus(enum.StrEnum):
     """Job lifecycle states (architecture-app.md §Category 5 / §data-format).
 
-    `queued → running → {done | failed | stopped}`. `stopped` (hard cancel) is
-    produced by Story 1.5; Story 1.3 drives only `queued → running → done|failed`.
+    `queued → running → {done | failed | stopped}`. `stopped` is the hard-cancel
+    terminal state, written only by the worker's reap path after `Worker.stop`.
     """
 
     QUEUED = "queued"
@@ -53,7 +51,7 @@ class Phase(enum.StrEnum):
     """Coarse progress phase within a run (architecture-app.md §Category 3).
 
     `setup` = a build job's stages; `query`/`solve` = a query job's non-solve
-    stages and its GRASP solve phase (Story 2.2). Story 1.4 emits only `setup`.
+    stages and its GRASP solve phase. A setup job only ever emits `setup`.
     """
 
     SETUP = "setup"

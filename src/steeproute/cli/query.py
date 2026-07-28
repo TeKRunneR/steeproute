@@ -570,8 +570,9 @@ def _degradation_message(validated: ValidatedRouteSet, params: SolverParams) -> 
     """Graceful-degradation explanation (FR12), or `None` for a full N-route result.
 
     When the solver returned fewer than N routes, the area can't yield N under the
-    current constraints — so we say so rather than silently loosening them
-    (Architecture §"What's not an exception"). Two distinct causes reach this path:
+    current constraints — so we say so rather than silently loosening them. A
+    degraded result is a normal outcome (§Cat 6c), never an error. Two distinct
+    causes reach this path:
     too few routes clear the route-level slope floor `--theta` (feasibility-bound),
     or enough routes exist but overlap too much to count as distinct under `--j-max`
     (distinctness-bound). The CLI can't tell which bound the solver hit, so the

@@ -181,7 +181,7 @@ def test_current_top_is_objective_descending() -> None:
 
 
 def test_total_objective_on_empty_tracker_is_zero() -> None:
-    """Empty tracker → `total_objective() == 0.0` (lets the stagnation watcher poll without branching)."""
+    """Empty tracker → `total_objective() == 0.0` (so the progress readout needs no branching)."""
     tracker = TopNTracker(n=5, j_max=0.30)
 
     assert tracker.total_objective() == 0.0

@@ -1,9 +1,9 @@
 """Graceful degradation for sparse areas end-to-end (Story 7.4 / FR12).
 
 When fewer than N routes satisfy the current constraints, `steeproute` returns
-the feasible subset with a clear explanation rather than silently loosening them
-(Architecture §"What's not an exception"). Degradation is a normal outcome: exit
-code stays 0.
+the feasible subset with a clear explanation rather than silently loosening them.
+Degradation is a normal outcome (Architecture §Cat 6c), not an error: exit code
+stays 0.
 
 Both tests run in-process via `CliRunner` (the shared `run_query` fixture) — no
 OS process is needed, unlike the interrupt e2e test. The degradation regime is

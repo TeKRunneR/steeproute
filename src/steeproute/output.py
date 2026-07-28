@@ -293,14 +293,13 @@ def _search_polygon(area: Area) -> list[list[float]]:
     containment against and that `bounds.geojson` records — so the overlay draws
     exactly the region that was searched, rotation included.
 
-    **Story 15.3 closes the envelope leak** the audit left here. The old
-    `_search_bbox` was square-only twice over: it read the scalar `radius_km` (an
-    inert `0.0` for a rotated area, collapsing the overlay to a point) and it
-    emitted an axis-aligned `{south, west, north, east}` box, which cannot
-    represent a rotated rectangle. It also carried its own `111.32` deg/km
-    constant, a second projection source; sharing `area_polygon`'s `1/111` frame
-    removes that and shifts a square's drawn rectangle by ~0.3% — visual-only, and
-    the JSON sidecar never carried the box at all.
+    Deliberately NOT an axis-aligned `{south, west, north, east}` box: that
+    cannot represent a rotated rectangle, and the scalar `radius_km` it would
+    read from is an inert `0.0` for one, collapsing the overlay to a point.
+    Deriving the ring from `area_polygon` rather than re-implementing km→deg
+    also keeps the overlay on that one `1/111` frame — a box drawn from its own
+    `111.32` constant sits ~0.3% off the region coverage actually tested.
+    Overlay-only either way; the JSON sidecar carries no box.
 
     `area_polygon` returns `(lon, lat)` per RFC 7946 with the first vertex
     repeated to close the ring; Leaflet wants `[lat, lon]` and closes an
