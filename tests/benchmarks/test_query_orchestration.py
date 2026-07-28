@@ -2,9 +2,9 @@
 # Reason: same osmnx/networkx boundary as the pipeline modules; pytest-benchmark
 # ships no type information; `reportImplicitRelativeImport` — `from conftest
 # import ...` is the shape that resolves under pytest's prepend import mode.
-"""Query-orchestration wall-clock baselines (Story 16.1).
+"""Query-orchestration wall-clock baselines (Stories 16.1, 16.3).
 
-The two seams the ownership pass targets that had no benchmark coverage:
+The seams the ownership pass targets that had no benchmark coverage:
 
 - the **query-side** trail-filter redux — re-filtering the metrics-bearing
   operational graph at the user's `--difficulty-cap`. Distinct from
@@ -12,6 +12,8 @@ The two seams the ownership pass targets that had no benchmark coverage:
   *setup-side* stage-2 filter at `T6` over the raw graph.
 - `validate` over a whole route set — where graph-wide invariants were derived
   once per route rather than once per call.
+- the prepared-entry load (`check_coverage`), and — measured separately — the
+  per-edge `LineString` reconstruction the schema-v2 read paid on top of it.
 
 Both are measured against the committed `grenoble_small` fixture, so the numbers
 are a machine-local before/after signal, not an r20 projection: the review's r20
@@ -24,11 +26,21 @@ Run: `uv run pytest tests/benchmarks -m benchmark`.
 from __future__ import annotations
 
 import networkx as nx
+import numpy as np
 import pytest
-from conftest import BENCH_DIFFICULTY_CAP, BENCH_PARAMS, BENCH_UNTAGGED_POLICY
+import shapely
+from conftest import (
+    BENCH_CENTER,
+    BENCH_DIFFICULTY_CAP,
+    BENCH_PARAMS,
+    BENCH_RADIUS_KM,
+    BENCH_UNTAGGED_POLICY,
+    E2E_CACHE_ROOT,
+)
 from pytest_benchmark.fixture import BenchmarkFixture
 
-from steeproute.models import ContractedGraph, Solution
+from steeproute.cache import check_coverage
+from steeproute.models import Area, ContractedGraph, Solution
 from steeproute.pipeline.osm import filter_trails
 from steeproute.validator import validate
 
@@ -63,6 +75,61 @@ def test_query_filter_trails_consuming(
         filter_trails(graph, BENCH_UNTAGGED_POLICY, BENCH_DIFFICULTY_CAP, consume=True)
 
     benchmark.pedantic(_filter, setup=_fresh_graph, rounds=20, warmup_rounds=1)
+
+
+def test_cache_load_prepared_entry(benchmark: BenchmarkFixture) -> None:
+    """The `load-prepared-area` stage: index walk + entry deserialization.
+
+    Guardrail for Story 16.3 — the read must not get *slower* when it stops
+    reconstructing geometry. The headline is the r20 stage line (a 1.5 km fixture
+    entry is ~1.4 MB against r20's ~166 MB), per AGENTS.md §Scale target.
+    """
+    prepared = benchmark(
+        check_coverage, E2E_CACHE_ROOT, Area(center=BENCH_CENTER, radius_km=BENCH_RADIUS_KM)
+    )
+    assert prepared.graph.number_of_edges() > 0
+
+
+def test_cache_geometry_reconstruction(
+    benchmark: BenchmarkFixture, prepared_grenoble_graph: nx.MultiDiGraph
+) -> None:
+    """The bulk `LineString` rebuild + reattach that the schema-v2 read paid per load.
+
+    Isolated on purpose: it is the work Story 16.3 removed, so it stays measurable
+    after the removal and the pair (this vs `test_cache_load_prepared_entry`) shows
+    the share of a load it accounted for. The ragged arrays are built in `setup`,
+    outside the measured region — v2 read them straight out of the pickle, so
+    building them here would measure work the old path never did.
+    """
+
+    def _fresh_inputs() -> tuple[
+        tuple[nx.MultiDiGraph, np.ndarray, tuple[np.ndarray]], dict[str, object]
+    ]:
+        lengths = [
+            len(data["vertices_resampled"])
+            for _u, _v, data in prepared_grenoble_graph.edges(data=True)
+        ]
+        coords = np.array(
+            [
+                (lon, lat)
+                for _u, _v, data in prepared_grenoble_graph.edges(data=True)
+                for lat, lon, _elev in data["vertices_resampled"]
+            ],
+            dtype=np.float64,
+        )
+        offsets = np.concatenate(([0], np.cumsum(lengths))).astype(np.int64)
+        # A fresh graph per round: the attach mutates edge dicts, and the session
+        # fixture is shared with every other query-stage benchmark.
+        return (prepared_grenoble_graph.copy(), coords, (offsets,)), {}
+
+    def _reconstruct(
+        graph: nx.MultiDiGraph, coords: np.ndarray, offsets: tuple[np.ndarray]
+    ) -> None:
+        geometries = shapely.from_ragged_array(shapely.GeometryType.LINESTRING, coords, offsets)
+        for (_u, _v, data), geometry in zip(graph.edges(data=True), geometries, strict=True):
+            data["geometry"] = geometry
+
+    benchmark.pedantic(_reconstruct, setup=_fresh_inputs, rounds=20, warmup_rounds=1)
 
 
 def test_validate_route_set(

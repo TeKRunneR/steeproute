@@ -18,10 +18,10 @@ from __future__ import annotations
 import dataclasses
 import json
 import pathlib
+import pickle
 import re
 
 import networkx as nx
-import numpy as np
 import pytest
 import shapely
 
@@ -74,12 +74,28 @@ def _two_edge_graph() -> nx.MultiDiGraph:
 
 def _assert_payloads_equal(produced: dict[str, object], expected: dict[str, object]) -> None:
     assert produced.keys() == expected.keys()
-    for part in ("geometry_coords", "geometry_offsets"):
-        assert np.array_equal(np.asarray(produced[part]), np.asarray(expected[part]))
     pg, eg = produced["graph"], expected["graph"]
     assert isinstance(pg, nx.MultiDiGraph) and isinstance(eg, nx.MultiDiGraph)
     assert list(pg.nodes(data=True)) == list(eg.nodes(data=True))
     assert list(pg.edges(keys=True, data=True)) == list(eg.edges(keys=True, data=True))
+
+
+def _legacy_v2_payload(graph: nx.MultiDiGraph) -> dict[str, object]:
+    """A schema-v2 payload: the stripped graph plus ragged geometry arrays.
+
+    Mirrors the pre-Story-16.3 `_graph_to_payload` output so the legacy read path
+    is exercised against the shape that is actually on disk in older entries,
+    rather than against a hand-waved approximation of it.
+    """
+    stripped = graph.copy()
+    geometries = [d.pop("geometry") for _u, _v, d in stripped.edges(data=True)]
+    _, coords, (offsets,) = shapely.to_ragged_array(geometries)
+    return {
+        "steeproute_graph_payload": 2,
+        "graph": stripped,
+        "geometry_coords": coords,
+        "geometry_offsets": offsets,
+    }
 
 
 def test_graph_to_payload_consume_matches_the_copying_path() -> None:
@@ -101,8 +117,83 @@ def test_graph_to_payload_consume_strips_geometry_from_the_caller_graph() -> Non
     graph = _two_edge_graph()
     _ = cache_mod._graph_to_payload(graph, consume=True)
     assert all("geometry" not in d for _u, _v, d in graph.edges(data=True))
-    # Everything else survives — only geometry moves into the ragged arrays.
+    # Everything else survives — only geometry is dropped.
     assert all("vertices_resampled" in d for _u, _v, d in graph.edges(data=True))
+
+
+# --- Story 16.3: schema-v3 geometry-free payload ------------------------------
+
+
+def test_graph_to_payload_writes_no_geometry_parts() -> None:
+    """AC #3: v3 stores the graph and nothing else — no coordinate arrays."""
+    payload = cache_mod._graph_to_payload(_two_edge_graph())
+
+    assert payload["steeproute_graph_payload"] == 3
+    assert set(payload) == {"steeproute_graph_payload", "graph"}
+    graph = payload["graph"]
+    assert isinstance(graph, nx.MultiDiGraph)
+    assert all("geometry" not in d for _u, _v, d in graph.edges(data=True))
+    assert all(len(d["vertices_resampled"]) >= 2 for _u, _v, d in graph.edges(data=True))
+
+
+def test_graph_from_payload_reads_a_legacy_v2_entry_without_reconstructing_geometry() -> None:
+    """AC #2/#4: a v2 payload still loads; its geometry arrays are ignored, not rebuilt."""
+    source = _two_edge_graph()
+    legacy = _legacy_v2_payload(source)
+
+    graph = cache_mod._graph_from_payload(legacy, "0123456789abcdef")
+
+    assert list(graph.edges(keys=True)) == list(source.edges(keys=True))
+    assert all("geometry" not in d for _u, _v, d in graph.edges(data=True))
+    for u, v, k, data in source.edges(keys=True, data=True):
+        assert graph.edges[u, v, k]["vertices_resampled"] == data["vertices_resampled"]
+
+
+def test_graph_from_payload_v2_and_v3_agree_for_every_consumer() -> None:
+    """AC #2: the loaded graph is content-identical across the two payload versions."""
+    source = _two_edge_graph()
+
+    from_v2 = cache_mod._graph_from_payload(_legacy_v2_payload(source), "0123456789abcdef")
+    from_v3 = cache_mod._graph_from_payload(cache_mod._graph_to_payload(source), "0123456789abcdef")
+
+    assert list(from_v2.nodes(data=True)) == list(from_v3.nodes(data=True))
+    assert list(from_v2.edges(keys=True, data=True)) == list(from_v3.edges(keys=True, data=True))
+
+
+def test_graph_from_payload_rejects_an_unknown_payload_version() -> None:
+    """AC #4: an unrecognized version is corrupt, not silently read."""
+    payload = cache_mod._graph_to_payload(_two_edge_graph())
+    payload["steeproute_graph_payload"] = 99
+
+    with pytest.raises(CacheCorruptedError, match="incompatible graph payload"):
+        _ = cache_mod._graph_from_payload(payload, "0123456789abcdef")
+
+
+def test_graph_from_payload_rejects_a_non_graph_payload_part() -> None:
+    """AC #4: a payload whose `graph` part isn't a MultiDiGraph is corrupt."""
+    with pytest.raises(CacheCorruptedError, match="incompatible graph payload"):
+        _ = cache_mod._graph_from_payload(
+            {"steeproute_graph_payload": 3, "graph": "not-a-graph"}, "0123456789abcdef"
+        )
+
+
+def test_read_entry_loads_a_legacy_v2_entry_on_disk(tmp_path: pathlib.Path) -> None:
+    """AC #4: already-prepared v2 caches stay queryable across the format change."""
+    area = Area(center=(45.26, 5.78), radius_km=2.0)
+    manifest = dataclasses.replace(
+        Manifest.from_dict(_manifest_payload()), area=area, cache_key_hash="0" * 16
+    )
+    entry_dir = tmp_path / "steeproute" / "areas" / manifest.cache_key_hash
+    entry_dir.mkdir(parents=True)
+    write_json_atomic(entry_dir / "manifest.json", manifest.to_dict())
+    (entry_dir / "graph.pkl").write_bytes(
+        pickle.dumps(_legacy_v2_payload(_two_edge_graph()), protocol=pickle.HIGHEST_PROTOCOL)
+    )
+
+    loaded = read_entry(tmp_path, manifest.cache_key_hash)
+
+    assert loaded.graph.number_of_edges() == 2
+    assert all("geometry" not in d for _u, _v, d in loaded.graph.edges(data=True))
 
 
 @pytest.mark.parametrize("consume", [False, True])
@@ -141,8 +232,8 @@ def test_write_entry_consume_round_trips_to_the_same_graph(tmp_path: pathlib.Pat
     assert list(produced.edges(keys=True)) == list(expected.edges(keys=True))
     for u, v, k, data in expected.edges(keys=True, data=True):
         got = produced.edges[u, v, k]
+        assert got == data
         assert got["vertices_resampled"] == data["vertices_resampled"]
-        assert got["geometry"].equals_exact(data["geometry"], 0.0)
     assert all("geometry" not in d for _u, _v, d in consumed_graph.edges(data=True))
 
 

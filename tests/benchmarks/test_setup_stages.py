@@ -128,19 +128,19 @@ def test_stage5_sample_elevation_inplace(
 
 
 def test_cache_write_payload_copying(
-    benchmark: BenchmarkFixture, prepared_grenoble_graph: nx.MultiDiGraph
+    benchmark: BenchmarkFixture, post_stage5_graph: nx.MultiDiGraph
 ) -> None:
-    """Cache-write payload build the old way: copy the whole graph, then pop geometry."""
-    benchmark(cache._graph_to_payload, prepared_grenoble_graph)
+    """Cache-write payload build the old way: copy the whole graph, then drop geometry."""
+    benchmark(cache._graph_to_payload, post_stage5_graph)
 
 
 def test_cache_write_payload_consuming(
-    benchmark: BenchmarkFixture, prepared_grenoble_graph: nx.MultiDiGraph
+    benchmark: BenchmarkFixture, post_stage5_graph: nx.MultiDiGraph
 ) -> None:
     """Cache-write payload build from an owned graph — the `steeproute-setup` path."""
     benchmark.pedantic(
         lambda graph: cache._graph_to_payload(graph, consume=True),
-        setup=lambda: ((prepared_grenoble_graph.copy(),), {}),
+        setup=lambda: ((post_stage5_graph.copy(),), {}),
         rounds=20,
         warmup_rounds=1,
     )

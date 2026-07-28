@@ -57,10 +57,19 @@ keeping: while this cache is stale, the goldens cover the query and solver but *
 a setup-side regression cannot move a golden whose input never gets rebuilt.
 
 Regenerate after the setup-side pipeline or the OSM/DEM source fixtures change. Each `graph.pkl`
-holds the schema-v2 pickled payload (graph minus geometry + ragged coordinate arrays,
-Story 13.2), so it is still sensitive to networkx/Python upgrades — the regression test
+holds the schema-v3 pickled payload (the graph, with per-edge `geometry` not stored at all —
+Story 16.3), so it is still sensitive to networkx/Python upgrades — the regression test
 (and `update-regression`) will surface any incompatibility. Any golden change must be
 committed with an explicit rationale (see the README "Development notes" section).
+
+**Both `graph.pkl` files converted in place to payload schema v3 (Story 16.3, 2026-07-28.)**
+Converted rather than regenerated even though this fixture *can* be rebuilt offline: the conversion
+rewrites the identical graph object with the coordinate arrays dropped, which is stronger evidence of
+content equality than a fresh pipeline run (whose float reordering can drift at ~1e-14, as the
+2026-07-27 regeneration showed). Each entry was gated the same way as the three network-only
+fixtures: every stored geometry verified equal to its edge's `vertices_resampled` first, then the
+converted entry re-read and compared attribute-by-attribute. The payload version is independent of
+`manifest.json`'s, which stays at 3. No golden moved.
 
 **Manifest migrated to schema v3 in place (Story 15.2, 2026-07-25.)** The rotated-rectangle
 `area` block bumped `manifest.json`'s `schema_version` 2 → 3, and `Manifest.from_dict`

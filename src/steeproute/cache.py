@@ -29,7 +29,6 @@ from dataclasses import dataclass
 from typing import Any, TypeIs
 
 import networkx as nx
-import numpy as np
 import platformdirs
 import shapely
 
@@ -100,11 +99,12 @@ _OLD_DIR_SUFFIX: str = ".old"
 # `manifest.json` and `index.json` versions advance independently. Manifest v1
 # was the initial released schema (raw pickled graph); v2 switched `graph.pkl`
 # to the ragged-array payload (Story 13.2); v3 generalized the `area` block to
-# the rotated rectangle (Story 15.2) — the manifest version is the sole format
-# signal, since `cache.py` is deliberately excluded from the pipeline content
-# hash and a format change must not shift cache keys. Bumping is a coordinated
-# change across both CLIs per Architecture §Versioned-contract-surfaces; older
-# entries re-prepare once via the existing recovery paths (no compat shim).
+# the rotated rectangle (Story 15.2). Bumping is a coordinated change across both
+# CLIs per Architecture §Versioned-contract-surfaces; older entries re-prepare
+# once via the existing recovery paths (no compat shim). The `graph.pkl` payload
+# carries its own version below and moves independently of this one — Story 16.3's
+# v2 → v3 payload change left the manifest at 3, since `cache.py` is deliberately
+# excluded from the pipeline content hash and a format change must not shift keys.
 #
 # `index.json` deliberately stays at v1 across the v3 manifest bump: it is
 # *derived* state (`rebuild_index` regenerates it from the manifests), a rotated
@@ -116,13 +116,18 @@ _INDEX_SCHEMA_VERSION: int = 1
 # Marker key + version stamped into the `graph.pkl` payload dict so a
 # hand-assembled or half-converted entry (a current manifest over an old-format
 # pickle) surfaces as `CacheCorruptedError` instead of leaking a raw graph.
-# Tracks the *graph payload* format only. It moved with the manifest version at
-# v2 because that bump WAS the payload change; the v3 manifest bump is confined
-# to the `area` block, so this deliberately stays at 2 — advancing it would
-# invalidate every on-disk pickle (and the four committed regression fixtures)
-# for a format that did not change.
+# Tracks the *graph payload* format only, independently of the manifest version:
+# v2 (Story 13.2) carried the graph plus ragged geometry coordinate arrays; v3
+# (Story 16.3) drops post-stage-5 geometry altogether, since no query-side
+# consumer reads it and `vertices_resampled` carries the same vertices.
+#
+# v2 entries stay **readable**: their geometry arrays are simply ignored, which
+# is exactly what a v3 read does with geometry it does not have. That keeps every
+# already-prepared cache (and the committed fixtures, converted or not) queryable
+# instead of forcing a re-prepare for a format change the query cannot observe.
 _GRAPH_PAYLOAD_MARKER: str = "steeproute_graph_payload"
-_GRAPH_PAYLOAD_VERSION: int = 2
+_GRAPH_PAYLOAD_VERSION: int = 3
+_GRAPH_PAYLOAD_LEGACY_VERSIONS: frozenset[int] = frozenset({2})
 
 
 def sha256_canonical(obj: object) -> str:
@@ -542,16 +547,20 @@ def write_json_atomic(path: pathlib.Path, obj: object) -> None:
 
 
 def _graph_to_payload(graph: nx.MultiDiGraph, *, consume: bool = False) -> dict[str, Any]:
-    """Build the schema-v2 `graph.pkl` payload: graph-minus-geometry + ragged coord arrays.
+    """Build the schema-v3 `graph.pkl` payload: the prepared graph, minus `geometry`.
 
-    Story 13.2: unpickling shapely geometries reconstructs each LineString
-    through a per-object WKB parse — ~60% of `read_entry` time on a large entry
-    — while `shapely.from_ragged_array` rebuilds the same geometries in bulk
-    ~20× faster. Everything *else* (the networkx skeleton, the
-    `vertices_resampled` list-of-tuples) measured **faster** through pickle
-    than through any array reconstruction, so only `geometry` moves out of the
-    graph: the payload pickles the stripped graph alongside one flat coords
-    array + per-edge offsets, in `graph.edges()` iteration order.
+    Post-stage-5 `geometry` is **redundant in a prepared entry**. It is the
+    resampled polyline in `(lon, lat)`, and `vertices_resampled` carries the same
+    vertices as `(lat, lon, elevation)` — pinned by
+    `tests/unit/test_dem.py::test_fixture_pipeline_vertices_resampled_matches_geometry_coords`
+    — so nothing is lost by dropping it: stages 6-7 and `output.render` read
+    `vertices_resampled`, while contraction, the solver and the validator read
+    metrics and tags. Storing it cost ~47 MB of a ~166 MB r20 entry plus the
+    per-load `LineString` rebuild, so schema v3 (Story 16.3) stops writing it.
+
+    What survives from Story 13.2 is its structural decision — keep geometry out
+    of the pickled networkx skeleton — not its ragged coordinate arrays, which
+    existed only to rebuild geometry cheaply on read. Nothing rebuilds it now.
 
     Pure by default — operates on `graph.copy()` (fresh attribute dicts, shared
     values), so the caller's graph keeps its `geometry` attributes.
@@ -567,14 +576,15 @@ def _graph_to_payload(graph: nx.MultiDiGraph, *, consume: bool = False) -> dict[
             `write_entry(consume=True)`. Payload content is identical either way.
 
     Raises:
-        ValueError: an edge is missing `geometry` or it is not a LineString —
-            the post-stage-5 contract every cached graph must satisfy. Raised
-            before any further edge is touched, so a `consume=True` failure
-            leaves the caller's graph partially stripped — acceptable because
-            the contract violation is unrecoverable for that caller anyway.
+        ValueError: an edge is missing `geometry` or it is not a LineString.
+            Retained under v3 even though the value is now discarded rather than
+            serialized: it is the post-stage-5 pipeline contract, and a graph
+            reaching `write_entry` without it did not come from the pipeline.
+            Raised before any further edge is touched, so a `consume=True`
+            failure leaves the caller's graph partially stripped — acceptable
+            because the contract violation is unrecoverable for that caller anyway.
     """
     stripped = graph if consume else graph.copy()
-    geometries: list[shapely.LineString] = []
     for u, v, key, data in stripped.edges(keys=True, data=True):
         geometry = data.pop("geometry", None)
         if not isinstance(geometry, shapely.LineString):
@@ -582,72 +592,49 @@ def _graph_to_payload(graph: nx.MultiDiGraph, *, consume: bool = False) -> dict[
                 f"write_entry requires a shapely LineString `geometry` attribute on "
                 f"every edge; edge ({u!r}, {v!r}, {key!r}) has {type(geometry).__name__}."
             )
-        geometries.append(geometry)
-    if geometries:
-        _, coords, (offsets,) = shapely.to_ragged_array(geometries)
-    else:
-        # Zero-edge graphs occur in tests; `from_ragged_array` needs the
-        # one-element offsets array even for an empty geometry set.
-        coords = np.empty((0, 2), dtype=np.float64)
-        offsets = np.zeros(1, dtype=np.int64)
     return {
         _GRAPH_PAYLOAD_MARKER: _GRAPH_PAYLOAD_VERSION,
         "graph": stripped,
-        "geometry_coords": coords,
-        "geometry_offsets": offsets,
     }
 
 
 def _graph_from_payload(payload: object, cache_key: str) -> nx.MultiDiGraph:
-    """Rebuild the full graph from a schema-v2 payload (inverse of `_graph_to_payload`).
+    """Extract the prepared graph from a `graph.pkl` payload (inverse of `_graph_to_payload`).
 
-    Reattachment is positional: the i-th bulk-rebuilt LineString belongs to the
-    i-th edge of `graph.edges()`. That pairing is sound because the payload is
-    built and consumed around one pickle round-trip, and pickle preserves dict
-    insertion order — the edge iteration order at load time is exactly the
-    order `_graph_to_payload` saw. The `strict=True` zip plus the offsets
-    length check turn any mismatch into `CacheCorruptedError` rather than a
-    silent geometry swap.
+    Reconstructs geometry from **neither** live payload version: v3 does not carry
+    it, and a legacy v2 entry's ragged coordinate arrays are ignored rather than
+    rebuilt (Story 16.3 — no post-stage-5 consumer reads the attribute, so the
+    ~0.9 s r20 rebuild bought nothing). The returned graph is therefore identical
+    across both versions for every consumer that runs.
+
+    Accepting v2 keeps already-prepared caches queryable across the format change
+    — the query cannot observe the difference — so no re-prepare is forced. It is
+    a read-only tolerance: `steeproute-setup` only ever writes v3.
 
     Raises:
-        CacheCorruptedError: payload is not a v2 payload dict (e.g. an
-            old-format raw pickled graph under a v2 manifest) or its parts are
-            inconsistent.
+        CacheCorruptedError: payload is not a payload dict (e.g. a schema-v1
+            raw pickled graph under a current manifest), carries an unknown
+            version, or its `graph` part has the wrong type.
     """
 
     def _corrupt(what: str) -> CacheCorruptedError:
         return CacheCorruptedError(
             user_message=f"Cache entry {cache_key!r} has an incompatible graph payload.",
             detail=(
-                f"{what} Expected the schema-v{_GRAPH_PAYLOAD_VERSION} ragged-array "
-                f"payload. Re-prepare with `steeproute-setup --force-refresh`."
+                f"{what} Expected a schema-v{_GRAPH_PAYLOAD_VERSION} graph payload "
+                f"(or a legacy v{min(_GRAPH_PAYLOAD_LEGACY_VERSIONS)} one). "
+                f"Re-prepare with `steeproute-setup --force-refresh`."
             ),
         )
 
     if not isinstance(payload, dict):
         raise _corrupt(f"`graph.pkl` unpickled to {type(payload).__name__}, not a payload dict.")
-    if payload.get(_GRAPH_PAYLOAD_MARKER) != _GRAPH_PAYLOAD_VERSION:
-        raise _corrupt(
-            f"Payload marker is {payload.get(_GRAPH_PAYLOAD_MARKER)!r}, "
-            f"not {_GRAPH_PAYLOAD_VERSION}."
-        )
+    version = payload.get(_GRAPH_PAYLOAD_MARKER)
+    if version != _GRAPH_PAYLOAD_VERSION and version not in _GRAPH_PAYLOAD_LEGACY_VERSIONS:
+        raise _corrupt(f"Payload marker is {version!r}.")
     graph = payload.get("graph")
-    coords = payload.get("geometry_coords")
-    offsets = payload.get("geometry_offsets")
-    if (
-        not isinstance(graph, nx.MultiDiGraph)
-        or not isinstance(coords, np.ndarray)
-        or not isinstance(offsets, np.ndarray)
-    ):
-        raise _corrupt("Payload parts have unexpected types.")
-    if len(offsets) != graph.number_of_edges() + 1:
-        raise _corrupt(
-            f"Offsets length {len(offsets)} does not match {graph.number_of_edges()} edges + 1."
-        )
-    if graph.number_of_edges():
-        geometries = shapely.from_ragged_array(shapely.GeometryType.LINESTRING, coords, (offsets,))
-        for (_, _, data), geometry in zip(graph.edges(data=True), geometries, strict=True):
-            data["geometry"] = geometry
+    if not isinstance(graph, nx.MultiDiGraph):
+        raise _corrupt(f"Payload `graph` part is {type(graph).__name__}, not a MultiDiGraph.")
     return graph
 
 
@@ -698,7 +685,7 @@ def write_entry(
 
     staging_dir.mkdir()
     # Step 1: graph.pkl + bounds.geojson into the staging directory. The graph
-    # is stored as the schema-v2 ragged-array payload (see `_graph_to_payload`).
+    # is stored as the schema-v3 geometry-free payload (see `_graph_to_payload`).
     with (staging_dir / _GRAPH_FILENAME).open("wb") as graph_fp:
         pickle.dump(
             _graph_to_payload(graph, consume=consume),
@@ -802,10 +789,14 @@ def read_entry(cache_root: pathlib.Path, cache_key: str) -> PreparedData:
             the manifest commit signal landed.
         CacheCorruptedError: the manifest exists but `graph.pkl` is unreadable
             (`pickle.UnpicklingError` / `EOFError`), the unpickled object is
-            not a valid schema-v2 payload (`_graph_from_payload` raises), or
+            not a valid graph payload (`_graph_from_payload` raises), or
             the manifest itself fails schema validation (`Manifest.from_dict`
             raises — including the v1 pickled-graph format, which re-prepares
             once per Architecture §Cat 4b invalidation semantics).
+
+    The returned graph carries no per-edge `geometry`: schema v3 does not store
+    it and a legacy v2 entry's arrays are ignored (Story 16.3). Every consumer
+    reads `vertices_resampled` and the metric/tag attributes instead.
     """
     entry_dir = _areas_dir(cache_root) / cache_key
     manifest_path = entry_dir / _MANIFEST_FILENAME

@@ -84,14 +84,15 @@ def test_write_and_read_entry_round_trips_real_fixture_graph(
     prepared_graph: nx.MultiDiGraph,
     tmp_path: pathlib.Path,
 ) -> None:
-    """AC #10 + Story 13.2 AC #1: round-trip is content-identical across the whole graph.
+    """AC #10: round-trip is content-identical across the whole graph, minus `geometry`.
 
-    Exhaustive on purpose: since Story 13.2 the entry payload strips `geometry`
-    at write time and reattaches bulk-rebuilt LineStrings *positionally* at read
-    time, so per-edge integrity is no longer implied by "pickle isn't selective"
-    — a mis-zipped reattachment would swap geometries between edges while every
-    count-based assertion still passed. Every node, every edge (u, v, key), every
-    attribute value, and the graph-level attrs are compared.
+    Exhaustive on purpose: the entry payload is not a plain pickled graph, so
+    per-edge integrity is not implied by "pickle isn't selective". Every node,
+    every edge (u, v, key), every attribute value, and the graph-level attrs are
+    compared. `geometry` is the one deliberate omission — schema v3 (Story 16.3)
+    does not store it, since `vertices_resampled` carries the same vertices and no
+    post-stage-5 consumer reads the attribute — so it is asserted *absent* rather
+    than equal.
     """
     area = Area(center=(_CENTER_LAT, _CENTER_LON), radius_km=_DIST_M / 1000.0)
     cache_key = "0123456789abcdef"
@@ -111,14 +112,15 @@ def test_write_and_read_entry_round_trips_real_fixture_graph(
     assert loaded.graph.graph == prepared_graph.graph
     # Node set + every node attribute.
     assert dict(loaded.graph.nodes(data=True)) == dict(prepared_graph.nodes(data=True))
-    # Edge set + every edge attribute. shapely `==` is structural equality
-    # (same type, exactly equal coordinates), so `geometry` compares exactly;
+    # Edge set + every edge attribute except `geometry` (not stored since v3);
     # `vertices_resampled` compares as list-of-tuples with exact floats.
     assert loaded.graph.number_of_edges() == prepared_graph.number_of_edges()
     for u, v, k, data in prepared_graph.edges(data=True, keys=True):
         loaded_data = loaded.graph.get_edge_data(u, v, k)
         assert loaded_data is not None, f"edge ({u}, {v}, {k}) missing after roundtrip"
-        assert loaded_data == data, f"edge ({u}, {v}, {k}) attributes differ after roundtrip"
+        assert "geometry" not in loaded_data, f"edge ({u}, {v}, {k}) carries stored geometry"
+        expected = {name: value for name, value in data.items() if name != "geometry"}
+        assert loaded_data == expected, f"edge ({u}, {v}, {k}) attributes differ after roundtrip"
         loaded_vr = loaded_data["vertices_resampled"]
         assert isinstance(loaded_vr, list) and all(isinstance(t, tuple) for t in loaded_vr)
 

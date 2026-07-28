@@ -29,9 +29,8 @@ uv run update-regression --fixture belledonne        # refresh the golden
 Unlike `grenoble_small`, this cache is prepared from **real** OSM (Overpass) + DEM (IGN
 WMS) downloads — there is no committed offline source, so regeneration needs network.
 The `dem/` cache dir setup writes under the root is intentionally **not** committed (the
-query reads elevation from `graph.pkl`). `graph.pkl` holds the schema-v2 pickled payload
-(graph minus geometry + ragged coordinate arrays, Story 13.2; converted in place from the
-original v1 raw-graph pickle — graph content unchanged), so it is still sensitive to
+query reads elevation from `graph.pkl`). `graph.pkl` holds the schema-v3 pickled payload
+(the graph, with per-edge `geometry` not stored at all — Story 16.3), so it is still sensitive to
 networkx/Python upgrades — the regression test surfaces any incompatibility. Any golden
 change must be committed with an explicit rationale (see the README "Development notes"
 section).
@@ -44,3 +43,15 @@ OSM/DEM data and force a golden rebake), only `schema_version` was edited: a squ
 `area` block is byte-identical across v2 and v3, and `graph.pkl` was not touched. Same
 in-place-conversion approach Story 13.2 used for the v1 → v2 payload change. Verified: the
 golden passes unchanged, **no rebake**.
+
+**`graph.pkl` converted in place to payload schema v3 (Story 16.3, 2026-07-28.)** v3 stops
+storing per-edge `geometry`: it is the resampled polyline in `(lon, lat)`, and
+`vertices_resampled` already carries the same vertices as `(lat, lon, elevation)`. Because this
+cache cannot be rebuilt offline, the payload was converted in place — same approach as the v1 → v2
+conversion and the manifest migration above: every stored geometry was first verified equal to its
+edge's `vertices_resampled`, then the file was rewritten with the identical graph object and no
+coordinate arrays, and the converted entry was re-read and compared attribute-by-attribute against
+the pre-conversion graph. The payload version is independent of `manifest.json`'s, which stays at 3.
+Verified: the golden passes unchanged, **no rebake**. (A legacy v2 entry would still read — the read
+path ignores the arrays rather than rebuilding them — so the conversion is about entry size, not
+readability.)

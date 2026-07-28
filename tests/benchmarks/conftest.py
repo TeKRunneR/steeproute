@@ -34,6 +34,7 @@ from steeproute.cache import check_coverage
 from steeproute.models import Area, Climb, ContractedGraph, Solution, SolverParams
 from steeproute.pipeline import _drop_orphan_nodes, _drop_short_edges, operationalize_graph
 from steeproute.pipeline.climbs import compute_edge_metrics, detect_climbs
+from steeproute.pipeline.dem import sample_elevation
 from steeproute.pipeline.graph import contract_climbs
 from steeproute.pipeline.osm import filter_trails, normalize_edges
 from steeproute.pipeline.smoothing import (
@@ -173,6 +174,17 @@ def resampled_graph(smoothed_graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
 # e2e cache (the same raw post-stage-5 graph the solver benchmark starts from),
 # so the stage-6b / stage-7 / stage-9 seams measure exactly what a real query
 # pays. Session-scoped: built once, read many; the stage functions are pure.
+
+
+@pytest.fixture(scope="session")
+def post_stage5_graph(resampled_graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
+    """Post-stage-5 graph built by the setup chain — geometry-bearing, as setup owns it.
+
+    Distinct from `prepared_grenoble_graph`, which comes back out of the cache and
+    therefore carries no `geometry` (schema v3, Story 16.3). The cache-*write*
+    benchmarks need the shape `steeproute-setup` actually hands to `write_entry`.
+    """
+    return sample_elevation(resampled_graph.copy(), DEM_FIXTURE_PATH, inplace=True)
 
 
 @pytest.fixture(scope="session")
