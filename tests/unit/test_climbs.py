@@ -442,7 +442,8 @@ def test_compute_edge_metrics_property_metric_invariants(
 
 
 # Bit-equality oracles for the vectorized stage-7 metrics + deadband.
-# # Verbatim copies of the scalar metric/deadband helpers, kept here as bit-equality
+#
+# Scalar references for the metric/deadband helpers, kept here as bit-equality
 # oracles: the vectorized production code must produce `==` (exact, not approx)
 # metrics/elevations over every edge of the real grenoble_small fixture. Keep these
 # even though nothing in `src/` calls them — they are the only independent statement
@@ -453,7 +454,7 @@ _ORACLE_DESCENT_WINDOW_M = _DESCENT_WINDOW_M
 
 
 def _oracle_cumulative_2d_distances(verts: list[tuple[float, float, float]]) -> list[float]:
-    """Verbatim pre-14.2 `_cumulative_2d_distances`."""
+    """Scalar reference for `_cumulative_2d_distances` — the bit-equality oracle."""
     n = len(verts)
     cum: list[float] = [0.0] * n
     if n < 2:
@@ -469,7 +470,7 @@ def _oracle_cumulative_2d_distances(verts: list[tuple[float, float, float]]) -> 
 
 
 def _oracle_elevation_gain_loss(verts: list[tuple[float, float, float]]) -> tuple[float, float]:
-    """Verbatim pre-14.2 `_elevation_gain_loss`."""
+    """Scalar reference for `_elevation_gain_loss` — the bit-equality oracle."""
     d_plus = 0.0
     d_minus = 0.0
     for i in range(1, len(verts)):
@@ -484,7 +485,7 @@ def _oracle_elevation_gain_loss(verts: list[tuple[float, float, float]]) -> tupl
 def _oracle_max_windowed_descent_grad(
     verts: list[tuple[float, float, float]], cum_dist: list[float]
 ) -> float:
-    """Verbatim pre-14.2 `_max_windowed_descent_grad`."""
+    """Scalar reference for `_max_windowed_descent_grad` — the bit-equality oracle."""
     n = len(verts)
     if n < 2:
         return 0.0
@@ -513,7 +514,7 @@ def _oracle_max_windowed_descent_grad(
 
 
 def _oracle_deadband_profile(elevs: list[float], deadband_m: float) -> list[float]:
-    """Verbatim pre-14.2 `_deadband_profile`."""
+    """Scalar reference for `_deadband_profile` — the bit-equality oracle."""
     n = len(elevs)
     if n < 3:
         return list(elevs)

@@ -22,6 +22,7 @@ from steeproute.pipeline.dem import sample_elevation
 
 _FIXTURE_DIR = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "grenoble_small"
 
+
 # Helpers.
 def _write_dem(
     path: pathlib.Path,
@@ -430,7 +431,7 @@ def _scalar_reference_sample_elevation(
     graph: nx.MultiDiGraph,
     dem_path: pathlib.Path,
 ) -> nx.MultiDiGraph:
-    """Verbatim pre-14.1 per-point scalar `sample_elevation`, kept as the bit-equality oracle.
+    """Per-point scalar `sample_elevation`, kept as the bit-equality oracle.
 
     This is the exact loop-based algorithm the vectorized `sample_elevation` replaced
     (per-edge `transformer.transform`, per-vertex bounds check, per-point
@@ -474,7 +475,7 @@ def test_fixture_pipeline_bit_identical_to_scalar_reference(
 ) -> None:
     """Vectorized `sample_elevation` is bit-equal to the old per-point path.
 
-    Runs the same stages-1→4 fixture graph through the scalar reference (the pre-14.1
+    Runs the same stages-1→4 fixture graph through the scalar reference (the
     algorithm) and asserts every edge's `vertices_resampled` tuple is `==` (exact, not
     `approx`) to the production vectorized output — over every vertex of the real
     Grenoble fixture. This is the "verify before deleting the old code" gate.

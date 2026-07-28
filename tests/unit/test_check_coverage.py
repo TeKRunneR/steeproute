@@ -282,7 +282,7 @@ def test_select_smallest_containing_rejects_query_poking_out_of_rotated_entry() 
 def test_read_indexed_entries_accepts_a_rotated_row(tmp_path: pathlib.Path) -> None:
     """Regression: a rotated row must survive index parsing.
 
-    A rotated entry's `radius_km` is `0.0`, and the pre-15.2 guard rejected any
+    A rotated entry's `radius_km` is `0.0`, so a scalar `radius_km > 0` guard rejects any
     row with `radius_km <= 0` by returning `None` — which made `check_coverage`
     rebuild, find nothing usable, and report "No prepared cache exists yet" for a
     cache that was in fact fully prepared.
@@ -384,7 +384,7 @@ def test_partial_coverage_message_names_nearest_area_and_suggests_smaller_radius
 def test_no_prepared_cache_message_describes_a_rotated_query_area() -> None:
     """Messaging derives from geometry — never a bogus `--radius 0`.
 
-    A rotated area's `radius_km` is inert `0.0`, so the pre-15.2 formatter would
+    A rotated area's `radius_km` is inert `0.0`, so a `radius_km`-based formatter would
     have told the user to run `steeproute-setup --radius 0`.
     """
     query = _rotated_area(45.0716, 6.1079, 8.0, 3.0, 35.0)

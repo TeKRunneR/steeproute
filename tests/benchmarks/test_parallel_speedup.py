@@ -13,7 +13,7 @@ default suite — run with `uv run pytest tests/benchmarks -m benchmark`):
 - **parallel wall-clock** — `run_parallel_grasp(workers=2)` timed against the
   single-process `test_solver_throughput.py` baseline on the same graph, so the
   effective speedup can be read off the two `.benchmarks/` entries. Full-scale
-  (r50, more cores) speedup lands at the 14.6 probe.
+  (r50, more cores) speedup is measured separately, on real hardware at scale.
 """
 
 from __future__ import annotations

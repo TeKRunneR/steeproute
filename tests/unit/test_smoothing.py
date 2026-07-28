@@ -653,8 +653,8 @@ def _scalar_reference_smooth(
 ) -> dict[tuple[int, int, int], list[float]]:
     """Scalar (dict-and-loop) Jacobi reference for `graph_smooth_elevation`.
 
-    Reimplements the pre-13.1 per-node Python formulation verbatim — one shared
-    variable per node, private interior vertices, `(1-λ)·old + λ·mean(neighbours)`
+    A per-node Python formulation, written out longhand — one shared variable per
+    node, private interior vertices, `(1-λ)·old + λ·mean(neighbours)`
     with λ=0.5 and iters = round(window²/6) — so the vectorized production code
     can be asserted BIT-IDENTICAL to it (same operation order, same IEEE-754
     results). Returns {edge_key: full elevation list} for comparison.
@@ -864,14 +864,16 @@ def test_graph_deadband_elevation_preserves_lat_lon_exactly() -> None:
 # # Verbatim copies of the scalar `_moving_average` / `_resample_meters`,
 # kept as bit-equality oracles: the vectorized production code must produce
 # `==` (exact, not approx) coordinates over every vertex of the real
-# grenoble_small fixture. This is the "verify before deleting the old code" gate
-#, mirroring 14.1's `_scalar_reference_sample_elevation`.
+# grenoble_small fixture. Keep them even though nothing in `src/` calls them —
+# they are the only independent statement of what the vectorized code should
+# compute, the same role `_scalar_reference_sample_elevation` plays in
+# `test_dem.py`.
 
 
 def _scalar_moving_average(
     coords: list[tuple[float, float]], window: int
 ) -> list[tuple[float, float]]:
-    """Verbatim pre-14.2 `_moving_average` — the stage-3 bit-equality oracle."""
+    """Scalar reference for `_moving_average` — the stage-3 bit-equality oracle."""
     assert window >= 1 and window % 2 == 1, "window must be odd and >= 1"
     half = window // 2
     n = len(coords)
@@ -892,7 +894,7 @@ def _scalar_moving_average(
 def _scalar_resample_meters(
     coords: list[tuple[float, float]], spacing_m: float
 ) -> list[tuple[float, float]]:
-    """Verbatim pre-14.2 `_resample_meters` — the stage-4 bit-equality oracle."""
+    """Scalar reference for `_resample_meters` — the stage-4 bit-equality oracle."""
     deg_to_m_lat = _EARTH_RADIUS_M * math.radians(1.0)
     mean_lat = sum(lat for _lon, lat in coords) / len(coords)
     deg_to_m_lon = deg_to_m_lat * math.cos(math.radians(mean_lat))

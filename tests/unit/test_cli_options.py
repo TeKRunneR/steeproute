@@ -38,6 +38,7 @@ from steeproute.cli.query import cli as query_cli
 from steeproute.cli.setup import cli as setup_cli
 from steeproute.errors import BadCLIArgError, CacheNotFoundError
 
+
 # LatLonParamType.
 def test_lat_lon_param_type_parses_valid_input() -> None:
     assert LAT_LON.convert("45.0716,6.1079", None, None) == (45.0716, 6.1079)

@@ -327,8 +327,8 @@ def test_grasp_rejects_out_and_back_over_a_climb() -> None:
     the reverse-connector route have EQUAL objectives (200 m each) and overlap
     (same base id), so whichever is constructed first is held forever — the
     non-vacuity guard needs the very first start-node draw to land on node 0
-    (`default_rng(44).random(1024)[0] ≈ 0.123 → int(u * 2) == 0`; the pre-12.3
-    seed 42's first `integers` draw did the same).
+    (`default_rng(44).random(1024)[0] ≈ 0.123 → int(u * 2) == 0`). Re-derive the seed
+    if the draw scheme ever changes.
     """
     graph = _build_out_and_back_fixture()
     params = _params(iter_budget=50, n=3)

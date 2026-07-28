@@ -914,7 +914,8 @@ def test_rotated_query_job_accepted(tmp_path: pathlib.Path) -> None:
 
 
 def test_square_area_job_unchanged(tmp_path: pathlib.Path) -> None:
-    # Regression guard on the wire: the pre-5.1 body still works and the
+    # Regression guard on the wire: a body carrying only `center` + `radius_km` still
+    # works and the
     # square spelling survives the round trip (new fields default to unset/0).
     with _lifecycle_client(tmp_path, exit_code=0) as client:
         body = client.post("/jobs", json=_setup_body()).json()

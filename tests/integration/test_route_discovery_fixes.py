@@ -247,7 +247,7 @@ def test_validate_threads_undirected_keying_end_to_end() -> None:
     segment map`. Three reviewers flagged that the new `graph`/`segment_map`
     parameters default to `None` (directed keying) for back-compat, so a future
     drop of the `graph` argument would silently revert distinctness to the
-    pre-6.1 directed semantics. This test fails if that wiring regresses.
+    purely directed semantics. This test fails if that wiring regresses.
     """
     contracted = _out_and_back_contracted()
     super_id = next(iter(contracted.super_edge_to_base))  # (0, 2, k)

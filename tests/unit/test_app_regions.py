@@ -195,7 +195,7 @@ def test_list_regions_reports_a_rotated_entry_true_polygon(tmp_path: pathlib.Pat
 
 
 def test_rotated_region_envelope_over_reports_the_box(tmp_path: pathlib.Path) -> None:
-    # The documented envelope leak: `bounds` is still exposed (the pre-5.1 overlay
+    # The documented envelope leak: `bounds` is still exposed (for the box-only overlay
     # path) but is strictly larger than a rotated box — never a containment test.
     _seed_entry(tmp_path, cache_key_hash="ab" * 8, area=_ROTATED_AREA)
 

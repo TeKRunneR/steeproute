@@ -211,7 +211,7 @@ def test_rotated_square_keeps_the_radius_spelling() -> None:
 
 
 def test_square_argv_is_unchanged_by_the_rotated_surface() -> None:
-    # Regression guard: a square area still produces exactly the pre-5.1
+    # Regression guard: a square area produces exactly the square-shorthand
     # argv — no --angle, no width/height, same flag order.
     setup_argv = _argv(AreaSpec(center=(45.26, 5.788), radius_km=2.0), SetupParams())
     assert setup_argv == [_EXE, "--center", "45.26,5.788", "--radius", "2"]

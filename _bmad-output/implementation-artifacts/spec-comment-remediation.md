@@ -1,7 +1,12 @@
 # Spec — comment remediation pass
 
-**Status:** not started. Prerequisite work (16 wrong/dead comments) landed in
-`fix/comment-audit-s1` (`aa88d26`).
+**Status:** done (2026-07-29), `fix/comment-audit-s1`. Prerequisite work (16
+wrong/dead comments) landed earlier on the same branch (`aa88d26`).
+
+Every file in `src/` and `tests/` was read. Story/epic references are at **0** in
+both trees, as are the `AC #N` / `Task N` / `Review P<n>` / `T2`/`D1`/`D2`/`S3`/
+`Q4`/`DEF2` pointers and every banner comment. See §Outcome for what the prose
+share did and did not do.
 
 ## The problem
 
@@ -79,12 +84,16 @@ for `src`. Reference band, same methodology: osmnx 42%, pyproj 39%, networkx
 
 ## Baseline (post-`aa88d26`)
 
+Measured with the session's own counter, which is slightly stricter than the
+figures the spec was written against (it counts a line as prose if it is inside a
+module/class/function docstring or is a comment-only line):
+
 | | lines | prose | share | prose lines naming a story/epic |
 |---|---|---|---|---|
-| `src/steeproute` | 13,100 | 5,227 | 40% | 356 |
-| `tests` | 24,526 | 5,322 | 22% | 373 |
-
-Re-run the measurement script in the session log to track progress.
+| `src/steeproute` before | 13,100 | 5,765 | 44% | 367 |
+| `src/steeproute` after | 13,057 | 5,727 | 44% | **0** |
+| `tests` before | 24,641 | 5,851 | 24% | 393 |
+| `tests` after | 24,338 | 5,720 | 24% | **0** |
 
 ## Work list — `src/` by prose share
 
@@ -93,22 +102,22 @@ Order is by concentration, not size. Status: TODO / DONE.
 | prose | file | story refs | status |
 |---|---|---|---|
 | 390/669 (58%) | `solver/grasp.py` | 44 | DONE |
-| 232/419 (55%) | `pipeline/graph.py` | 15 | TODO |
-| 230/424 (54%) | `models.py` | 27 | TODO |
+| 232/419 (55%) | `pipeline/graph.py` | 15 | DONE |
+| 230/424 (54%) | `models.py` | 27 | DONE |
 | 131/252 (52%) | `solver/distinctness.py` | 10 | DONE |
-| 220/431 (51%) | `pipeline/__init__.py` | 12 | TODO |
+| 220/431 (51%) | `pipeline/__init__.py` | 12 | DONE |
 | 60/122 (49%) | `solver/reuse.py` | 7 | DONE |
-| 79/170 (46%) | `progress.py` | 6 | TODO |
-| 78/169 (46%) | `app/cli_adapter/params_schema.py` | 2 | TODO |
-| 113/245 (46%) | `pipeline/dem.py` | 6 | TODO |
-| 68/157 (43%) | `app/cli_adapter/regions.py` | 3 | TODO |
-| 183/432 (42%) | `pipeline/osm.py` | 10 | TODO |
-| 657/1554 (42%) | `cache.py` | 44 | TODO |
+| 79/170 (46%) | `progress.py` | 6 | DONE |
+| 78/169 (46%) | `app/cli_adapter/params_schema.py` | 2 | DONE |
+| 113/245 (46%) | `pipeline/dem.py` | 6 | DONE |
+| 68/157 (43%) | `app/cli_adapter/regions.py` | 3 | DONE |
+| 183/432 (42%) | `pipeline/osm.py` | 10 | DONE |
+| 657/1554 (42%) | `cache.py` | 44 | DONE |
 | 248/603 (41%) | `solver/parallel.py` | 5 | DONE |
-| 172/421 (41%) | `validator.py` | 11 | TODO |
+| 172/421 (41%) | `validator.py` | 11 | DONE |
 | — | `solver/descent.py` | 2 | DONE |
-| — | remaining 25 `src` files | — | TODO |
-| — | `app/static/**` js/css/html (334 comment lines) | — | TODO |
+| — | remaining 25 `src` files | — | DONE |
+| — | `app/static/**` js/css/html (334 comment lines) | — | DONE |
 
 `tests/` is a comparable body of work with its own rules — see §Tests below.
 
@@ -146,56 +155,74 @@ prose (where the work is), not by share as the `src` table is.
 
 | prose | share | refs | docstring'd fns | file | status |
 |---|---|---|---|---|---|
-| 217/564 | 38% | 5 | 12 | `integration/test_oracle_correctness.py` | TODO |
-| 208/978 | 21% | 14 | 33 | `unit/test_graph_contraction.py` | TODO |
-| 198/521 | 38% | 7 | 10 | `integration/test_metamorphic.py` | TODO |
-| 195/836 | 23% | 11 | 30 | `unit/test_check_coverage.py` | TODO |
-| 171/489 | 35% | 12 | 11 | `unit/test_grasp_construction.py` | TODO |
-| 151/1026 | 15% | 11 | 41 | `unit/test_smoothing.py` | TODO |
-| 151/937 | 16% | 13 | 37 | `unit/test_cache.py` | TODO |
-| 149/372 | 40% | 9 | 0 | `integration/conftest.py` | TODO |
-| 132/1036 | 13% | 21 | 1 | `integration/test_app_api.py` | TODO |
-| 123/635 | 19% | 4 | 21 | `unit/test_dem_download.py` | TODO |
-| 123/634 | 19% | 9 | 27 | `unit/test_validator.py` | TODO |
-| 121/400 | 30% | 2 | 8 | `e2e/test_source_unavailable.py` | TODO |
-| 115/636 | 18% | 5 | 20 | `unit/test_climbs.py` | TODO |
-| 115/630 | 18% | 6 | 23 | `unit/test_dem.py` | TODO |
-| 115/237 | 49% | 20 | 0 | `integration/exhaustive_oracle.py` | TODO |
-| 113/514 | 22% | 1 | 20 | `unit/test_distinctness.py` | TODO |
-| 112/699 | 16% | 22 | 38 | `unit/test_area_parsing.py` | TODO |
-| 112/527 | 21% | 3 | 9 | `unit/test_climb_detection.py` | TODO |
-| 109/697 | 16% | 8 | 32 | `unit/test_osm.py` | TODO |
-| 108/450 | 24% | 12 | 15 | `e2e/test_steeproute_setup.py` | TODO |
-| 97/378 | 26% | 3 | 6 | `e2e/test_coverage_check.py` | TODO |
-| 81/252 | 32% | 4 | 0 | `benchmarks/conftest.py` | TODO |
-| 2,306 | — | 171 | 220 | remaining 73 files | TODO |
+| 217/564 | 38% | 5 | 12 | `integration/test_oracle_correctness.py` | DONE |
+| 208/978 | 21% | 14 | 33 | `unit/test_graph_contraction.py` | DONE |
+| 198/521 | 38% | 7 | 10 | `integration/test_metamorphic.py` | DONE |
+| 195/836 | 23% | 11 | 30 | `unit/test_check_coverage.py` | DONE |
+| 171/489 | 35% | 12 | 11 | `unit/test_grasp_construction.py` | DONE |
+| 151/1026 | 15% | 11 | 41 | `unit/test_smoothing.py` | DONE |
+| 151/937 | 16% | 13 | 37 | `unit/test_cache.py` | DONE |
+| 149/372 | 40% | 9 | 0 | `integration/conftest.py` | DONE |
+| 132/1036 | 13% | 21 | 1 | `integration/test_app_api.py` | DONE |
+| 123/635 | 19% | 4 | 21 | `unit/test_dem_download.py` | DONE |
+| 123/634 | 19% | 9 | 27 | `unit/test_validator.py` | DONE |
+| 121/400 | 30% | 2 | 8 | `e2e/test_source_unavailable.py` | DONE |
+| 115/636 | 18% | 5 | 20 | `unit/test_climbs.py` | DONE |
+| 115/630 | 18% | 6 | 23 | `unit/test_dem.py` | DONE |
+| 115/237 | 49% | 20 | 0 | `integration/exhaustive_oracle.py` | DONE |
+| 113/514 | 22% | 1 | 20 | `unit/test_distinctness.py` | DONE |
+| 112/699 | 16% | 22 | 38 | `unit/test_area_parsing.py` | DONE |
+| 112/527 | 21% | 3 | 9 | `unit/test_climb_detection.py` | DONE |
+| 109/697 | 16% | 8 | 32 | `unit/test_osm.py` | DONE |
+| 108/450 | 24% | 12 | 15 | `e2e/test_steeproute_setup.py` | DONE |
+| 97/378 | 26% | 3 | 6 | `e2e/test_coverage_check.py` | DONE |
+| 81/252 | 32% | 4 | 0 | `benchmarks/conftest.py` | DONE |
+| 2,306 | — | 171 | 220 | remaining 73 files | DONE |
 
 A caution for this table: prose share is a much weaker signal in tests than in
 `src`. A 13%-prose file with 1,036 lines (`test_app_api.py`) carries more drift
 than a 49%-prose file with 237. Rank by the prose column, and treat the
 docstring'd-function count as the real read-effort estimate.
 
-## Specific things already identified
+## Specific things already identified — all resolved
 
-- **Module-docstring-as-changelog** — rewrite as description, not history:
-  `cli/query.py:7-29`, `app/main.py:3-9`, `app/api.py:5-8`, `app/queue.py:10,16`,
-  `app/models.py`.
-- **Triplication in `solver/grasp.py`** — the θ-prefix rationale appears three
-  times (module docstring, inline in `run()`, `_best_theta_prefix` docstring);
-  the stagnation-vs-delta argument twice, ~25 lines apart, and the inline copy
-  sits above the wrong code.
-- **`HEAVY_EDGE_ATTRS` tangle** — `models.py:176-180` and
-  `solver/parallel.py:104-107` both narrate the same relocation from opposite
-  sides, and `models.py:219` cites the re-export path rather than the
-  definition 50 lines above it.
-- **Four "sole caller" claims** (`cache.py:575`, `pipeline/__init__.py:238`,
-  `:283`, `app/models.py:157`) are currently true and each guards a real
-  aliasing hazard. Convert to an assert or a test — encode, don't narrate.
-- **`cli/setup.py:140`** names the removed `_SETUP_MAX_RADIUS_KM`, correctly in
-  past tense. The durable statement is "no size ceiling"; drop the dead symbol.
-- **Provenance half-applied** — `grasp.py:82` "~13%" and `:570` "~35-40%" cite
-  "the 11.2 profile". Replace the story ID with area + date, as
-  `regression.py:136` already does well.
+- **Module-docstring-as-changelog** — rewritten as description, not history:
+  `cli/query.py`, `cli/setup.py`, `app/main.py`, `app/api.py`, `app/queue.py`,
+  `app/models.py`, `app/cli_adapter/__init__.py` (which also listed a per-seam
+  implementation status; all four seams exist).
+- **Triplication in `solver/grasp.py`** — each argument now lives once, on the
+  code it constrains: θ-as-route-level-constraint in `_route_slope_ok`, the
+  longest-prefix argument in `_best_theta_prefix`, stagnation-vs-delta in
+  `run()`'s docstring. Other sites point at them.
+- **`HEAVY_EDGE_ATTRS` tangle** — `models.py` now states why the constant is
+  homed at the lowest layer (`pipeline/` must not import `solver/`) and cites
+  itself, not the re-export path; `solver/parallel.py` states only why it
+  re-exports.
+- **Four "sole caller" claims** — encoded as
+  `tests/unit/test_graph_ownership_call_sites.py`, which enumerates the seven
+  ownership-transfer call sites and fails on any new one, plus a second test that
+  every such callee defaults to the copying path. Verified non-vacuous. The prose
+  at each definition now states the ownership *precondition* (durable) rather
+  than the caller census (not).
+- **`cli/setup.py:140`** — dead symbol dropped; the comment states the durable
+  rule ("no upper size ceiling on either CLI: a large area is slow, not
+  invalid"). The mirror of the same problem in
+  `tests/e2e/test_coverage_check.py` (docstring *and* test name) was fixed too.
+- **Provenance half-applied** — the `~13%` and `~35-40%` figures now read
+  "py-spy, r6 Grenoble area, 2026-07-03". Every other bare number in `src/` got
+  the same treatment: the `~8 s` adjacency rebuild and `~8 s` pool-teardown tail
+  (r20, 2026-07-08 / 2026-07-14), the `~5.4 s` / `~5 s` / `~4.6 s` / `~7.4 s` /
+  `3.77 s → 1.51 s` / `~204 MB → ~72 MB` figures (r20, 2026-07-08 / 2026-07-24).
+
+### One deliberate exception
+
+`regression.py:135-144`, which §Model comments calls the best comment in the
+repo, still cites `spec-cli-defaults-and-setup-radius-cap.md` — an
+implementation-artifact, so a point-in-time record that §Doc references says not
+to point code at. Left as-is: it states its fact inline and stands without the
+doc. Flagging the tension rather than silently resolving it either way. The six
+*other* citations of that same spec, in `tests/`, were removed — where they
+carried a date, the date stayed.
 
 ## Model comments — read these first to calibrate
 
@@ -228,3 +255,44 @@ files rather than dribbling them across commits.
 `tests/unit` and `tests/integration` in one invocation). Full suite before
 merging. Regression goldens must not move; if one does, something other than a
 comment changed.
+
+## Outcome
+
+**Story/epic references: 367 → 0 in `src/`, 393 → 0 in `tests/`.** Same for the
+`AC #N` acceptance-criteria pointers (~90 in `tests/`), the `Task N` /
+`Review P<n>` review-thread ids, the opaque `T2`/`D1`/`D2`/`S3`/`Q4`/`DEF2`
+deferred-work codes, and every banner comment (2 in `src/*.py`, 5 in `app.css`,
+7 bare section markers in `map-home.js`, 38 three-line banners + the
+`test_metamorphic.py` rulers in `tests/`). No TODOs, no commented-out code.
+
+**Prose share did not fall, and that is the honest result.** `src/` is 44% before
+and after; `tests/` is 24% both times. The spec predicted "low 30s" for `src/` on
+the theory that cutting history and duplication would drop the number on its own.
+It didn't, for a reason worth recording:
+
+- The history *was* cut — but most of it was **load-bearing narration**, not
+  filler. "Story 14.2 vectorized this" became "don't push numpy dispatch down to
+  per-edge arrays, it measurably regresses on loops this light" — a refuted
+  alternative with a reason, which is longer than the changelog line it replaced
+  and worth far more.
+- Where a comment only *annotated* (a bare `(Story 5.2)` after a claim), removal
+  shortened the line but not the line count.
+- The remaining density is concentrated in the modules that legitimately carry
+  algorithm rationale: `cache.py`, `solver/grasp.py`, `pipeline/{graph,smoothing,
+  climbs,__init__}.py`, `models.py` — ~3,200 of `src/`'s 5,727 prose lines. Two
+  checks say this is not restatement: a scan for one-line docstrings whose words
+  are a subset of the function name found 14 candidates and **all 14** carry
+  information the name doesn't (an axis order, a 404 branch, a side effect, a
+  purity contract); a scan for comments restating the following line found zero.
+
+So the number is a symptom, not the target, exactly as §Target said. Chasing it
+to the low 30s from here would mean deleting rationale.
+
+**What the pass did not do.** The docstring-vs-assertion audit (§Tests' "most
+important" rule) was run mechanically — pairing each of the 614 docstring'd test
+functions with its `assert`s / `raises` / `_assert_*` helpers and flagging
+no-assert, unmatched-count and unmatched-negation shapes. Every flag resolved to
+a false positive (helper delegation, or a number living in a fixture param), and
+one real find: a docstring naming a deleted symbol. That is weaker evidence than
+a human reading all 614 against their assertions; treat "no drifted test
+docstrings" as unproven rather than established.

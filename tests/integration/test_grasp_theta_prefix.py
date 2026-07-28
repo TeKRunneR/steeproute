@@ -11,10 +11,9 @@ to append a flat tail was discarded entirely — GRASP returned `[]` where a
 so it returns the steep-only route GRASP threw away; this test pins GRASP to the
 oracle's result on the minimal steep-edge-plus-forced-flat-tail graph.
 
-Basis: `tmp/repro_findings.py::repro_finding_10`. On pre-9.2 code GRASP returns
-`[]` here (only `[0→1, 1→2]` is offered, avg 200/2400 < θ); after the fix GRASP
-offers the longest θ-clearing prefix `[0→1]` — the same route `enumerate_best`
-returns.
+Without prefix recovery GRASP returns `[]` here: only the maximal walk
+`[0→1, 1→2]` is offered, and its average 200/2400 is under θ. With it, GRASP offers
+the longest θ-clearing prefix `[0→1]` — the same route `enumerate_best` returns.
 """
 
 from __future__ import annotations

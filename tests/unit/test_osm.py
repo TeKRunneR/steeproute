@@ -86,9 +86,9 @@ def test_filter_trails_include_vs_exclude_diff_equals_untagged_trail_count(
     """The two policies differ by exactly the count of untagged *trail* edges.
 
     The untagged-trails policy only governs trails with no `sac_scale`. Minor-road
-    connectors also have `sac_scale=None` but are admitted under *both* policies
-, so they must be excluded from the expected diff — counting all
-    `sac_scale=None` edges would over-count by the road edges.
+    connectors also have `sac_scale=None` but are admitted under *both* policies, so
+    they must be excluded from the expected diff — counting all `sac_scale=None`
+    edges would over-count by the road edges.
     """
     untagged_trail_count = sum(
         1

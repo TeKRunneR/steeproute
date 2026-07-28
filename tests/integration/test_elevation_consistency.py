@@ -5,7 +5,8 @@
 """The metric box, the solver objective, and the plotted elevation curve all read
 ONE canonical profile (box == curve).
 
-The pre-6.3 design split the profile: the box/solver summed a per-edge-smoothed
+The trap this guards against is splitting the profile in two: the box/solver summing
+a per-edge-smoothed
 elevation while the deadband was applied only at sum-time (it produced a *number*
 and never reshaped the displayed vertices), so a route's reported D+/D- disagreed
 with its plotted curve by tens of meters whenever the deadband was active. This
