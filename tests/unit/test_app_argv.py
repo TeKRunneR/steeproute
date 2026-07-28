@@ -1,4 +1,4 @@
-"""Unit tests for `cli_adapter.argv` — the setup-argv seam (App Story 1.3).
+"""Unit tests for `cli_adapter.argv` — the setup-argv seam.
 
 The only place the App knows `steeproute-setup`'s flag names; these tests pin the
 mapping so a CLI flag rename is caught here (the whole point of the adapter
@@ -79,9 +79,7 @@ def test_executable_defaults_to_resolved_console_script() -> None:
     assert stem in ("steeproute-setup", "steeproute-setup.exe")
 
 
-# --- build_query_argv (App Story 2.1) ----------------------------------------
-
-
+# Build_query_argv.
 def _query_argv(
     area: AreaSpec, params: QueryParams, output_dir: pathlib.Path = _OUT_DIR
 ) -> list[str]:
@@ -98,7 +96,7 @@ def test_query_argv_includes_area_and_output_dir() -> None:
 
 def test_query_argv_unset_fields_resolve_to_quality_demo_defaults() -> None:
     # All-None QueryParams() must resolve to these quality-demo numbers. As of
-    # 2026-07-28 (spec-cli-defaults-and-setup-radius-cap.md) these are simply
+    # 2026-07-28 these are simply
     # the plain query CLI's own defaults — no more App-side override — but the
     # values themselves, and this test pinning them, are unchanged.
     argv = _query_argv(AreaSpec(center=(1.0, 2.0), radius_km=1.0), QueryParams())
@@ -134,9 +132,9 @@ def test_query_argv_seed_included_when_set() -> None:
 
 
 def test_query_argv_max_descent_slope_defaults_to_quality_value() -> None:
-    # Story app-4-2 corrected the App default to 0.4 (on), so an all-unset
-    # QueryParams now emits the descent cap — the CLI's own default is None (off),
-    # but this is a steep-route tool.
+    # The App defaults the descent cap to 0.4 (on) where the CLI ships it `None`
+    # (off), so an all-unset QueryParams still emits the flag. Deliberate: this is a
+    # steep-route tool.
     argv = _query_argv(AreaSpec(center=(1.0, 2.0), radius_km=1.0), QueryParams())
     assert argv[argv.index("--max-descent-slope") + 1] == "0.4"
 
@@ -149,8 +147,8 @@ def test_query_argv_max_descent_slope_included_when_set() -> None:
 
 
 def test_query_argv_start_at_junction_defaults_on() -> None:
-    # Story app-4-2: the App defaults start-at-junction on (CLI ships it off), so
-    # an unset QueryParams still emits the flag.
+    # The App defaults start-at-junction on where the CLI ships it off, so an unset
+    # QueryParams still emits the flag.
     default = _query_argv(AreaSpec(center=(1.0, 2.0), radius_km=1.0), QueryParams())
     assert "--start-at-junction" in default
     explicit = _query_argv(
@@ -166,8 +164,7 @@ def test_query_argv_executable_defaults_to_resolved_console_script() -> None:
     assert stem in ("steeproute", "steeproute.exe")
 
 
-# --- Rotated / rectangular areas (App Story 5.1, CLI Epic 15) -----------------
-
+# Rotated / rectangular areas.
 _ROTATED = AreaSpec(center=(45.19, 5.72), width_km=16.0, height_km=6.0, angle_deg=35.0)
 
 
@@ -214,7 +211,7 @@ def test_rotated_square_keeps_the_radius_spelling() -> None:
 
 
 def test_square_argv_is_unchanged_by_the_rotated_surface() -> None:
-    # AC #3 regression guard: a square area still produces exactly the pre-5.1
+    # Regression guard: a square area still produces exactly the pre-5.1
     # argv — no --angle, no width/height, same flag order.
     setup_argv = _argv(AreaSpec(center=(45.26, 5.788), radius_km=2.0), SetupParams())
     assert setup_argv == [_EXE, "--center", "45.26,5.788", "--radius", "2"]

@@ -3,10 +3,10 @@
 # ships no type information; `reportImplicitRelativeImport` — `from conftest
 # import ...` is the shape that resolves under pytest's prepend import mode;
 # `reportPrivateUsage` — benchmarking the cache-write path means calling
-# `cache._graph_to_payload` directly (Story 16.3): the point is to time that stage
+# `cache._graph_to_payload` directly: the point is to time that stage
 # in isolation rather than through `write_entry`. Same rationale as the sibling
 # `conftest.py`, which reaches for the orchestrator's private prunes.
-"""Setup-stage wall-clock baselines on committed fixture data (Story 11.3 AC #3).
+"""Setup-stage wall-clock baselines on committed fixture data.
 
 One benchmark per CPU-bound setup stage, chained off the session-scoped
 stage-input fixtures in `conftest.py` (each stage's input is built once; the
@@ -16,8 +16,8 @@ re-running them across rounds is sound). No live network anywhere:
 - Stage 1 is benchmarked as its offline stand-in — graphml parse + `normalize_edges`
   of the committed fixture — NOT the Overpass download it replaces in production.
 - The two network-touching stages (`osm-load`, `dem-resolve`) are out of benchmark
-  scope by construction; their baseline is Story 11.2's cold-cache capture
-  (~81% of a 54 s real setup), recorded in
+  scope by construction; their baseline is the cold-cache capture
+  (~81% of a 54 s real setup) recorded in
   `_bmad-output/planning-artifacts/research/profiling/setup-timeline.txt`.
 - Stage 5 benchmarks `sample_elevation` against the committed DEM GeoTIFF (local
   raster I/O + interpolation — the CPU-side cost of the `elevation-sampling`
@@ -92,11 +92,10 @@ def test_stage5_sample_elevation(
     benchmark(sample_elevation, resampled_graph, DEM_FIXTURE_PATH)
 
 
-# --- Story 16.2: setup ownership / fusion pairs -------------------------------
-#
-# Each pair measures the old shape and the new one in the SAME run, so the
-# comparison is immune to the machine's between-run wall-clock drift (Story 16.1
-# saw untouched stages move up to 33% between adjacent runs). The consuming
+# Setup ownership / stage-fusion pairs.
+# # Each pair measures the copying shape and the consuming shape in the SAME run,
+# because this machine's between-run wall-clock drift has moved untouched stages by
+# up to 33% between adjacent runs — a cross-run comparison here is noise. The consuming
 # variants use `benchmark.pedantic(setup=...)` so the `graph.copy()` each round
 # needs — to hand the consumer a graph it may destroy — stays outside the measured
 # region. These are component baselines only: per AGENTS.md §Scale target the
@@ -106,7 +105,10 @@ def test_stage5_sample_elevation(
 def test_stage34_two_stage_smooth_then_resample(
     benchmark: BenchmarkFixture, filtered_graph: nx.MultiDiGraph
 ) -> None:
-    """Stages 3→4 the old way: build the intermediate graph, then flatten it again."""
+    """Stages 3→4 unfused: build the intermediate graph, then flatten it again.
+
+    The baseline half of the fusion pair — production does not take this path.
+    """
     benchmark(lambda: resample_edges(smooth_polylines(filtered_graph)))
 
 
@@ -134,7 +136,10 @@ def test_stage5_sample_elevation_inplace(
 def test_cache_write_payload_copying(
     benchmark: BenchmarkFixture, post_stage5_graph: nx.MultiDiGraph
 ) -> None:
-    """Cache-write payload build the old way: copy the whole graph, then drop geometry."""
+    """Cache-write payload build, copying: copy the whole graph, then drop geometry.
+
+    The baseline half of the ownership pair — production passes `consume=True`.
+    """
     benchmark(cache._graph_to_payload, post_stage5_graph)
 
 
@@ -150,7 +155,7 @@ def test_cache_write_payload_consuming(
     )
 
 
-# --- Query-side stages (6b / 7 / 9) — Story 14.2 (Q2, Q3) --------------------
+# Query-side stages (6b / 7 / 9).
 
 
 def test_stage6b_graph_deadband_elevation(

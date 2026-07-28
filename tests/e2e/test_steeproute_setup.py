@@ -1,11 +1,11 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false, reportUnusedFunction=false
 # Reason: same osmnx/networkx boundary as the underlying pipeline modules.
 # `reportUnusedFunction` relaxed for the `_skip_if_fixtures_missing` autouse fixture.
-"""End-to-end coverage for `steeproute-setup` (Story 2.8).
+"""End-to-end coverage for `steeproute-setup`.
 
 Tests exercise the click command in-process via `CliRunner` with both
 `pipeline.osm_load` and `cli.setup.resolve_dem` patched to read the committed
-Grenoble fixture — the same offline pattern Stories 2.5 and 2.7 use, extended so
+Grenoble fixture — the same offline pattern the pipeline and cache tiers use, extended so
 the DEM auto-download never touches the network. Subprocess-style smoke tests
 live in `test_cli_smoke.py`; this file is about the full hit / miss /
 `--force-refresh` flow and the on-disk cache layout.
@@ -35,9 +35,9 @@ _OSM_FIXTURE_PATH = _FIXTURE_DIR / "osm_graph.graphml"
 _DEM_FIXTURE_PATH = _FIXTURE_DIR / "dem.tif"
 
 # Fixture baseline carried over from `test_pipeline_end_to_end.py` (updated for
-# Story 6.2's road-inclusive fixture). Story 2.8 only smoke-checks the edge count
-# is in that band — the orchestrator tests are the authority on exact numbers; we
-# just need "did the pipeline run end-to-end and produce a sane cache entry?"
+# the road-inclusive fixture). This tier only smoke-checks that the edge count is in
+# that band — the orchestrator tests are the authority on exact numbers; all we need
+# here is "did the pipeline run end-to-end and produce a sane cache entry?"
 _BASELINE_EDGES = 2086
 _DRIFT_TOLERANCE = 0.10
 
@@ -118,7 +118,7 @@ def _invoke_setup(
 def test_setup_first_run_is_cache_miss_writes_entry_and_reports_summary(
     tmp_path: pathlib.Path,
 ) -> None:
-    """AC #1, #2, #4: first invocation runs the pipeline, writes a valid cache entry, and prints the summary."""
+    """First invocation runs the pipeline, writes a valid cache entry, and prints the summary."""
     result = _invoke_setup(tmp_path)
 
     assert result.exit_code == 0, result.output
@@ -153,7 +153,7 @@ class _SharedRuns(NamedTuple):
 
 @pytest.fixture(scope="module")
 def shared_runs(tmp_path_factory: pytest.TempPathFactory) -> _SharedRuns:
-    """Run the pipeline once (miss) and once more (hit) for the Story 11.1 tests.
+    """Run the pipeline once (miss) and once more (hit) for the stage-progress tests.
 
     The stage-timeline, cache-hit-silence, and osmnx-cache assertions all read
     the *output* of the same two invocations — sharing them avoids re-running
@@ -173,7 +173,7 @@ def shared_runs(tmp_path_factory: pytest.TempPathFactory) -> _SharedRuns:
 
 
 def test_setup_cache_miss_prints_per_stage_timeline(shared_runs: _SharedRuns) -> None:
-    """Story 11.1 AC #2 (FR33): a cache-miss run announces every stage and its elapsed time."""
+    """FR33: a cache-miss run announces every stage and its elapsed time."""
     result = shared_runs.miss
     assert result.exit_code == 0, result.output
     for stage in (
@@ -200,10 +200,10 @@ def test_setup_cache_miss_prints_per_stage_timeline(shared_runs: _SharedRuns) ->
 
 
 def test_setup_quiet_suppresses_stage_lines_but_keeps_summary(tmp_path: pathlib.Path) -> None:
-    """Story 11.1 AC #4 (§Cat 8): `--quiet` drops all progress; the summary survives.
+    """§Cat 8: `--quiet` drops all progress; the summary survives.
 
     Can't ride `shared_runs`: suppression is only observable on a *quiet* cache
-    miss, so this is the one Story 11.1 test that pays its own pipeline run.
+    miss, so this is the one stage-progress test that pays its own pipeline run.
     """
     result = _invoke_setup(tmp_path, "--quiet")
     assert result.exit_code == 0, result.output
@@ -223,7 +223,7 @@ def test_setup_cache_hit_prints_no_stage_lines(shared_runs: _SharedRuns) -> None
 
 
 def test_setup_configures_persistent_osmnx_http_cache(shared_runs: _SharedRuns) -> None:
-    """Story 11.1 AC #5 (T2): osmnx's Overpass HTTP cache is enabled and rooted under
+    """osmnx's Overpass HTTP cache is enabled and rooted under
     the steeproute cache root (honoring `--cache-dir`), not the CWD-relative default."""
     assert shared_runs.miss.exit_code == 0, shared_runs.miss.output
     assert shared_runs.osmnx_use_cache is True
@@ -233,7 +233,7 @@ def test_setup_configures_persistent_osmnx_http_cache(shared_runs: _SharedRuns) 
 def test_setup_first_run_writes_manifest_with_complete_provenance(
     tmp_path: pathlib.Path,
 ) -> None:
-    """AC #1: the manifest carries every field `Manifest` requires, populated correctly."""
+    """The manifest carries every field `Manifest` requires, populated correctly."""
     result = _invoke_setup(tmp_path)
     assert result.exit_code == 0, result.output
 
@@ -265,14 +265,14 @@ def test_setup_first_run_writes_manifest_with_complete_provenance(
     assert re.fullmatch(r"[0-9a-f]{64}", payload["pipeline_content_hash"]) is not None
 
 
-def test_setup_graph_edge_count_within_story_2_5_baseline(tmp_path: pathlib.Path) -> None:
-    """AC #4: the pipeline actually ran (edge count matches Story 2.5's `_BASELINE_EDGES ± 10%`)."""
+def test_setup_graph_edge_count_within_baseline(tmp_path: pathlib.Path) -> None:
+    """The pipeline actually ran: edge count within `_BASELINE_EDGES ± 10%`."""
     from steeproute.cache import read_entry
 
     _invoke_setup(tmp_path)
     entry = next((tmp_path / "steeproute" / "areas").iterdir())
-    # `read_entry`, not a raw `pickle.load` — since Story 13.2 `graph.pkl` holds
-    # the ragged-array payload, and the cache module owns its deserialization.
+    # `read_entry`, not a raw `pickle.load`: `graph.pkl` holds a versioned payload
+    # dict, and the cache module owns its deserialization.
     graph: nx.MultiDiGraph = read_entry(tmp_path, entry.name).graph
 
     edge_count = graph.number_of_edges()
@@ -284,7 +284,7 @@ def test_setup_graph_edge_count_within_story_2_5_baseline(tmp_path: pathlib.Path
 
 
 def test_setup_second_run_same_flags_is_cache_hit(tmp_path: pathlib.Path) -> None:
-    """AC #4: re-invocation hits the cache and never re-enters `osm_load`.
+    """Re-invocation hits the cache and never re-enters `osm_load`.
 
     Pre-seed once with the pipeline patches active so the miss path runs offline;
     the second invocation runs **without** the patches. If the hit-path regressed
@@ -311,7 +311,7 @@ def test_setup_re_prepares_legacy_schema_entry_once(
     Each format bump invalidates older entries via the manifest schema version —
     the cache key deliberately does not shift for these, since `cache.py` is
     excluded from the pipeline content hash. v1 → v2 was the graph payload
-    (Story 13.2); v2 → v3 was the rotated `area` block (Story 15.2). Setup's
+; v2 → v3 was the rotated `area` block. Setup's
     `CacheCorruptedError` branch treats the stale entry as a miss and rebuilds it
     in place; the second run leaves a valid current-schema entry behind. This is
     the "pre-existing entries re-prepare once, no compat shim" contract.
@@ -332,7 +332,7 @@ def test_setup_re_prepares_legacy_schema_entry_once(
 
 
 def test_setup_force_refresh_rebuilds_entry_on_existing_key(tmp_path: pathlib.Path) -> None:
-    """AC #4: `--force-refresh` re-runs the pipeline even when the cache key matches."""
+    """`--force-refresh` re-runs the pipeline even when the cache key matches."""
     first = _invoke_setup(tmp_path)
     assert first.exit_code == 0
     first_entry = next((tmp_path / "steeproute" / "areas").iterdir())
@@ -351,7 +351,7 @@ def test_setup_force_refresh_rebuilds_entry_on_existing_key(tmp_path: pathlib.Pa
 
 
 def test_setup_with_different_untagged_trails_writes_new_entry(tmp_path: pathlib.Path) -> None:
-    """AC #5: changing a key-inducing flag produces a fresh entry rather than overwriting."""
+    """Changing a key-inducing flag produces a fresh entry rather than overwriting."""
     first = _invoke_setup(tmp_path, "--untagged-trails", "include")
     assert first.exit_code == 0
     second = _invoke_setup(tmp_path, "--untagged-trails", "exclude")
@@ -368,12 +368,12 @@ def test_setup_with_different_untagged_trails_writes_new_entry(tmp_path: pathlib
 
 
 def test_setup_with_different_dem_version_writes_new_entry(tmp_path: pathlib.Path) -> None:
-    """AC #5: changing the user-supplied `--dem-version` produces a fresh entry.
+    """Changing the user-supplied `--dem-version` produces a fresh entry.
 
     Parallel to the `--untagged-trails` sensitivity test — `--dem-version` is also
     a cache-key-composing input (Architecture §Cat 4b), so two runs differing only
-    on that flag must produce two distinct entries. Story 2.6's `test_cache_key.py`
-    covers the underlying `compute_cache_key` contract; this is the CLI-tier proof.
+    on that flag must produce two distinct entries. `test_cache_key.py` covers the
+    underlying `compute_cache_key` contract; this is the CLI-tier proof.
     """
     first = _invoke_setup(tmp_path, "--dem-version", "v1-test")
     assert first.exit_code == 0
@@ -388,7 +388,7 @@ def test_setup_with_different_dem_version_writes_new_entry(tmp_path: pathlib.Pat
 
 
 def test_setup_index_lists_all_written_entries(tmp_path: pathlib.Path) -> None:
-    """AC #1 (write_entry rebuilds the index): after two distinct entries, `index.json` lists both."""
+    """write_entry rebuilds the index: after two distinct entries, `index.json` lists both."""
     _invoke_setup(tmp_path, "--untagged-trails", "include")
     _invoke_setup(tmp_path, "--untagged-trails", "exclude")
 

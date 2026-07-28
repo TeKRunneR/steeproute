@@ -16,24 +16,24 @@ Two responsibilities:
 
 2. **Programmatic toy-`ContractedGraph` factory** (`make_toy_contracted_graph`,
    exposed via the `toy_graph_factory` fixture) — the primary solver test
-   fixture per Architecture §Cat 11b. Consumed by the GRASP-vs-exhaustive
-   quality gate (`test_solver_on_toy_graph.py`, Story 3.7) and reusable by the
-   metamorphic suite (Story 3.8). Fully seed-deterministic and decoupled from
-   any real OSM/DEM snapshot, so it regenerates identically in CI forever.
+   fixture per Architecture §Cat 11b. Consumed by the GRASP-vs-exhaustive quality
+   gate (`test_solver_on_toy_graph.py`) and the metamorphic suite
+   (`test_metamorphic.py`). Fully seed-deterministic and decoupled from any real
+   OSM/DEM snapshot, so it regenerates identically in CI forever.
 
    Sizing rationale: the exhaustive oracle (`exhaustive_oracle.enumerate_best`)
    is **exponential in the number of edge-simple forward paths**, so the binding
    constraint on the toy graph is edge density / layer width, NOT the node count.
    The defaults read as a "~20-30 node" fixture (Architecture §Cat 11b) but keep
    the graph sparse (low `density`, few back-edges) so the oracle terminates well
-   within the Story 3.7 ≤60s CI budget across all parameterized seeds.
+   within the quality gate's ≤60 s CI budget across all parameterized seeds.
 
    **Tractability ceiling (measured, single seed, num_layers=8):** `density=0.45`
-   (the committed default) → ~0.01s; `density=0.6` → ~1s; `layer_width=4` with
-   `density=0.6` → ~17s. The blowup is steep and tracks path count, not edge
-   count — a reuser (e.g. the Story 3.8 metamorphic suite) nudging `density`
-   above ~0.5 or `layer_width` above 3 can blow the CI budget. Stay at or below
-   the defaults unless you measure the oracle time for the new shape.
+   (the committed default) → ~0.01 s; `density=0.6` → ~1 s; `layer_width=4` with
+   `density=0.6` → ~17 s. The blowup is steep and tracks path count, not edge
+   count, so nudging `density` above ~0.5 or `layer_width` above 3 can blow the CI
+   budget. Stay at or below the defaults unless you measure the oracle time for the
+   new shape.
 """
 
 from __future__ import annotations
@@ -59,14 +59,14 @@ from steeproute.pipeline.osm import normalize_edges
 truststore.inject_into_ssl()
 
 
-# Topology defaults — num_layers * layer_width = 24 nodes. Empirically tuned
-# (Story 3.7): deep enough (8 layers → optimal routes are long, and the
-# guaranteed spine-to-spine cycle makes them longer) that GRASP is genuinely
-# challenged — its best lands at ~0.93-1.0 of the true optimum across the
-# committed seeds, giving the quality gate real teeth — while staying sparse
-# enough that the exhaustive oracle finishes in well under the ≤60s CI budget
-# (oracle ~0.04s total across 5 seeds; the full gate is ~4s, dominated by
-# GRASP's iter_budget). The binding constraint is path count, not node count.
+# Topology defaults — num_layers * layer_width = 24 nodes. Empirically tuned:
+# deep enough (8 layers → optimal routes are long, and the guaranteed
+# spine-to-spine cycle makes them longer) that GRASP is genuinely challenged — its
+# best lands at ~0.93-1.0 of the true optimum across the committed seeds, giving
+# the quality gate real teeth — while staying sparse enough that the exhaustive
+# oracle finishes well under the ≤60 s CI budget (oracle ~0.04 s total across 5
+# seeds; the full gate is ~4 s, dominated by GRASP's iter_budget). The binding
+# constraint is path count, not node count.
 _DEFAULT_NUM_LAYERS = 8
 _DEFAULT_LAYER_WIDTH = 3
 _DEFAULT_DENSITY = 0.45
@@ -102,8 +102,7 @@ def make_toy_contracted_graph(
     few back-edges that introduce cycles. Every edge carries the complete,
     finite stage-7 attribute contract (`length_m`, `d_plus_m`, `d_minus_m`,
     `avg_gradient`, `sac_scale`) so no consumer hits a missing-key `KeyError`
-    or a NaN-poisoned filter/sort (this is the consumer that owns the contract
-    for the items deferred from Stories 3.5/3.6).
+    or a NaN-poisoned filter/sort.
 
     Guarantees:
 
@@ -172,17 +171,16 @@ def make_toy_contracted_graph(
                 sac_scale=sac,
             )
         )
-        # Story 5.1 reuse tags (read by the solver/oracle via `solver.reuse`).
-        # Each synthetic edge is its own distinct base segment, keyed on its
-        # DIRECTED `(u, v, key)`: the toy graph models no two edges as the same
-        # physical trail, so opposite-direction edges between the same node pair
-        # (e.g. a spine forward edge and a back-edge over the same layers) are
-        # independent climbs that must NOT merge. Using the directed id keeps the
-        # undirected once-only rule equal to the pre-5.2 directed edge-simple
-        # feasible set, so the Story 3.7 quality gate and the Story 3.8
-        # metamorphic invariants are unperturbed. Genuine forward/reverse
-        # collisions (a climb and the reverse of its own trail) are covered by
-        # the real-fixture test and the dedicated solver/oracle/validator units.
+        # Reuse tags, read by the solver/oracle via `solver.reuse`. Each synthetic
+        # edge is its own distinct base segment, keyed on its **directed**
+        # `(u, v, key)`: the toy graph models no two edges as the same physical
+        # trail, so opposite-direction edges between the same node pair (e.g. a
+        # spine forward edge and a back-edge over the same layers) are independent
+        # climbs that must NOT merge. Keying undirected here would collapse them and
+        # silently shrink the feasible set the quality gate and the metamorphic
+        # invariants are measured against. Genuine forward/reverse collisions (a
+        # climb and the reverse of its own trail) are covered by the real-fixture
+        # test and the dedicated solver/oracle/validator units.
         g.edges[u, v, key]["base_segment_id"] = frozenset({(u, v, key)})
         g.edges[u, v, key]["reusable"] = False
         if is_super:
@@ -218,14 +216,14 @@ def make_toy_contracted_graph(
                     )
 
     # 3) Cycle-introducing back-edges between spine (column-0) nodes. Routing
-    #    both endpoints through the spine guarantees a *traversable* directed
-    #    cycle on every seed: the spine forward-chains col-0 of dst_layer up to
-    #    col-0 of src_layer, and this edge closes the loop. Built as a feasible
-    #    super-edge ("hiking", gradient >= 0.25) so the closed walk clears the θ
-    #    and SAC filters — otherwise the cycle would exist in the graph but be
-    #    unreachable to GRASP / the oracle. `src_layer > dst_layer` always
-    #    (src_layer >= num_layers//2 >= 1; dst_layer < src_layer), so no
-    #    self-loop is created.
+    # both endpoints through the spine guarantees a *traversable* directed
+    # cycle on every seed: the spine forward-chains col-0 of dst_layer up to
+    # col-0 of src_layer, and this edge closes the loop. Built as a feasible
+    # super-edge ("hiking", gradient >= 0.25) so the closed walk clears the θ
+    # and SAC filters — otherwise the cycle would exist in the graph but be
+    # unreachable to GRASP / the oracle. `src_layer > dst_layer` always
+    # (src_layer >= num_layers//2 >= 1; dst_layer < src_layer), so no
+    # self-loop is created.
     for _ in range(num_back_edges):
         src_layer = int(rng.integers(num_layers // 2, num_layers))
         dst_layer = int(rng.integers(0, src_layer))
@@ -256,7 +254,7 @@ def make_toy_solver_params(
     terminators are pinned non-binding so iter-budget stays the sole terminator
     (metamorphic invariants must be wall-clock-independent): `stagnation_iters=0`
     disables stagnation, and the wall-clock budget is set far above any toy-graph
-    run-time (Story 7.2 made both live).
+    run-time.
 
     `min_climb_slope` defaults to `theta` (both ship at 0.20). The GRASP solver
     never reads it — it drives `detect_climbs` (pipeline stage 8), which the
@@ -292,14 +290,13 @@ def toy_solver_params() -> SolverParams:
     return make_toy_solver_params()
 
 
-# --- Real Grenoble Le Sappey fixture (shared setup → contract chain) ----------
-#
-# The committed `osm_graph.graphml` + `dem.tif` under `fixtures/grenoble_small/`
+# Real Grenoble Le Sappey fixture (shared setup → contract chain)
+# # The committed `osm_graph.graphml` + `dem.tif` under `fixtures/grenoble_small/`
 # feed every real-data integration test (GRASP, validator, output, time-budget,
-# reproducibility). Each module used to rebuild the setup → climbs → contract
-# chain itself; that boilerplate now lives here once. The build-time PRD defaults
-# below are single-sourced so a consumer's `SolverParams` (theta / SAC cap /
-# J_max) can never drift from the thresholds the graph was actually built with.
+# reproducibility). The setup → climbs → contract chain is built here once rather
+# than per module, and the build-time PRD defaults below are single-sourced, so a
+# consumer's `SolverParams` (theta / SAC cap / J_max) can never drift from the
+# thresholds the graph was actually built with.
 
 _GRENOBLE_DIR = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "grenoble_small"
 _GRENOBLE_OSM_PATH = _GRENOBLE_DIR / "osm_graph.graphml"

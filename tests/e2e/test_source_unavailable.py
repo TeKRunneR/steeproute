@@ -1,7 +1,7 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false, reportUnusedFunction=false
 # Reason: same osmnx/networkx boundary as the underlying pipeline modules, plus
 # `reportUnusedFunction` relaxed for the `_skip_if_fixtures_missing` autouse fixture.
-"""End-to-end coverage for Story 2.9 — source-unavailable errors + OSM-age warning.
+"""End-to-end coverage for source-unavailable errors + the OSM-age warning.
 
 Three behaviors verified at the CLI boundary:
 
@@ -175,11 +175,9 @@ def _invoke_with_wrapper(args: list[str]) -> tuple[int, str]:
             set_verbose(False)
 
 
-# --- AC #4: DEM source unreachable -----------------------------------------------
-
-
+# DEM source unreachable.
 def test_dem_source_unreachable(tmp_path: pathlib.Path) -> None:
-    """AC #4: the IGN WMS download failing → exit 2 + `error: DEM source unreachable`.
+    """The IGN WMS download failing → exit 2 + `error: DEM source unreachable`.
 
     Patches the WMS `urlopen` to raise a `URLError` so the real `resolve_dem`
     error-mapping fires (`DataSourceUnavailableError → exit 2` via `run_entry_point`).
@@ -192,14 +190,15 @@ def test_dem_source_unreachable(tmp_path: pathlib.Path) -> None:
         exit_code, stderr = _invoke_with_wrapper(args)
 
     assert exit_code == 2
-    # Story 14.3's tile-fetch retries emit `WARNING: ... retrying` lines to stderr
-    # before the final error, so the error line is no longer the *first* line —
-    # assert on the line itself (same style as the `--verbose` sibling test).
+    # Tile-fetch retries emit `WARNING: ... retrying` lines to stderr before the
+    # final error, so the error line is not the *first* line — assert the line is
+    # present rather than that stderr starts with it (same style as the `--verbose`
+    # sibling test).
     assert "error: DEM source unreachable" in stderr, stderr
 
 
 def test_dem_source_unreachable_verbose_surfaces_detail(tmp_path: pathlib.Path) -> None:
-    """AC #2: `--verbose` surfaces the wrapped WMS failure on the detail line."""
+    """`--verbose` surfaces the wrapped WMS failure on the detail line."""
     args = [*_base_args(cache_dir=tmp_path / "cache"), "--verbose"]
     with patch(
         "steeproute.pipeline.dem_download.urlopen",
@@ -213,11 +212,9 @@ def test_dem_source_unreachable_verbose_surfaces_detail(tmp_path: pathlib.Path) 
     assert "IGN WMS GetMap failed" in stderr
 
 
-# --- AC #5: OSM source unreachable -----------------------------------------------
-
-
+# OSM source unreachable.
 def test_osm_network_failure(tmp_path: pathlib.Path) -> None:
-    """AC #5: `requests.ConnectionError` from `osmnx.graph_from_point` → exit 2 + OSM unreachable.
+    """`requests.ConnectionError` from `osmnx.graph_from_point` → exit 2 + OSM unreachable.
 
     Patches `osmnx.graph_from_point` (the call site the wrap in `pipeline/osm.py`
     sits around) so the production try/except actually fires. Patching
@@ -238,7 +235,7 @@ def test_osm_network_failure(tmp_path: pathlib.Path) -> None:
 
 
 def test_osm_network_failure_verbose_surfaces_detail(tmp_path: pathlib.Path) -> None:
-    """AC #2 + #5: `--verbose` rerun surfaces the wrapped `ConnectionError` on the detail line."""
+    """`--verbose` rerun surfaces the wrapped `ConnectionError` on the detail line."""
     args = [*_base_args(cache_dir=tmp_path / "cache"), "--verbose"]
     with (
         patch("steeproute.cli.setup.resolve_dem", _resolve_dem_from_fixture),
@@ -256,7 +253,7 @@ def test_osm_network_failure_verbose_surfaces_detail(tmp_path: pathlib.Path) -> 
 
 
 def test_osm_pipeline_wrapping_catches_requests_timeout(tmp_path: pathlib.Path) -> None:
-    """AC #1: the wrap covers the whole `requests.exceptions.RequestException` family, not just ConnectionError."""
+    """The wrap covers the whole `requests.exceptions.RequestException` family, not just ConnectionError."""
     args = _base_args(cache_dir=tmp_path / "cache")
     with (
         patch("steeproute.cli.setup.resolve_dem", _resolve_dem_from_fixture),
@@ -271,9 +268,7 @@ def test_osm_pipeline_wrapping_catches_requests_timeout(tmp_path: pathlib.Path) 
     assert "error: OSM source unreachable" in stderr
 
 
-# --- AC #7: OSM-age warning on cache-hit -----------------------------------------
-
-
+# OSM-age warning on cache-hit.
 def _invoke_cli_runner(
     *,
     cache_dir: pathlib.Path,
@@ -312,11 +307,11 @@ def _invoke_cli_runner(
 
 
 def test_osm_age_warning_emitted_on_stale_cache_hit(tmp_path: pathlib.Path) -> None:
-    """AC #7: a cache-hit on a stale entry (osm_extract_date >90d old) emits the warning.
+    """A cache-hit on a stale entry (osm_extract_date >90d old) emits the warning.
 
     Seed pattern: patch `cli.setup.iso8601_utc_now` during the first invocation so
     the manifest gets a stale-dated `osm_extract_date`. Re-invoke without the patch;
-    the cache-hit path now reads the stale manifest and `_emit_osm_age_warning`
+    the cache-hit path reads the stale manifest and `_emit_osm_age_warning`
     fires against the real `datetime.datetime.now(UTC)`.
 
     `configure_cli_logging(force=True)` rebinds the root logger handler to the

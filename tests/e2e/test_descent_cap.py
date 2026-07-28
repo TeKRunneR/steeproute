@@ -1,4 +1,4 @@
-"""Flag-on golden + no-over-cap-descent property for `--max-descent-slope` (Story 10.2, FR32).
+"""Flag-on golden + no-over-cap-descent property for `--max-descent-slope` (FR32).
 
 Runs the real `steeproute` query against the committed `grenoble_small` cache with
 `--max-descent-slope` on (via the `grenoble_small_descent` flag-on fixture) and asserts:

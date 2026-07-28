@@ -1,13 +1,15 @@
-"""Gallery HTML self-containment gate (Story 8.3 AC #3).
+"""Gallery HTML self-containment gate.
 
 The README `## Gallery` links pre-computed example reports committed under
 `docs/examples/`. Each must be self-contained for the same reason every rendered
-report is (Story 3.10 AC #3): no external resource-loading tags, so the file can
+report is: no external resource-loading tags, so the file can
 be opened from disk, emailed, or served from any static host without a network
 round-trip for its own assets.
 
-This reuses Story 3.10's grep verbatim (`tests/unit/test_output.py::
-test_html_is_self_contained_no_external_resource_tags`): inline `<script>` /
+This reuses the unit-tier grep verbatim (`tests/unit/test_output.py::
+test_html_is_self_contained_no_external_resource_tags`) rather than writing a
+second one, so the gallery and the renderer can never be held to different
+definitions of self-contained: inline `<script>` /
 `<style>` *bodies* may legitimately contain URL strings (the OpenTopoMap tile
 template, Leaflet's attribution link), so the assertion targets resource-loading
 tags only — not raw substrings.

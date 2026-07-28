@@ -1,7 +1,7 @@
 # pyright: reportUnknownLambdaType=false, reportUnannotatedClassAttribute=false
 # Reason: the stub lambdas use `*_a, **_k` (unannotatable) and `_FakeResponse` is a
 # throwaway test double — same per-file relaxation the other app tests use for stubs.
-"""Unit tests for `app.geocode` — the best-effort reverse-geocode seam (App Story 4.3).
+"""Unit tests for `app.geocode` — the best-effort reverse-geocode seam.
 
 The whole suite is offline (AGENTS.md), so every test stubs `geocode.urlopen`;
 no test hits the real Nominatim. The seam's contract is that it NEVER raises and

@@ -3,7 +3,7 @@
 # `tests/`) puts this file's parent dir on sys.path, so `from exhaustive_oracle
 # import ...` is the import shape that resolves at runtime — same as
 # `test_oracle_correctness.py`.
-"""GRASP-vs-exhaustive CI quality gate (Story 3.7, Architecture §Cat 11c).
+"""GRASP-vs-exhaustive CI quality gate (Architecture §Cat 11c).
 
 Runs the production `GraspSolver` and the brute-force `enumerate_best` oracle on
 the *same* seeded programmatic toy `ContractedGraph` (from the
@@ -47,7 +47,7 @@ def _assert_edge_simple_walk(edges: tuple[Edge, ...]) -> None:
 
     Confirms both solver and oracle emit structurally valid routes even when the
     toy graph contains cycles (closes the closed-walk-semantics gap deferred
-    from Story 3.5): consecutive edges share an endpoint and no
+    from the oracle tests): consecutive edges share an endpoint and no
     `(node_u, node_v, key)` triple repeats.
     """
     assert edges, "route must be non-empty"

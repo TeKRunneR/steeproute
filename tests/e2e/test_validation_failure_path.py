@@ -1,4 +1,4 @@
-"""Validation-failure path end-to-end (Story 3.11 AC #5 / FR27, FR28, FR30 code 1).
+"""Validation-failure path end-to-end (FR27, FR28, FR30 code 1).
 
 `monkeypatch`es GRASP to emit a deliberately-invalid route (an edge absent from
 the operational graph → `graph_membership` violation) and asserts the §Cat 6c

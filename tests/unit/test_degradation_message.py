@@ -2,7 +2,7 @@
 
 `_degradation_message` reads only `len(validated.routes)` and the params, so the
 tests build a `ValidatedRouteSet` with a controllable route count and assert the
-returned explanation. Story 10.1 adds the `--start-at-junction` lever wording.
+returned explanation, including the `--start-at-junction` lever wording.
 """
 
 from __future__ import annotations

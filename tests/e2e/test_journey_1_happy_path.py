@@ -1,4 +1,4 @@
-"""Journey 1 happy path end-to-end (Story 3.11 AC #3 / FR15-21, FR30 code 0).
+"""Journey 1 happy path end-to-end (FR15-21, FR30 code 0).
 
 Seeds a real fixture cache via the in-process `steeproute-setup` CLI (committed
 graphml, offline — see `conftest.seeded_cache`), then runs the `steeproute`
@@ -57,8 +57,7 @@ def test_bare_max_descent_slope_flag_resolves_to_0_4(
     run_query: Callable[..., Result],
     tmp_path: pathlib.Path,
 ) -> None:
-    """`--max-descent-slope` with no value uses Click's optional-flag-value form
-    (spec-cli-defaults-and-setup-radius-cap.md): bare presence means 0.4, while
+    """`--max-descent-slope` with no value uses Click's optional-flag-value form: bare presence means 0.4, while
     omitting the flag entirely still means no cap (untouched by this test).
     """
     output_dir = tmp_path / "reports"

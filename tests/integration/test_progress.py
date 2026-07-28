@@ -1,6 +1,6 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
 # Reason: same osmnx / networkx boundary as tests/integration/test_grasp_on_fixture.py.
-"""Progress-emission integration test on the real Grenoble fixture (Story 7.1 AC #7).
+"""Progress-emission integration test on the real Grenoble fixture.
 
 Runs the setup → climbs → contract → `GraspSolver.run()` chain against the
 committed fixture with a progress callback installed, and asserts the contract a
@@ -54,10 +54,10 @@ _N = 5
 _SEED = 42
 # Enough iterations that the tracker fills early and later iterations stagnate
 # (so the counter both resets and climbs), while the solve stays well under a
-# second on this small fixture. Per-iter ~0.02 ms after the Epic 12 solver
-# optimizations (was ~0.7 ms when this suite was written — the budget and the
-# interval below were rescaled in Story 12.3 so the solve still spans several
-# throttle intervals).
+# second on this small fixture. Per-iter is ~0.02 ms, so the budget and the
+# interval below are sized together to keep the solve spanning several throttle
+# intervals — a solver speed-up needs both rescaled, or the test stops exercising
+# throttling at all.
 _ITER_BUDGET = 5000
 # Small relative to the solve duration (~0.1 s at the measured per-iter cost) so
 # the throttled stream reliably yields several spaced fires regardless of host

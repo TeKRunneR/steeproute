@@ -4,17 +4,17 @@
 # under pytest's prepend import mode (see test_oracle_correctness.py for the rationale).
 """GRASP FR29 reproducibility: same seed + same graph → byte-identical results.
 
-Story 3.6 AC #6: two `GraspSolver` runs with two fresh
+Two `GraspSolver` runs with two fresh
 `numpy.random.default_rng(42)` instances on the same `ContractedGraph` and
 identical `SolverParams` produce identical `list[Solution]` — same length, same
 `Solution.objective` per entry, same `Solution.edges` traversal order.
-Downstream golden-hash regressions (Story 5.1) hash the canonical edge-sequence
+Downstream golden-hash regressions hash the canonical edge-sequence
 per route, so FR29 protects edge-set identity AND ordering.
 
 The contracted graph comes from the shared session-scoped `grenoble_fixture`
 (tests/integration/conftest.py), so this test isolates the solver's determinism
-contract — any drift in the upstream setup chain would be a Story 2.x bug, not a
-GRASP bug.
+contract — any drift in the upstream setup chain is a pipeline bug, not a GRASP
+bug, and the pipeline tiers own it.
 """
 
 from __future__ import annotations
@@ -49,8 +49,8 @@ def _params() -> SolverParams:
         untagged_policy="include",
         seed=GRENOBLE_SEED,
         iter_budget=_ITER_BUDGET,
-        # Story 7.2 made time/stagnation termination live; this test isolates
-        # seed-determinism under iter-budget termination, so disable stagnation
+        # This test isolates seed-determinism under iter-budget termination, so
+        # disable stagnation
         # and keep the wall-clock budget non-binding.
         time_budget=60.0,
         stagnation_iters=0,
@@ -62,7 +62,7 @@ def test_grasp_two_runs_with_same_seed_are_byte_identical(
 ) -> None:
     """FR29 / NFR4: `--seed 42` produces identical edge-sets AND identical traversal orders.
 
-    The downstream golden-hash regression (Story 5.1) hashes the canonical edge
+    The downstream golden-hash regression hashes the canonical edge
     *sequence*, so this test pins both the multiset and the ordering. Each
     `GraspSolver` instance gets its own fresh `default_rng(42)` — sharing a
     Generator between runs would let state from the first run bleed into the

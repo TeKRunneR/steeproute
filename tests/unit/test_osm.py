@@ -32,11 +32,11 @@ _FIXTURE_PATH = (
     / "grenoble_small"
     / "osm_graph.graphml"
 )
-_FIXTURE_SIZE_LIMIT_BYTES = 5_000_000  # AC #2: committed fixture must stay under 5 MB.
+_FIXTURE_SIZE_LIMIT_BYTES = 5_000_000  # Committed fixture must stay under 5 MB.
 
 
 def test_committed_fixture_under_size_cap() -> None:
-    """AC #2 mechanically enforced: a future regeneration that bloats the fixture fails CI."""
+    """Mechanically enforced: a future regeneration that bloats the fixture fails CI."""
     size = _FIXTURE_PATH.stat().st_size
     assert size < _FIXTURE_SIZE_LIMIT_BYTES, (
         f"Fixture {_FIXTURE_PATH.name} is {size} bytes, exceeds {_FIXTURE_SIZE_LIMIT_BYTES}."
@@ -50,9 +50,7 @@ def fixture_graph() -> nx.MultiDiGraph:
     return normalize_edges(graph)
 
 
-# --- attribute-contract tests against the real fixture ---
-
-
+# Attribute-contract tests against the real fixture.
 def test_normalized_fixture_has_geometry_on_every_edge(
     fixture_graph: nx.MultiDiGraph,
 ) -> None:
@@ -81,9 +79,7 @@ def test_normalized_fixture_has_sac_scale_key_on_every_edge(
         assert sac is None or isinstance(sac, str) or isinstance(sac, list)
 
 
-# --- include-vs-exclude policy ---
-
-
+# Include-vs-exclude policy.
 def test_filter_trails_include_vs_exclude_diff_equals_untagged_trail_count(
     fixture_graph: nx.MultiDiGraph,
 ) -> None:
@@ -91,7 +87,7 @@ def test_filter_trails_include_vs_exclude_diff_equals_untagged_trail_count(
 
     The untagged-trails policy only governs trails with no `sac_scale`. Minor-road
     connectors also have `sac_scale=None` but are admitted under *both* policies
-    (Story 6.2), so they must be excluded from the expected diff — counting all
+, so they must be excluded from the expected diff — counting all
     `sac_scale=None` edges would over-count by the road edges.
     """
     untagged_trail_count = sum(
@@ -115,9 +111,7 @@ def test_filter_trails_does_not_mutate_input(
     assert fixture_graph.number_of_edges() == original_edges
 
 
-# --- consuming path (Story 16.1) ---
-
-
+# Consuming path.
 def test_filter_trails_consume_returns_the_same_object_filtered(
     fixture_graph: nx.MultiDiGraph,
 ) -> None:
@@ -183,9 +177,7 @@ def test_filter_trails_consume_rejects_bad_policy_before_mutating(
     assert owned.number_of_edges() == original_edges
 
 
-# --- difficulty-cap sweep ---
-
-
+# Difficulty-cap sweep.
 @pytest.mark.parametrize("cap", ["T1", "T2", "T3", "T4", "T5", "T6"])
 def test_filter_trails_no_surviving_edge_exceeds_cap(
     fixture_graph: nx.MultiDiGraph, cap: str
@@ -215,9 +207,7 @@ def test_filter_trails_difficulty_cap_sweep_is_monotonic(
         assert nxt >= prev, f"Non-monotonic sweep: {counts}"
 
 
-# --- real-trail edge cases the fixture surfaces ---
-
-
+# Real-trail edge cases the fixture surfaces.
 def test_fixture_contains_multi_way_merged_edges(
     fixture_graph: nx.MultiDiGraph,
 ) -> None:
@@ -238,7 +228,7 @@ def test_fixture_contains_admitted_road_connectors(
 ) -> None:
     """The committed fixture carries minor-road connectors that survive filter_trails.
 
-    Story 6.2: the fixture is fetched with the road-inclusive production filter, so
+    The fixture is fetched with the road-inclusive production filter, so
     the road-as-connector path gets real end-to-end coverage. A regeneration that
     silently drops roads (e.g. a reverted fetch filter) fails here.
     """
@@ -270,9 +260,7 @@ def test_fixture_geometry_synthesis_runs(
     )
 
 
-# --- crafted synthetic graphs (AC #4) ---
-
-
+# Crafted synthetic graphs.
 def _make_edge_attrs(
     highway: str | list[str],
     sac_scale: str | list[str] | None,
@@ -301,9 +289,8 @@ def test_filter_trails_single_untagged_edge_include_keeps_exclude_strips() -> No
 def test_filter_trails_one_edge_per_highway_type_keeps_trails_and_minor_roads() -> None:
     """One edge per highway type: trails + minor roads survive; major/bike roads drop.
 
-    Story 6.2 inverts the pre-6.2 contract (where every non-trail dropped): minor
-    roads are now admitted as connectors, while major roads (motorway, primary)
-    and bike-only cycleway are still excluded.
+    Not every non-trail drops: minor roads are admitted as connectors, while major
+    roads (motorway, primary) and bike-only cycleway are excluded.
     """
     graph: nx.MultiDiGraph = nx.MultiDiGraph()
     trail_tags = sorted(TRAIL_HIGHWAY_TAGS)
@@ -327,7 +314,8 @@ def test_filter_trails_multi_tag_admission_rules() -> None:
     - `['steps','footway']` → trail (any trail tag admits).
     - `['service','residential']` → minor-road connector (all tags are minor roads).
     - `['motorway','service']` → dropped: the major-road tag vetoes admission even
-      though `service` alone would qualify (Story 6.2 tightened multi-tag handling).
+      though `service` alone would qualify — the road rule is restrictive on
+      multi-tag ways.
     """
     graph: nx.MultiDiGraph = nx.MultiDiGraph()
     graph.add_edge(1, 2, key=0, **_make_edge_attrs(["steps", "footway"], "hiking"))
@@ -446,9 +434,7 @@ def test_filter_trails_list_sac_scale_with_unknown_member_drops_edge() -> None:
     assert filter_trails(graph, "include", "T6").number_of_edges() == 0
 
 
-# --- argument validation ---
-
-
+# Argument validation.
 def test_filter_trails_rejects_unknown_untagged_policy() -> None:
     graph: nx.MultiDiGraph = nx.MultiDiGraph()
     with pytest.raises(BadCLIArgError, match="--untagged-trails"):
@@ -470,12 +456,10 @@ def test_filter_trails_accepts_case_insensitive_difficulty_cap(cap: str) -> None
     assert out.number_of_edges() == 1
 
 
-# --- osm_load: offline-checkable preconditions only ---
-
-
+# Osm_load: offline-checkable preconditions only.
 @pytest.mark.parametrize("bad_radius", [0.0, -0.001, -10.0])
 def test_osm_load_rejects_non_positive_radius(bad_radius: float) -> None:
-    """Carry-forward from Epic 1 retro: --radius first becomes geometric here."""
+    """`--radius` first acquires geometric meaning here, so it is validated here."""
     area = Area(center=(45.119, 5.873), radius_km=bad_radius)
     with pytest.raises(BadCLIArgError, match="--radius must be > 0"):
         _ = osm_load(area)
@@ -509,7 +493,7 @@ def test_osm_load_rejects_non_finite_center(bad_center: tuple[float, float]) -> 
 
 @pytest.mark.parametrize("bad_extent", [0.0, -1.0, float("nan"), float("inf")])
 def test_osm_load_rejects_bad_rotated_extents(bad_extent: float) -> None:
-    """Story 15.2: the fetch precondition guards the *effective* extents, not `radius_km`.
+    """The fetch precondition guards the *effective* extents, not `radius_km`.
 
     A rotated area carries an inert `radius_km=0.0`, so a `radius_km`-only guard
     would both reject every valid rotated area and wave through a zero/NaN extent.
@@ -584,7 +568,7 @@ def _stub_osmnx_fetches(
 def test_osm_load_square_area_still_fetches_via_graph_from_point(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Story 15.2 backward-compat guardrail: the square path is byte-identical.
+    """Guardrail: the square path must keep osmnx's own bbox derivation.
 
     `graph_from_point(dist_type="bbox")` derives its bbox with osmnx's own
     `EARTH_RADIUS_M = 6_371_009` (~1/111.195 deg/km), whereas `_area_to_polygon`
@@ -619,7 +603,7 @@ def test_osm_load_non_square_area_fetches_via_graph_from_polygon(
     half_height_km: float,
     angle_deg: float,
 ) -> None:
-    """AC #1: a non-square area fetches over the true ring so off-axis valley is excluded."""
+    """A non-square area fetches over the true ring so off-axis valley is excluded."""
     point_calls: list[dict[str, object]] = []
     polygon_calls: list[shapely.Polygon] = []
     _stub_osmnx_fetches(monkeypatch, point_calls, polygon_calls)
@@ -643,7 +627,7 @@ def test_osm_load_non_square_area_fetches_via_graph_from_polygon(
 def test_osm_load_wraps_polygon_fetch_failure_as_source_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC #1: the rotated branch sits inside the same DataSourceUnavailableError wrap."""
+    """The rotated branch sits inside the same DataSourceUnavailableError wrap."""
     monkeypatch.setattr("truststore.inject_into_ssl", lambda: None)
 
     def _boom(_polygon: object, **_kwargs: object) -> nx.MultiDiGraph:

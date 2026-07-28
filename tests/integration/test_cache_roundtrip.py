@@ -2,10 +2,9 @@
 # Reason: same osmnx/networkx/shapely boundary as the underlying pipeline modules.
 """Integration: write a real-fixture-derived graph, read it back, verify roundtrip + index.
 
-The fixture runs Story 2.5's `run_setup_stages` against the committed Grenoble
-data (same `unittest.mock.patch` of `osm_load` Story 2.5 used so the test stays
-offline) and then exercises `write_entry` → `read_entry` plus `rebuild_index`.
-Covers Story 2.7 AC #10.
+The fixture runs `run_setup_stages` against the committed Grenoble data, with
+`osm_load` patched out so the test stays offline, then exercises
+`write_entry` → `read_entry` plus `rebuild_index`.
 """
 
 from __future__ import annotations
@@ -84,12 +83,12 @@ def test_write_and_read_entry_round_trips_real_fixture_graph(
     prepared_graph: nx.MultiDiGraph,
     tmp_path: pathlib.Path,
 ) -> None:
-    """AC #10: round-trip is content-identical across the whole graph, minus `geometry`.
+    """Round-trip is content-identical across the whole graph, minus `geometry`.
 
     Exhaustive on purpose: the entry payload is not a plain pickled graph, so
     per-edge integrity is not implied by "pickle isn't selective". Every node,
     every edge (u, v, key), every attribute value, and the graph-level attrs are
-    compared. `geometry` is the one deliberate omission — schema v3 (Story 16.3)
+    compared. `geometry` is the one deliberate omission — schema v3
     does not store it, since `vertices_resampled` carries the same vertices and no
     post-stage-5 consumer reads the attribute — so it is asserted *absent* rather
     than equal.
@@ -129,7 +128,7 @@ def test_write_entry_manifest_matches_schema(
     prepared_graph: nx.MultiDiGraph,
     tmp_path: pathlib.Path,
 ) -> None:
-    """AC #10: on-disk manifest validates against the `Manifest` schema."""
+    """On-disk manifest validates against the `Manifest` schema."""
     area = Area(center=(_CENTER_LAT, _CENTER_LON), radius_km=_DIST_M / 1000.0)
     cache_key = "0123456789abcdef"
     manifest = _build_manifest(area, cache_key)
@@ -149,7 +148,7 @@ def test_write_entry_index_reflects_new_entry(
     prepared_graph: nx.MultiDiGraph,
     tmp_path: pathlib.Path,
 ) -> None:
-    """AC #10: `index.json` lists the freshly written entry once."""
+    """`index.json` lists the freshly written entry once."""
     area = Area(center=(_CENTER_LAT, _CENTER_LON), radius_km=_DIST_M / 1000.0)
     cache_key = "0123456789abcdef"
     manifest = _build_manifest(area, cache_key)
@@ -168,7 +167,7 @@ def test_write_entry_overwrites_existing_entry_atomically(
     prepared_graph: nx.MultiDiGraph,
     tmp_path: pathlib.Path,
 ) -> None:
-    """AC #3: re-writing the same key replaces the entry; `.old/` shuffle is cleaned up."""
+    """Re-writing the same key replaces the entry; `.old/` shuffle is cleaned up."""
     area = Area(center=(_CENTER_LAT, _CENTER_LON), radius_km=_DIST_M / 1000.0)
     cache_key = "0123456789abcdef"
     manifest_v1 = _build_manifest(area, cache_key)
@@ -201,7 +200,7 @@ def test_rebuild_index_picks_up_manually_added_entry(
     prepared_graph: nx.MultiDiGraph,
     tmp_path: pathlib.Path,
 ) -> None:
-    """AC #6: `rebuild_index` is the recovery path when `index.json` falls out of sync."""
+    """`rebuild_index` is the recovery path when `index.json` falls out of sync."""
     area = Area(center=(_CENTER_LAT, _CENTER_LON), radius_km=_DIST_M / 1000.0)
     cache_key = "0123456789abcdef"
     write_entry(tmp_path, _build_manifest(area, cache_key), prepared_graph)

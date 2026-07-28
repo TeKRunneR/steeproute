@@ -42,7 +42,7 @@ _DEG_TO_M_LAT = _EARTH_RADIUS_M * math.radians(1.0)
 
 
 def _single_edge_graph(coords: list[tuple[float, float]]) -> nx.MultiDiGraph:
-    """Build a one-edge MultiDiGraph carrying the source-attribute contract from Story 2.1."""
+    """Build a one-edge MultiDiGraph carrying the post-stage-2 source-attribute contract."""
     g: nx.MultiDiGraph = nx.MultiDiGraph()
     g.add_node(0, x=coords[0][0], y=coords[0][1])
     g.add_node(1, x=coords[-1][0], y=coords[-1][1])
@@ -67,25 +67,21 @@ def _equirectangular_distance_m(a: tuple[float, float], b: tuple[float, float]) 
     return math.hypot(dx, dy)
 
 
-# --- module-scope constants ---
-
-
+# Module-scope constants.
 def test_smoothing_window_is_module_constant() -> None:
-    """AC #2: window size lives at module scope as a named constant, not inline."""
+    """Window size lives at module scope as a named constant, not inline."""
     assert isinstance(SMOOTHING_WINDOW, int) and SMOOTHING_WINDOW >= 3
 
 
 def test_resample_spacing_default_is_module_constant() -> None:
-    """AC #2: default spacing lives at module scope as a named constant."""
+    """Default spacing lives at module scope as a named constant."""
     assert isinstance(RESAMPLE_SPACING_M, float) and RESAMPLE_SPACING_M > 0
     assert RESAMPLE_SPACING_M == 10.0
 
 
-# --- smooth_polylines: analytical correctness ---
-
-
+# Smooth_polylines: analytical correctness.
 def test_smooth_polylines_straight_line_unchanged() -> None:
-    """AC #5: equally-spaced collinear input is preserved by symmetric moving average."""
+    """Equally-spaced collinear input is preserved by symmetric moving average."""
     coords = [(0.0, 0.0), (0.0001, 0.0), (0.0002, 0.0), (0.0003, 0.0), (0.0004, 0.0)]
     g = _single_edge_graph(coords)
     out = smooth_polylines(g)
@@ -97,7 +93,7 @@ def test_smooth_polylines_straight_line_unchanged() -> None:
 
 
 def test_smooth_polylines_zigzag_reduces_perpendicular_drift() -> None:
-    """AC #5: noisy zigzag input has reduced max-perp-distance from u->v baseline."""
+    """Noisy zigzag input has reduced max-perp-distance from u->v baseline."""
     coords = [
         (0.0, 0.0),
         (0.0001, 1e-5),
@@ -117,7 +113,7 @@ def test_smooth_polylines_zigzag_reduces_perpendicular_drift() -> None:
 
 
 def test_smooth_polylines_preserves_endpoints_exactly() -> None:
-    """AC #3: first and last coords of the smoothed polyline equal the input's exactly."""
+    """First and last coords of the smoothed polyline equal the input's exactly."""
     coords = [(0.0, 0.0), (0.0001, 1e-5), (0.0002, -1e-5), (0.0003, 0.0)]
     g = _single_edge_graph(coords)
     out = smooth_polylines(g)
@@ -148,11 +144,9 @@ def test_smooth_polylines_preserves_attribute_contract() -> None:
     assert isinstance(data["geometry"], shapely.LineString)
 
 
-# --- resample_edges: analytical correctness ---
-
-
+# Resample_edges: analytical correctness.
 def test_resample_edges_uniform_spacing_within_tolerance() -> None:
-    """AC #5: consecutive output vertices are within tolerance of `spacing_m`.
+    """Consecutive output vertices are within tolerance of `spacing_m`.
 
     Polyline at lat=0, length ~111 m (1e-3 deg lon). At spacing_m=10 we expect
     11 intervals of ~10.12 m each. Tolerance choices:
@@ -177,7 +171,7 @@ def test_resample_edges_uniform_spacing_within_tolerance() -> None:
 
 
 def test_resample_edges_endpoints_match_input_exactly() -> None:
-    """AC #3: first and last output coords are bit-for-bit equal to input's."""
+    """First and last output coords are bit-for-bit equal to input's."""
     coords = [(5.123456, 45.678901), (5.123556, 45.678801), (5.123756, 45.678701)]
     g = _single_edge_graph(coords)
     out = resample_edges(g, spacing_m=10.0)
@@ -237,16 +231,16 @@ def test_resample_edges_rejects_non_finite_spacing() -> None:
         _ = resample_edges(g, spacing_m=float("inf"))
 
 
-# --- degenerate-edge handling (carry-forward from Story 2.1) ---
+# Degenerate-edge handling.
 
 
 def test_smooth_polylines_drops_zero_length_edge() -> None:
-    """AC #4: an edge with coincident endpoints is dropped from the output graph."""
+    """An edge with coincident endpoints is dropped from the output graph."""
     coords = [(0.0, 0.0), (0.0, 0.0)]
     g = _single_edge_graph(coords)
     out = smooth_polylines(g)
     assert (0, 1, 0) not in out.edges
-    # Nodes are kept (orphan-pruning is Story 2.5's call).
+    # Nodes are kept — orphan-pruning is the orchestrator's job, not this stage's.
     assert 0 in out.nodes and 1 in out.nodes
 
 
@@ -275,9 +269,7 @@ def test_resample_edges_drops_edge_with_non_finite_coord() -> None:
     assert (0, 1, 0) not in out.edges
 
 
-# --- contract violations on edge geometry: fail-fast (P0 from review) ---
-
-
+# Contract violations on edge geometry: fail-fast (P0 from review)
 def test_smooth_polylines_raises_typeerror_on_non_linestring_geometry() -> None:
     """Non-LineString geometry on a pipeline edge is an upstream contract violation."""
     g: nx.MultiDiGraph = nx.MultiDiGraph()
@@ -321,9 +313,7 @@ def test_smooth_polylines_strips_3d_linestring_to_2d() -> None:
     assert all(len(c) == 2 for c in out_coords)
 
 
-# --- multi-edge graph: dropping does not affect surviving edges ---
-
-
+# Multi-edge graph: dropping does not affect surviving edges.
 def test_smooth_polylines_keeps_valid_edges_when_one_is_degenerate() -> None:
     g: nx.MultiDiGraph = nx.MultiDiGraph()
     g.add_node(0, x=0.0, y=0.0)
@@ -337,7 +327,7 @@ def test_smooth_polylines_keeps_valid_edges_when_one_is_degenerate() -> None:
 
 
 def test_resample_edges_drops_degenerate_edge_without_corrupting_its_neighbours() -> None:
-    """Story 16.2: a non-finite edge must not poison other edges' arc length.
+    """A non-finite edge must not poison other edges' arc length.
 
     Resampling accumulates arc length with ONE global `np.cumsum`, so a NaN
     coordinate anywhere used to propagate into every subsequent edge. Degenerate
@@ -367,9 +357,7 @@ def test_resample_edges_drops_degenerate_edge_without_corrupting_its_neighbours(
     )
 
 
-# --- real OSM fixture: attribute-contract preservation ---
-
-
+# Real OSM fixture: attribute-contract preservation.
 @pytest.fixture(scope="module")
 def fixture_graph() -> nx.MultiDiGraph:
     """Load and normalize the committed real-OSM fixture once per module."""
@@ -380,7 +368,7 @@ def fixture_graph() -> nx.MultiDiGraph:
 def test_fixture_smoothed_then_resampled_preserves_contract(
     fixture_graph: nx.MultiDiGraph,
 ) -> None:
-    """AC #6: source-attribute contract carried through unchanged after stages 3 -> 4.
+    """Source-attribute contract carried through unchanged after stages 3 -> 4.
 
     Snapshot input attrs per edge before running the stages, then assert each
     output edge's `sac_scale` / `highway` / `osm_way_id` equals its input's
@@ -409,7 +397,7 @@ def test_fixture_smoothed_then_resampled_preserves_contract(
 def test_fused_path_bit_equal_to_two_stage_composition(
     fixture_graph: nx.MultiDiGraph,
 ) -> None:
-    """Story 16.2 AC #3: the fused stage-3→4 path equals `resample_edges(smooth_polylines(g))`.
+    """The fused stage-3→4 path equals `resample_edges(smooth_polylines(g))`.
 
     The gate for removing the intermediate graph build. Compares the real OSM
     fixture's full output: same node set, same ordered edge list, and every
@@ -434,7 +422,7 @@ def test_fused_path_bit_equal_to_two_stage_composition(
 
 
 def test_fused_path_drops_the_same_degenerate_edges() -> None:
-    """Story 16.2 AC #3: both stages' validity masks still apply in the fused path.
+    """Both stages' validity masks still apply in the fused path.
 
     Stage 3 drops edges degenerate in their raw coordinates and stage 4 drops those
     degenerate after smoothing; fused, both masks must still be honoured.
@@ -460,7 +448,7 @@ def test_fused_path_drops_the_same_degenerate_edges() -> None:
 def test_fixture_pipeline_endpoints_match_node_coords(
     fixture_graph: nx.MultiDiGraph,
 ) -> None:
-    """AC #3: after stages 3 -> 4, edge endpoints still match their node coords."""
+    """After stages 3 -> 4, edge endpoints still match their node coords."""
     smoothed = smooth_polylines(fixture_graph)
     resampled = resample_edges(smoothed, spacing_m=RESAMPLE_SPACING_M)
     for u, v, _k, data in resampled.edges(data=True, keys=True):
@@ -471,9 +459,7 @@ def test_fixture_pipeline_endpoints_match_node_coords(
         assert coords[-1] == v_xy
 
 
-# --- hypothesis property: endpoint preservation under any valid input ---
-
-
+# Hypothesis property: endpoint preservation under any valid input.
 @given(
     coords=st.lists(
         st.tuples(
@@ -486,7 +472,7 @@ def test_fixture_pipeline_endpoints_match_node_coords(
 )
 @settings(max_examples=50, deadline=None)
 def test_resample_edges_property_endpoints_exact(coords: list[tuple[float, float]]) -> None:
-    """AC #7: for any valid polyline, resampled output's first and last == input's first and last.
+    """For any valid polyline, resampled output's first and last == input's first and last.
 
     Use the production `is_valid_polyline` predicate via `hypothesis.assume` so
     the strategy filter and the stage's degenerate-edge guard agree on what
@@ -508,7 +494,7 @@ def _single_edge_graph_with_elevation(
     vertices_resampled: list[tuple[float, float, float]],
 ) -> nx.MultiDiGraph:
     """Build a one-edge MultiDiGraph carrying the stage-5 contract: `vertices_resampled`
-    as (lat, lon, elev) triples plus the source attributes from Story 2.1."""
+    as (lat, lon, elev) triples plus the post-stage-2 source attributes."""
     g: nx.MultiDiGraph = nx.MultiDiGraph()
     first_lat, first_lon, _ = vertices_resampled[0]
     last_lat, last_lon, _ = vertices_resampled[-1]
@@ -556,7 +542,7 @@ def _two_edges_sharing_node(
 
 
 def test_elevation_smoothing_default_is_module_constant() -> None:
-    """AC #1: the default smoothing strength lives at module scope as a named meters constant."""
+    """The default smoothing strength lives at module scope as a named meters constant."""
     assert isinstance(ELEVATION_SMOOTHING_DEFAULT_M, float)
     assert ELEVATION_SMOOTHING_DEFAULT_M > RESAMPLE_SPACING_M  # non-trivial: > one vertex
 
@@ -726,7 +712,7 @@ def _scalar_reference_smooth(
 
 
 def test_graph_smooth_elevation_bit_identical_to_scalar_reference() -> None:
-    """Story 13.1: the vectorized diffusion is BIT-IDENTICAL to the scalar formulation.
+    """The vectorized diffusion is BIT-IDENTICAL to the scalar formulation.
 
     Exercises every structural case at once: a degree-3 junction node (variable-
     degree neighbour averaging), interior chains of different lengths, and a
@@ -766,7 +752,7 @@ def test_graph_smooth_elevation_bit_identical_to_scalar_reference() -> None:
 
 
 def test_graph_smooth_elevation_replicates_compensated_neighbour_sum() -> None:
-    """Story 13.1: the neighbour sum must replicate CPython's compensated `sum()`.
+    """The neighbour sum must replicate CPython's compensated `sum()`.
 
     Since Python 3.12, builtin `sum()` over floats uses Neumaier compensated
     summation — so the scalar formulation's per-node `sum(neigh)/len(neigh)` is
@@ -874,13 +860,12 @@ def test_graph_deadband_elevation_preserves_lat_lon_exactly() -> None:
         assert smoothed[1] == original[1]
 
 
-# === Story 14.2 bit-equality oracles (S2: vectorized stage 3-4) =================
-#
-# Verbatim copies of the pre-14.2 scalar `_moving_average` / `_resample_meters`,
+# Bit-equality oracles for the vectorized stage 3-4.
+# # Verbatim copies of the scalar `_moving_average` / `_resample_meters`,
 # kept as bit-equality oracles: the vectorized production code must produce
 # `==` (exact, not approx) coordinates over every vertex of the real
 # grenoble_small fixture. This is the "verify before deleting the old code" gate
-# (AC #1), mirroring 14.1's `_scalar_reference_sample_elevation`.
+#, mirroring 14.1's `_scalar_reference_sample_elevation`.
 
 
 def _scalar_moving_average(
@@ -952,7 +937,7 @@ def _edge_coords(data: dict[str, object]) -> list[tuple[float, float]]:
     return [(float(c[0]), float(c[1])) for c in geom.coords]
 
 
-# Numerical-equivalence tolerance: the flat-array vectorization (Story 14.2) uses
+# Numerical-equivalence tolerance: the flat-array vectorization uses
 # `np.hypot`/naive means instead of `math.hypot`/compensated `sum()`, so results
 # match the scalar reference to within floating-point reordering (measured max
 # ~1.4e-14 deg on the fixture), not bit-for-bit. 1e-8 deg (~1 mm) proves numerical
@@ -962,7 +947,7 @@ _EQUIV_ATOL = 1e-8
 
 
 def test_smooth_polylines_numerically_equivalent_to_scalar_reference() -> None:
-    """AC #1: vectorized `smooth_polylines` equals the scalar oracle to fp-reordering on the fixture."""
+    """Vectorized `smooth_polylines` equals the scalar oracle to fp-reordering on the fixture."""
     if not _FIXTURE_PATH.exists():
         pytest.skip("grenoble_small OSM fixture not committed.")
     produced = smooth_polylines(_fixture_geometry_graph())
@@ -994,7 +979,7 @@ def test_smooth_polylines_numerically_equivalent_to_scalar_reference() -> None:
 
 
 def test_resample_edges_numerically_equivalent_to_scalar_reference() -> None:
-    """AC #1: vectorized `resample_edges` equals the scalar oracle to fp-reordering on the fixture."""
+    """Vectorized `resample_edges` equals the scalar oracle to fp-reordering on the fixture."""
     if not _FIXTURE_PATH.exists():
         pytest.skip("grenoble_small OSM fixture not committed.")
     smoothed = smooth_polylines(_fixture_geometry_graph())

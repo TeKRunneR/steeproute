@@ -3,7 +3,7 @@
 # `BenchmarkFixture` resolve as Unknown); `reportImplicitRelativeImport` — `from
 # conftest import ...` is the shape that resolves under pytest's prepend import
 # mode (see tests/integration/test_oracle_correctness.py for the rationale).
-"""Solver throughput baseline: seconds per 1k GRASP iterations (Story 11.3 AC #2).
+"""Solver throughput baseline: seconds per 1k GRASP iterations.
 
 Measures `GraspSolver.run()` only — construction (`base_segment_id_map`, tracker,
 node sort) happens in the per-round `setup` callable, outside the measured region.

@@ -1,9 +1,9 @@
 """E2E: the query CLI reports non-solver phase timings via stage lines.
 
-The setup CLI has announced its pipeline stages since Story 11.1 (FR33); the
-query side ran silent outside the solver's own iteration progress, even though
-on large areas the non-solver phases dominate wall-clock (Epic 13 finding).
-The query CLI now runs its phases inside the same `StageProgress` seam: cache
+Both CLIs announce their phases through the same `StageProgress` seam (FR33).
+That matters most query-side, where the non-solver phases are a large share of
+wall-clock on big areas — without the seam the run looks hung between the cache
+load and the first progress line. The query phases are: cache
 load, elevation reshaping (stages 6-7), trail-filter redux, climb detection,
 contraction, and validate+render each print a start line and an elapsed line
 on stdout, with the exact `stage:` format the setup CLI established.

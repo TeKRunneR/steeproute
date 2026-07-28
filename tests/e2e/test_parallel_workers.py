@@ -1,14 +1,13 @@
-"""Parallel GRASP restarts end-to-end through the query CLI (Story 14.4).
+"""Parallel GRASP restarts end-to-end through the query CLI.
 
 Four contracts, all in-process via the shared `seeded_cache` / `run_query`
 fixtures (`tests/e2e/conftest.py`):
 
 - **`--workers 1` is byte-identical to no flag** — the default single-process path
-  is never routed through the parallel machinery, so goldens and FR29/NFR4 hold
-  (AC #1). Asserted on the JSON sidecars, like `test_seeded_reproducibility.py`.
+  is never routed through the parallel machinery, so goldens and FR29/NFR4 hold. Asserted on the JSON sidecars, like `test_seeded_reproducibility.py`.
 - **`--workers N` is reproducible per `(seed, workers)`** — two identical N>1
   invocations produce byte-identical JSON, and the run summary carries
-  `workers=N` plus the coarse per-worker completion progress line (AC #2).
+  `workers=N` plus the coarse per-worker completion progress line.
 - **N>1 Ctrl-C** — the two branches of the interrupt handler: a salvaged partial
   set is rendered `interrupted` (exit 130), and an interrupt before any worker
   returned writes nothing + warns (exit 130). Driven by monkeypatching
@@ -59,7 +58,7 @@ def test_workers_1_byte_identical_to_default(
     run_query: Callable[..., Result],
     tmp_path: pathlib.Path,
 ) -> None:
-    """`--workers 1` output == no `--workers` flag (same seed) — AC #1 byte-identity."""
+    """`--workers 1` output == no `--workers` flag (same seed) byte-identity."""
     out_default = tmp_path / "default"
     out_workers_1 = tmp_path / "workers-1"
 
@@ -77,7 +76,7 @@ def test_workers_1_byte_identical_to_default(
     assert [p.name for p in json_default] == [p.name for p in json_workers_1]
     for path_default, path_w1 in zip(json_default, json_workers_1, strict=True):
         assert path_default.read_bytes() == path_w1.read_bytes(), (
-            f"{path_default.name} differs between default and --workers 1 (AC #1 broken)"
+            f"{path_default.name} differs between default and --workers 1"
         )
 
 

@@ -2,7 +2,7 @@
 # Reason: same osmnx / networkx boundary as tests/integration/test_validator_on_fixture.py;
 # `reportImplicitRelativeImport` — `from conftest import ...` is the shape that resolves
 # under pytest's prepend import mode (see test_oracle_correctness.py for the rationale).
-"""End-to-end render of real GRASP output on the Grenoble fixture (Story 3.10 AC #7).
+"""End-to-end render of real GRASP output on the Grenoble fixture.
 
 Runs GRASP on the shared `grenoble_fixture` (tests/integration/conftest.py),
 renders the validated set, and asserts the files exist, parse as HTML, carry the
@@ -58,8 +58,8 @@ def _params() -> SolverParams:
         untagged_policy="include",
         seed=GRENOBLE_SEED,
         iter_budget=_ITER_BUDGET,
-        # Story 7.2 made time/stagnation termination live; disable stagnation so
-        # the result stays an iter-budget-only function of the seed (the
+        # Disable stagnation so the result stays an iter-budget-only function of
+        # the seed (the
         # assertions below pin that exact route set). time_budget can't bind on
         # this small fixture's ~100 fast iterations.
         time_budget=60.0,

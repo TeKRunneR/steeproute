@@ -1,10 +1,10 @@
 # pyright: reportUnknownMemberType=false
 # Reason: `pytest.approx` is typed as returning a partially-unknown `ApproxBase`.
-"""Unit tests for the setup + query stdout classifiers (App Stories 1.4 / 2.2).
+"""Unit tests for the setup + query stdout classifiers.
 
-Driven against the pinned Story 1.1 spike fixtures
-(`tests/fixtures/app_stdout/*.stdout.txt`) — the same files the classifiers were
-specified from, so these assertions verify the real captured line shapes map to
+Driven against captured real CLI stdout
+(`tests/fixtures/app_stdout/*.stdout.txt`) rather than hand-written lines, so
+these assertions verify the actual emitted line shapes map to
 the expected `ProgressModel` fields.
 
 Those captures predate the `osm-download` → `osm-load` stage rename and are left
@@ -128,12 +128,13 @@ def test_pre_rename_setup_capture_still_parses_positionally() -> None:
 
     `SETUP_STAGES` supplies `stage_total` only — `_enter_stage` increments rather
     than looking the name up — so a renamed stage is not a wire-format break. The
-    pinned capture still carries the old name, which is exactly the case to pin:
+    pinned capture carries the pre-rename stage name, which is exactly the case to
+    pin:
     the App reports whatever the log says at the right index out of the right total.
     """
     lines = _FIXTURE.read_text(encoding="utf-8").splitlines()
     assert lines[0].startswith("stage: osm-download "), (
-        "fixture is no longer the pre-rename capture"
+        "fixture is not the pre-rename capture any more"
     )
 
     first = _feed_all(lines[:1])[0]
@@ -152,14 +153,12 @@ def test_stage_index_progression_over_fixture() -> None:
 
 def test_parser_factory_setup_and_query() -> None:
     assert isinstance(progress_parser_for(JobKind.SETUP), SetupProgressParser)
-    # Query jobs now reach the worker (App Story 2.1) — the factory must return
+    # Query jobs now reach the worker — the factory must return
     # a working (non-raising) classifier, not defer with NotImplementedError.
     assert isinstance(progress_parser_for(JobKind.QUERY), QueryProgressParser)
 
 
-# --- QueryProgressParser: full stage + GRASP classifier (App Story 2.2) -----
-
-
+# QueryProgressParser: full stage + GRASP classifier.
 def test_query_parser_blank_line_emits_nothing() -> None:
     assert QueryProgressParser().feed("   ") is None
 
@@ -224,7 +223,7 @@ def test_query_parallel_grasp_maps_iters_and_best_worker_objective() -> None:
 
 
 def test_query_stage_start_after_solve_resets_grasp_and_phase() -> None:
-    # The crux of AC #3: grasp is present ONLY during the solve; the
+    # The crux: grasp is present ONLY during the solve; the
     # validate-render start that follows resets it and returns to query phase.
     parser = QueryProgressParser()
     _ = parser.feed("stage: climb-contraction: 0.02 s")
@@ -295,9 +294,7 @@ def test_query_workers4_fixture_parallel_end_to_end() -> None:
     assert final.grasp is None
 
 
-# --- parse_summary_objective: run-library card metric (App Story 3.1) --------
-
-
+# Parse_summary_objective: run-library card metric.
 def test_summary_objective_parsed_from_line() -> None:
     assert parse_summary_objective(["total_objective: 10670.1"]) == pytest.approx(10670.1)
 

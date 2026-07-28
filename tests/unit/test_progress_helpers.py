@@ -38,9 +38,7 @@ def _event(iteration: int = 1) -> ProgressEvent:
     )
 
 
-# --- ProgressEvent -----------------------------------------------------------
-
-
+# ProgressEvent.
 def test_progress_event_fields_round_trip() -> None:
     e = ProgressEvent(
         iteration=7,
@@ -58,14 +56,12 @@ def test_progress_event_allows_none_eta() -> None:
 
 
 def test_progress_event_is_frozen() -> None:
-    """`frozen=True, slots=True` discipline (Architecture conventions / Story 3.1)."""
+    """`frozen=True, slots=True` discipline (Architecture §"Python code conventions")."""
     with pytest.raises(dataclasses.FrozenInstanceError):
         _event().iteration = 2  # pyright: ignore[reportAttributeAccessIssue]
 
 
-# --- throttle ----------------------------------------------------------------
-
-
+# Throttle.
 def test_throttle_does_not_fire_before_interval_elapses() -> None:
     """No fire at iteration 0 / before one full interval has passed from start."""
     clock = _FakeClock(0.0)
@@ -123,9 +119,7 @@ def test_throttle_nonpositive_interval_fires_every_call() -> None:
     assert len(fired) == 3
 
 
-# --- StageProgress (Story 11.1, FR33) -----------------------------------------
-
-
+# StageProgress (FR33)
 def test_stage_emits_start_and_done_lines_and_records_timing() -> None:
     """One `with progress.stage(...)` block → start line, done line, timings entry."""
     clock = _FakeClock(10.0)
@@ -181,7 +175,7 @@ def test_stage_exception_propagates_without_done_line_or_timing() -> None:
 
 
 def test_multiple_stages_accumulate_timings_in_execution_order() -> None:
-    """The timings dict keeps insertion order — Story 11.2 reads it as the timeline."""
+    """The timings dict keeps insertion order — callers read it as the stage timeline."""
     clock = _FakeClock(0.0)
     progress = StageProgress(clock=clock)
     with progress.stage("osm-load"):
@@ -192,9 +186,7 @@ def test_multiple_stages_accumulate_timings_in_execution_order() -> None:
     assert progress.timings["trail-filter"] == pytest.approx(0.5)
 
 
-# --- estimate_remaining (ETA) -----------------------------------------------
-
-
+# Estimate_remaining (ETA)
 def test_estimate_remaining_none_until_a_rate_is_measurable() -> None:
     assert estimate_remaining(0, 100, 5.0) is None  # no completed iteration
     assert estimate_remaining(10, 100, 0.0) is None  # no elapsed time yet

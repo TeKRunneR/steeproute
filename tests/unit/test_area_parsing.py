@@ -1,4 +1,4 @@
-"""Unit tests for FR1 area-spec validation at the CLI boundary (Story 1.6)."""
+"""Unit tests for FR1 area-spec validation at the CLI boundary."""
 
 import pathlib
 import sys
@@ -38,9 +38,7 @@ def _resolve(
     )
 
 
-# --- LatLonParamType: range validation + BadCLIArgError surfacing (AC #1) ---
-
-
+# LatLonParamType: range validation + BadCLIArgError surfacing.
 @pytest.mark.parametrize(
     ("value", "violation_token"),
     [
@@ -68,11 +66,11 @@ def test_lat_lon_convert_accepts_boundary_values() -> None:
     assert LAT_LON.convert("-90.0,-180.0", None, None) == (-90.0, -180.0)
 
 
-# --- resolve_area: the shared area surface (Story 15.3 AC #1/#2/#3) ---
+# `resolve_area`: the shared area surface.
 
 
 def test_resolve_area_radius_builds_the_v1_square() -> None:
-    """AC #2: `--radius` constructs exactly the pre-Epic-15 `Area` — no extents stored.
+    """`--radius` constructs the square-shorthand `Area` — no extents stored.
 
     Storing `radius_km` literally (rather than equal explicit extents) is what
     keeps the manifest `area` block, the fetch call, and every square message
@@ -82,7 +80,7 @@ def test_resolve_area_radius_builds_the_v1_square() -> None:
 
 
 def test_resolve_area_width_height_are_full_dimensions() -> None:
-    """AC #1: `--width`/`--height` are box dimensions; `Area` stores half-extents."""
+    """`--width`/`--height` are box dimensions; `Area` stores half-extents."""
     area = _resolve(width=16.0, height=6.0, angle=35.0)
     assert area.half_extents_km == (8.0, 3.0)
     assert area.angle_deg == 35.0
@@ -92,7 +90,7 @@ def test_resolve_area_width_height_are_full_dimensions() -> None:
 
 
 def test_resolve_area_angle_with_radius_is_a_rotated_square() -> None:
-    """AC #1: `--angle` rotates either spelling; a rotated square is a legal shape."""
+    """`--angle` rotates either spelling; a rotated square is a legal shape."""
     area = _resolve(radius=4.0, angle=30.0)
     assert area.half_extents_km == (4.0, 4.0)
     assert area.angle_deg == 30.0
@@ -107,7 +105,7 @@ def test_resolve_area_equal_extents_stay_square() -> None:
 
 
 def test_resolve_area_rejects_no_size_at_all() -> None:
-    """AC #1: `--radius` is no longer click-required, so the resolver owns the check."""
+    """`--radius` is not click-required, so the resolver owns the missing-area check."""
     with pytest.raises(BadCLIArgError) as exc_info:
         _resolve()
     msg = exc_info.value.user_message
@@ -116,7 +114,7 @@ def test_resolve_area_rejects_no_size_at_all() -> None:
 
 
 def test_resolve_area_rejects_radius_combined_with_extents() -> None:
-    """AC #1: the two spellings are mutually exclusive."""
+    """The two spellings are mutually exclusive."""
     with pytest.raises(BadCLIArgError) as exc_info:
         _resolve(radius=5.0, width=10.0, height=4.0)
     assert "--radius" in exc_info.value.user_message
@@ -127,7 +125,7 @@ def test_resolve_area_rejects_radius_combined_with_extents() -> None:
     [(10.0, None), (None, 4.0)],
 )
 def test_resolve_area_rejects_partial_extents(width: float | None, height: float | None) -> None:
-    """AC #1: one dimension alone is not a rectangle."""
+    """One dimension alone is not a rectangle."""
     with pytest.raises(BadCLIArgError) as exc_info:
         _resolve(width=width, height=height)
     msg = exc_info.value.user_message
@@ -137,7 +135,7 @@ def test_resolve_area_rejects_partial_extents(width: float | None, height: float
 
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
 def test_resolve_area_rejects_non_finite_angle(bad: float) -> None:
-    """AC #3: a non-finite bearing yields NaN corners and an unusable polygon."""
+    """A non-finite bearing yields NaN corners and an unusable polygon."""
     with pytest.raises(BadCLIArgError) as exc_info:
         _resolve(radius=5.0, angle=bad)
     assert "--angle" in exc_info.value.user_message
@@ -145,7 +143,7 @@ def test_resolve_area_rejects_non_finite_angle(bad: float) -> None:
 
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf"), 0.0, -1.0])
 def test_resolve_area_rejects_bad_radius_naming_radius(bad: float) -> None:
-    """AC #3: diagnostics name `--radius` when the size was spelled as a radius."""
+    """Diagnostics name `--radius` when the size was spelled as a radius."""
     with pytest.raises(BadCLIArgError) as exc_info:
         _resolve(radius=bad)
     msg = exc_info.value.user_message
@@ -156,7 +154,7 @@ def test_resolve_area_rejects_bad_radius_naming_radius(bad: float) -> None:
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), 0.0, -1.0])
 @pytest.mark.parametrize("flag", ["--width", "--height"])
 def test_resolve_area_rejects_bad_extent_naming_that_flag(flag: str, bad: float) -> None:
-    """AC #3: a bad dimension is reported against the dimension flag the user typed."""
+    """A bad dimension is reported against the dimension flag the user typed."""
     width, height = (bad, 4.0) if flag == "--width" else (4.0, bad)
     with pytest.raises(BadCLIArgError) as exc_info:
         _resolve(width=width, height=height)
@@ -166,7 +164,7 @@ def test_resolve_area_rejects_bad_extent_naming_that_flag(flag: str, bad: float)
 
 
 def test_resolve_area_rejects_bad_radius_even_under_a_bearing() -> None:
-    """AC #3: the bearing must not decide which flag a size error names.
+    """The bearing must not decide which flag a size error names.
 
     A rotated square is a legitimate `--radius --angle` pair; reporting its bad
     radius as a `--width` problem would name a flag the user never typed.
@@ -177,13 +175,13 @@ def test_resolve_area_rejects_bad_radius_even_under_a_bearing() -> None:
 
 
 def test_resolve_area_rejects_out_of_range_center() -> None:
-    """AC #3: the center guard also applies to direct (non-click) callers."""
+    """The center guard also applies to direct (non-click) callers."""
     with pytest.raises(BadCLIArgError) as exc_info:
         _resolve(radius=5.0, center=(95.0, 0.0))
     assert "latitude" in exc_info.value.user_message
 
 
-# --- validate_solver_options: §Cat 10 CLI-boundary guards (Story 3.11 review) ---
+# `validate_solver_options`: §Cat 10 CLI-boundary guards.
 
 
 def _check_solver_options(
@@ -233,15 +231,15 @@ def test_validate_solver_options_accepts_boundary_values() -> None:
     """j_max ∈ {0, 1} inclusive; n=1, iter_budget=1, theta=0, l_connector=0 are the minimums."""
     _check_solver_options(j_max=0.0, n=1, iter_budget=1, theta=0.0, l_connector=0.0)
     _check_solver_options(j_max=1.0)
-    # Story 7.2: stagnation_iters=0 legitimately disables the check; a tiny
-    # positive time_budget is in-range (the §Cat 5e check just trips sooner).
+    # stagnation_iters=0 legitimately disables the check; a tiny positive
+    # time_budget is in-range (the §Cat 5e check just trips sooner).
     _check_solver_options(stagnation_iters=0, time_budget=0.001)
-    # Story 10.2: `--max-descent-slope` is opt-in — `None` (unset) is the default
+    # `--max-descent-slope` is opt-in — `None` (unset) is the default
     # and any finite, strictly positive gradient is accepted.
     _check_solver_options(max_descent_slope=None)
     _check_solver_options(max_descent_slope=0.01)
     _check_solver_options(max_descent_slope=2.0)
-    # Story 14.4: --workers >= 1 (1 = single-process default; any positive count ok).
+    # --workers >= 1 (1 selects the single-process path; any positive count is ok).
     _check_solver_options(workers=1)
     _check_solver_options(workers=8)
     # --merge-interval >= 0 (0 = migration disabled; any positive cadence ok).
@@ -273,7 +271,7 @@ def test_validate_solver_options_accepts_boundary_values() -> None:
         ),
         (lambda: _check_solver_options(l_connector=-1.0), "--l-connector"),
         (lambda: _check_solver_options(l_connector=float("inf")), "--l-connector"),
-        # Story 6.3 flags: NaN/inf would otherwise crash `graph_smooth_elevation`'s
+        # Elevation-reshape flags: NaN/inf would otherwise crash `graph_smooth_elevation`'s
         # `round()` (exit 1) or silently flatten the profile; negative is nonsensical.
         (lambda: _check_solver_options(elevation_smoothing=float("nan")), "--elevation-smoothing"),
         (lambda: _check_solver_options(elevation_smoothing=float("inf")), "--elevation-smoothing"),
@@ -281,25 +279,25 @@ def test_validate_solver_options_accepts_boundary_values() -> None:
         (lambda: _check_solver_options(elevation_deadband=float("nan")), "--elevation-deadband"),
         (lambda: _check_solver_options(elevation_deadband=float("inf")), "--elevation-deadband"),
         (lambda: _check_solver_options(elevation_deadband=-1.0), "--elevation-deadband"),
-        # Story 7.1 flag: NaN/inf would make the throttle never fire (silent
+        # Progress flag: NaN/inf would make the throttle never fire (silent
         # no-progress); 0/negative would forward every iteration (stdout flood).
         (lambda: _check_solver_options(progress_interval=float("nan")), "--progress-interval"),
         (lambda: _check_solver_options(progress_interval=float("inf")), "--progress-interval"),
         (lambda: _check_solver_options(progress_interval=0.0), "--progress-interval"),
         (lambda: _check_solver_options(progress_interval=-1.0), "--progress-interval"),
-        # Story 7.2 flags: NaN/inf/non-positive time-budget would stop the solve
+        # Termination flags: NaN/inf/non-positive time-budget would stop the solve
         # on iteration 1 (empty top-N); a negative stagnation window is nonsense.
         (lambda: _check_solver_options(time_budget=float("nan")), "--time-budget"),
         (lambda: _check_solver_options(time_budget=float("inf")), "--time-budget"),
         (lambda: _check_solver_options(time_budget=0.0), "--time-budget"),
         (lambda: _check_solver_options(time_budget=-1.0), "--time-budget"),
         (lambda: _check_solver_options(stagnation_iters=-1), "--stagnation-iters"),
-        # Story 14.4: --workers < 1 would break ProcessPoolExecutor / the budget split.
+        # --workers < 1 would break ProcessPoolExecutor / the budget split.
         (lambda: _check_solver_options(workers=0), "--workers"),
         (lambda: _check_solver_options(workers=-2), "--workers"),
         # --merge-interval < 0 is nonsensical (0 legitimately disables migration).
         (lambda: _check_solver_options(merge_interval=-1), "--merge-interval"),
-        # Story 10.2 flag: NaN/inf would slip past the IEEE-754 descent comparison;
+        # Descent-cap flag: NaN/inf would slip past the IEEE-754 descent comparison;
         # 0/negative would forbid every descent (drop the flag to disable instead).
         (lambda: _check_solver_options(max_descent_slope=float("nan")), "--max-descent-slope"),
         (lambda: _check_solver_options(max_descent_slope=float("inf")), "--max-descent-slope"),
@@ -316,7 +314,7 @@ def test_validate_solver_options_rejects_out_of_range(
     assert violation_token in exc_info.value.user_message
 
 
-# --- ensure_output_dir: residual --output-dir validation (Story 3.11 review) ---
+# `ensure_output_dir`: residual --output-dir validation.
 
 
 def test_ensure_output_dir_creates_missing_directory(tmp_path: pathlib.Path) -> None:
@@ -341,9 +339,7 @@ def test_ensure_output_dir_rejects_parent_that_is_a_file(tmp_path: pathlib.Path)
     assert "--output-dir" in exc_info.value.user_message
 
 
-# --- Query CLI end-to-end (CliRunner): validation + happy path (AC #2, #5) ---
-
-
+# Query CLI end-to-end (CliRunner): validation + happy path.
 def test_query_cli_rejects_out_of_range_n() -> None:
     """`--n 0` surfaces BadCLIArgError out past click.standalone_mode (exit-2 contract)."""
     runner = CliRunner()
@@ -353,7 +349,7 @@ def test_query_cli_rejects_out_of_range_n() -> None:
 
 
 def test_query_cli_rejects_nonfinite_progress_interval() -> None:
-    """`--progress-interval nan` surfaces BadCLIArgError (Story 7.1) — proves it's threaded into validate_solver_options."""
+    """`--progress-interval nan` surfaces BadCLIArgError — proves it's threaded into validate_solver_options."""
     runner = CliRunner()
     result = runner.invoke(
         query_cli,
@@ -364,7 +360,7 @@ def test_query_cli_rejects_nonfinite_progress_interval() -> None:
 
 
 def test_query_cli_rejects_non_positive_workers() -> None:
-    """`--workers 0` / negative surfaces BadCLIArgError (Story 14.4) → exit-2 contract."""
+    """`--workers 0` / negative surfaces BadCLIArgError → exit-2 contract."""
     runner = CliRunner()
     for bad in ("0", "-1"):
         result = runner.invoke(
@@ -377,7 +373,7 @@ def test_query_cli_rejects_non_positive_workers() -> None:
 
 
 def test_query_cli_threads_workers_to_run_parallel_grasp(tmp_path: pathlib.Path) -> None:
-    """`--workers` reaches `run_parallel_grasp`'s `workers` arg (Story 14.4 CLI-layer plumbing).
+    """`--workers` reaches `run_parallel_grasp`'s `workers` arg.
 
     Patches the pieces so no cache/solve/network work happens: `check_coverage` and the
     stage functions are stubbed, and `run_parallel_grasp` is replaced with a spy that
@@ -423,10 +419,10 @@ def test_query_cli_happy_path_passes_parsing_then_hits_coverage_check(
 ) -> None:
     """Valid args clear parsing + validation, then surface `CacheNotFoundError` from `check_coverage`.
 
-    Story 2.10 wired the query CLI through `cache.check_coverage` (FR24). With
-    no prepared cache under the (test-isolated) `--cache-dir`, the wired CLI
-    raises `CacheNotFoundError` instead of reaching the Story 1.5 stub body.
-    What this test still proves: parsing succeeded, validation succeeded, and
+    The query CLI goes through `cache.check_coverage` (FR24), so with no prepared
+    cache under the (test-isolated) `--cache-dir` it raises `CacheNotFoundError`
+    before doing any real work.
+    What this test proves: parsing succeeded, validation succeeded, and
     the CLI body executed far enough to call `check_coverage`. The exit-2
     contract itself is covered by `tests/e2e/test_coverage_check.py`.
     """
@@ -445,12 +441,10 @@ def test_query_cli_happy_path_passes_parsing_then_hits_coverage_check(
     assert isinstance(result.exception, CacheNotFoundError)
 
 
-# --- Both CLIs share one area surface (Story 15.3 AC #1) ---
-
-
+# Both CLIs share one area surface.
 @pytest.mark.parametrize("cli_name", ["query", "setup"])
 def test_both_clis_reject_missing_area(cli_name: str) -> None:
-    """`--radius` is no longer click-required; the shared resolver rejects "no area"."""
+    """`--radius` is not click-required; the shared resolver rejects "no area"."""
     runner = CliRunner()
     cli = query_cli if cli_name == "query" else setup_cli
     result = runner.invoke(cli, ["--center", "45.0716,6.1079"])
@@ -471,7 +465,7 @@ def test_both_clis_reject_radius_combined_with_extents(cli_name: str) -> None:
 
 
 def test_query_cli_accepts_a_rotated_rectangle(tmp_path: pathlib.Path) -> None:
-    """AC #1: a rotated box parses and reaches the coverage check (not a parse error).
+    """A rotated box parses and reaches the coverage check (not a parse error).
 
     With an isolated empty `--cache-dir`, reaching `CacheNotFoundError` proves the
     area surface was accepted and an `Area` was built.
@@ -496,7 +490,7 @@ def test_query_cli_accepts_a_rotated_rectangle(tmp_path: pathlib.Path) -> None:
 
 
 def test_query_cli_rotated_coverage_miss_suggests_matching_flags(tmp_path: pathlib.Path) -> None:
-    """AC #7: the suggested `steeproute-setup` command is copy-pasteable, not `--radius 0`."""
+    """The suggested `steeproute-setup` command is copy-pasteable, not `--radius 0`."""
     runner = CliRunner()
     result = runner.invoke(
         query_cli,
@@ -520,7 +514,7 @@ def test_query_cli_rotated_coverage_miss_suggests_matching_flags(tmp_path: pathl
 
 
 def test_setup_cli_builds_a_rotated_area(tmp_path: pathlib.Path) -> None:
-    """AC #1: setup accepts the same surface and hands the rotated `Area` to stage 1.
+    """Setup accepts the same surface and hands the rotated `Area` to stage 1.
 
     `osm_load` is patched with a sentinel, so this proves the flags reached area
     construction without any network work.
@@ -572,9 +566,7 @@ def test_query_cli_rejects_out_of_range_latitude() -> None:
     assert "latitude" in result.exception.user_message
 
 
-# --- Setup CLI: lat/lon range validation (AC #6) ---
-
-
+# Setup CLI: lat/lon range validation.
 def test_setup_cli_inherits_lat_lon_range_validation() -> None:
     """Range validation lives in LatLonParamType; setup CLI inherits it."""
     runner = CliRunner()
@@ -588,7 +580,7 @@ def test_setup_cli_rejects_nan_radius() -> None:
 
     `click.FLOAT` accepts the strings "nan", "inf", "-inf" via `float()`. Without
     an explicit finiteness check, `nan` slips past every comparison (IEEE-754),
-    and the area silently propagates into osmnx as a crash. Story 2.8 review P1.
+    and the area silently propagates into osmnx as a crash.
     """
     runner = CliRunner()
     for bad in ("nan", "inf", "-inf"):
@@ -608,7 +600,7 @@ def test_setup_cli_rejects_nan_radius() -> None:
 
 
 def test_setup_cli_rejects_non_positive_dem_fetch_workers() -> None:
-    """validate_dem_fetch_workers rejects 0 and negative values (Story 14.3 scope revision).
+    """validate_dem_fetch_workers rejects 0 and negative values.
 
     `ThreadPoolExecutor(max_workers=...)` requires >= 1; without this guard a
     `0`/negative `--dem-fetch-workers` would surface as a raw ValueError (exit 1)
@@ -627,7 +619,7 @@ def test_setup_cli_rejects_non_positive_dem_fetch_workers() -> None:
 
 
 def test_setup_cli_threads_dem_fetch_workers_to_resolve_dem(tmp_path: pathlib.Path) -> None:
-    """`--dem-fetch-workers` reaches `resolve_dem`'s `fetch_workers` kwarg (Story 14.3 scope revision).
+    """`--dem-fetch-workers` reaches `resolve_dem`'s `fetch_workers` kwarg.
 
     Patches `resolve_dem` at its `cli.setup` import site and inspects the captured
     kwargs rather than performing any real network/pipeline work.
@@ -665,9 +657,7 @@ def test_setup_cli_threads_dem_fetch_workers_to_resolve_dem(tmp_path: pathlib.Pa
     assert captured["fetch_workers"] == 2
 
 
-# --- --verbose ordering with BadCLIArgError from convert (AC #4) ---
-
-
+# --verbose ordering with BadCLIArgError from convert.
 def test_verbose_state_is_set_before_lat_lon_convert_runs() -> None:
     """--verbose is eager: state flips before LatLonParamType.convert can raise.
 

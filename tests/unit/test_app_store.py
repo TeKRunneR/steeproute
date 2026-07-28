@@ -1,4 +1,4 @@
-"""Unit tests for the per-job JSON store (App Story 1.3).
+"""Unit tests for the per-job JSON store.
 
 Covers create/get/update/list round-trips, unknown-id handling, id-ordered
 listing, and the atomic-write discipline (no leftover temp file, `job.json`
@@ -81,7 +81,7 @@ def test_empty_store_lists_nothing(tmp_path: pathlib.Path) -> None:
 
 
 def test_delete_removes_dir_and_drops_from_list(tmp_path: pathlib.Path) -> None:
-    # Cancel-queued (App Story 3.2) deletes the per-job dir so the record leaves
+    # Cancel-queued deletes the per-job dir so the record leaves
     # both `get` and `list()`; a queued id lingering in the worker's queue then
     # hits the worker's skip-missing-record path (queue.py) and never runs.
     store = JobStore(tmp_path)
@@ -100,7 +100,7 @@ def test_delete_missing_id_is_a_noop(tmp_path: pathlib.Path) -> None:
     JobStore(tmp_path).delete("never-existed")
 
 
-# --- App Story 3.3: restart recovery ----------------------------------------
+# Restart recovery.
 
 
 def test_recover_interrupted_flips_running_to_failed(tmp_path: pathlib.Path) -> None:
@@ -160,11 +160,10 @@ def test_recover_interrupted_is_idempotent(tmp_path: pathlib.Path) -> None:
     assert second.finished_at == first.finished_at  # not re-stamped
 
 
-def test_pre_story_5_1_record_loads_with_the_square_area(tmp_path: pathlib.Path) -> None:
+def test_record_without_rotated_fields_loads_as_a_square_area(tmp_path: pathlib.Path) -> None:
     """A `job.json` written before the rotated-area fields existed still loads.
 
-    `AreaSpec` gained `width_km`/`height_km`/`angle_deg` additively (App Story
-    5.1); an on-disk record carrying only `center` + `radius_km` must keep working
+    `AreaSpec` gained `width_km`/`height_km`/`angle_deg` additively; an on-disk record carrying only `center` + `radius_km` must keep working
     — the run library reads every historical job through this path.
     """
     store = JobStore(tmp_path)

@@ -104,8 +104,8 @@ def test_query_help_l_connector_describes_reuse_exemption() -> None:
     """`--l-connector` help reflects the realized FR5 reuse-exemption semantics.
 
     Guards against regressing to the old "edge-reuse length threshold (short
-    connectors vs primary edges)" wording, which described the pre-Epic-5
-    directed/drop behaviour. The distinctive phrase below must track the help
+    connectors vs primary edges)" wording, which described a drop threshold rather
+    than a reuse-exemption one. The distinctive phrase below must track the help
     string in `cli/_shared.py::l_connector_option`.
     """
     runner = CliRunner()
@@ -118,7 +118,7 @@ def test_query_help_l_connector_describes_reuse_exemption() -> None:
 
 
 def test_area_surface_is_identical_on_both_clis() -> None:
-    """FR23 (Story 15.3): setup and query expose exactly the same area flags.
+    """FR23: setup and query expose exactly the same area flags.
 
     Asserted as a set comparison rather than per-flag membership so a flag added
     to one CLI and forgotten on the other fails here, not in a user's shell.

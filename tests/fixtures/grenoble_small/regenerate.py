@@ -33,8 +33,8 @@ CENTER_LON = 5.788
 DIST_M = 2000
 
 # Single-source the fetch filter from production so the fixture can never drift
-# from what `osm_load` actually fetches (Story 6.2: now trails + minor-road
-# connectors). filter_trails() narrows further at query time.
+# from what `osm_load` actually fetches (trails plus minor-road connectors).
+# filter_trails() narrows further at query time.
 CUSTOM_FILTER = _OSM_CUSTOM_FILTER
 
 OUTPUT_PATH = pathlib.Path(__file__).parent / "osm_graph.graphml"

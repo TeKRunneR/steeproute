@@ -1,15 +1,15 @@
-"""Unit tests for solver.distinctness (Story 3.4).
+"""Unit tests for solver.distinctness.
 
 `jaccard_distance` is a pure free function operating on canonical edge-identity
 sets; `TopNTracker` is a stateful container enforcing the FR11 distinctness
 ceiling. All tests build `Solution` instances inline — no fixture I/O.
 
 Coverage map (AC → test):
-- AC #2 admission / rejection-by-worse / rejection-by-Jaccard / substitution
+- admission / rejection-by-worse / rejection-by-Jaccard / substitution
   → the four `test_consider_*` cases (plus the n=2 substitution variant).
-- AC #3 jaccard symmetry / identity / range / admission-order-independence
+- jaccard symmetry / identity / range / admission-order-independence
   → the four `test_jaccard_distance_*` and `test_admission_*` property tests.
-- AC #4 no-shared-state / pure consider
+- no-shared-state / pure consider
   → `test_consider_is_pure_under_fresh_tracker_replay`.
 """
 
@@ -24,9 +24,7 @@ from hypothesis import strategies as st
 from steeproute.models import Edge, Solution
 from steeproute.solver.distinctness import TopNTracker, jaccard_distance
 
-# ----------------------------------------------------------------------------
 # Helpers
-# ----------------------------------------------------------------------------
 
 
 def _make_edge(u: int, v: int, key: int = 0) -> Edge:
@@ -55,9 +53,7 @@ def _make_solution(edge_ids: list[tuple[int, int, int]], objective: float) -> So
     )
 
 
-# ----------------------------------------------------------------------------
-# AC #2 — four structural cases for TopNTracker.consider
-# ----------------------------------------------------------------------------
+# Four structural cases for TopNTracker.consider
 
 
 def test_consider_admits_into_empty_tracker() -> None:
@@ -145,9 +141,7 @@ def test_consider_substitutes_worst_when_full_and_new_beats_worst_distinct() -> 
     assert math.isclose(tracker.total_objective(), 300.0 + 250.0, abs_tol=1e-9)
 
 
-# ----------------------------------------------------------------------------
 # Constructor validation guards
-# ----------------------------------------------------------------------------
 
 
 def test_tracker_rejects_non_positive_n() -> None:
@@ -162,9 +156,7 @@ def test_tracker_rejects_out_of_range_j_max() -> None:
         TopNTracker(n=3, j_max=1.5)
 
 
-# ----------------------------------------------------------------------------
 # Additional structural assertions on TopNTracker semantics
-# ----------------------------------------------------------------------------
 
 
 def test_current_top_is_objective_descending() -> None:
@@ -216,9 +208,9 @@ def test_consider_replaces_overlapping_incumbent_when_new_is_better() -> None:
 # split into a "left half" shared with `a` and a "right half" shared with `b`, so
 # the candidate overlaps BOTH incumbents while `a` and `b` stay mutually disjoint
 # (and therefore can coexist in the tracker):
-#   cand vs a: 2 shared / 5 union → similarity 0.4, distance 0.6 < 0.70 → overlap
-#   cand vs b: 2 shared / 5 union → similarity 0.4, distance 0.6 < 0.70 → overlap
-#   a   vs b: 0 shared            → distance 1.0 ≥ 0.70 → distinct
+# cand vs a: 2 shared / 5 union → similarity 0.4, distance 0.6 < 0.70 → overlap
+# cand vs b: 2 shared / 5 union → similarity 0.4, distance 0.6 < 0.70 → overlap
+# a   vs b: 0 shared            → distance 1.0 ≥ 0.70 → distinct
 _CAND_EDGES = [(0, 1, 0), (1, 2, 0), (2, 3, 0), (3, 4, 0)]
 _A_EDGES = [(0, 1, 0), (1, 2, 0), (10, 11, 0)]  # shares left half of cand
 _B_EDGES = [(2, 3, 0), (3, 4, 0), (20, 21, 0)]  # shares right half of cand
@@ -273,9 +265,7 @@ def test_consider_rejects_when_candidate_beats_some_but_not_all_overlaps() -> No
     assert cand not in top
 
 
-# ----------------------------------------------------------------------------
 # Non-finite objective guard
-# ----------------------------------------------------------------------------
 
 
 def test_consider_rejects_nan_objective() -> None:
@@ -296,9 +286,7 @@ def test_consider_rejects_infinite_objective() -> None:
         tracker.consider(inf_sol)
 
 
-# ----------------------------------------------------------------------------
-# AC #3 — hypothesis property tests on jaccard_distance
-# ----------------------------------------------------------------------------
+# Hypothesis property tests on jaccard_distance
 
 # Bounded alphabet so generated edge-sets actually overlap a non-trivial fraction
 # of the time. Without bounding, near-every random pair is trivially disjoint
@@ -392,9 +380,7 @@ def test_jaccard_distance_uses_canonical_edge_identity_not_metrics() -> None:
     assert jaccard_distance(sol_a, sol_b) == 0.0
 
 
-# ----------------------------------------------------------------------------
-# AC #3 — admission order-independence on sufficiently-distinct inputs
-# ----------------------------------------------------------------------------
+# Admission order-independence on sufficiently-distinct inputs
 
 
 def _make_disjoint_solutions(n_solutions: int) -> list[Solution]:
@@ -463,7 +449,7 @@ def test_admission_order_independent_for_sufficiently_distinct_solutions(
 
     # In the sufficiently-distinct regime no candidate is ever rejected for
     # overlap, so admission reduces to top-N-by-objective — order-independent in
-    # MEMBERSHIP (this is exactly AC #3's scoped claim). `current_top()` is sorted
+    # MEMBERSHIP (this is exactly scoped claim). `current_top()` is sorted
     # so the lists are equal too; we compare as sets to make the membership claim
     # explicit. NB: this is NOT a general order-independence guarantee — on
     # overlapping inputs the greedy filter is order-dependent. FR29 reproducibility
@@ -475,9 +461,7 @@ def test_admission_order_independent_for_sufficiently_distinct_solutions(
     assert math.isclose(t1.total_objective(), t2.total_objective(), abs_tol=1e-9)
 
 
-# ----------------------------------------------------------------------------
-# AC #4 — purity / no shared mutable state
-# ----------------------------------------------------------------------------
+# Purity / no shared mutable state
 
 
 def test_consider_is_pure_under_fresh_tracker_replay() -> None:

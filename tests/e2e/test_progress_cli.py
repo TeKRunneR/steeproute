@@ -1,4 +1,4 @@
-"""E2E: the query CLI prints throttled progress lines during the solve (Story 7.1 AC #7).
+"""E2E: the query CLI prints throttled progress lines during the solve.
 
 Runs the `steeproute` query CLI in-process against a seeded fixture cache (same
 offline `CliRunner` path as the Journey-1 happy-path test — a real `uv run`
@@ -30,7 +30,7 @@ def test_progress_lines_appear_on_stdout_during_solve(
     progress_lines = [ln for ln in result.output.splitlines() if ln.startswith("progress:")]
     assert progress_lines, f"expected >= 1 progress line on stdout, got:\n{result.output}"
 
-    # The renderer's field shape (Story 7.1 ProgressEvent) is stable enough to pin.
+    # The renderer's field shape is a stable contract, so pin it exactly.
     assert re.search(
         r"^progress: iter=\d+ best_objective=[\d.]+ elapsed=[\d.]+s eta=\S+ stagnation=\d+$",
         progress_lines[0],

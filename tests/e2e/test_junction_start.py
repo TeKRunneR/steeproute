@@ -1,4 +1,4 @@
-"""Flag-on golden + junction-start property assertion for `--start-at-junction` (Story 10.1, FR31).
+"""Flag-on golden + junction-start property assertion for `--start-at-junction` (FR31).
 
 Runs the real `steeproute` query against the committed `grenoble_small` cache with
 `--start-at-junction` on (via the `grenoble_small_junction` flag-on fixture) and asserts:

@@ -1,6 +1,6 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
 # Reason: same networkx-boundary pattern as tests/unit/test_grasp_construction.py.
-"""Stagnation termination (Story 7.2, Architecture §Cat 5e).
+"""Stagnation termination (Architecture §Cat 5e).
 
 GRASP must stop early once the top-N total objective is unchanged for
 `--stagnation-iters` consecutive iterations, tagging the run `converged`. On a
@@ -11,7 +11,7 @@ iter-budget the terminator.
 
 The fixture is a single node with one self-loop edge — the start-node sample is
 forced (only one node) and the only constructible route is that self-loop
-(Story 3.6 admits length-1 self-loop routes). So *every* GRASP iteration builds
+(a length-1 self-loop is a legal route). So *every* GRASP iteration builds
 the identical route: the tracker admits it once on iteration 1, then rejects the
 duplicate forever after. The top-N total objective is therefore bit-stable from
 iteration 2 on, making the iteration at which stagnation trips exactly
@@ -97,7 +97,7 @@ def test_stagnation_terminates_well_before_iter_budget() -> None:
     # then 5 unchanged iterations → terminate at iteration 6.
     assert len(events) == 6
     assert events[-1].stagnation_counter == 5
-    # Convergence iteration (Story 7.3): the one and only admission lands on
+    # Convergence iteration: the one and only admission lands on
     # iteration 1, so that is where the search last improved — and it matches the
     # `(i + 1) − stagnation_counter` identity evaluated at the final event.
     assert solver.convergence_iteration == 1
@@ -117,24 +117,20 @@ def test_stagnation_iters_zero_disables_the_check() -> None:
     assert len(events) == 20  # every iteration ran; no early stop
 
 
-# ---------------------------------------------------------------------------
 # Regression: the admission signal must come from `tracker.consider()`'s bool,
 # NOT a top-N total-objective delta. The evict-many-admit-one branch
 # (`TopNTracker`) can change the held set while leaving the total *unchanged*,
 # so a delta-based signal would miss the admission entirely — wrongly counting
 # it as stagnant and never advancing `convergence_iteration` past it.
-#
-#   P:  0 --(base (0,10,0))--> 10        objective 5   (dead-end)
-#   Q:  1 --(base (1,11,0))--> 11        objective 8   (dead-end)
-#   R:  2 --(base (0,10,0))--> 3 --(base (1,11,0))--> 4   objective 13
-#
-# With `j_max=0.0` any shared base segment counts as overlap. R shares P's base
+# # P:  0 --(base (0,10,0))--> 10        objective 5   (dead-end)
+# Q:  1 --(base (1,11,0))--> 11        objective 8   (dead-end)
+# R:  2 --(base (0,10,0))--> 3 --(base (1,11,0))--> 4   objective 13
+# # With `j_max=0.0` any shared base segment counts as overlap. R shares P's base
 # segment (its first edge) and Q's (its second), so R overlaps both. R's
 # objective 13 strictly beats each of P (5) and Q (8), so when R is constructed
 # after P and Q are already held it evicts BOTH and is admitted — and the held
 # total moves 13 → 13 (unchanged: 5 + 8 == 13). Seed 3 is chosen so this
 # evict-many is the run's LAST admission (verified deterministic).
-# ---------------------------------------------------------------------------
 
 
 def _build_evict_many_graph() -> ContractedGraph:
@@ -200,8 +196,8 @@ def test_admission_with_unchanged_total_still_advances_convergence_iteration() -
     # never set `convergence_iteration` here — only `consider()`'s bool can.
     assert events[ci - 1].best_objective == events[ci - 2].best_objective == 13.0
     # Pinned for this seed/graph: the equal-total evict-many lands on iteration 14
-    # under the Story 12.3 batched-draw sequence (was 11 with per-step scalar
-    # draws). Re-derive by printing `solver.convergence_iteration` if the draw
-    # scheme ever changes again; the two assertions above are the test's substance
+    # under the current batched-draw sequence. Re-derive by printing
+    # `solver.convergence_iteration` if the draw scheme ever changes; the two
+    # assertions above are the test's substance
     # and must keep passing as-is.
     assert ci == 14

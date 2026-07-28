@@ -2,7 +2,7 @@
 # Reason: same networkx-boundary pattern as test_grasp_construction.py;
 # `reportImplicitRelativeImport` — `from exhaustive_oracle import ...` is the shape
 # that resolves under pytest's prepend import mode (see test_solver_on_toy_graph.py).
-"""Direction-aware descent cap: GRASP ↔ oracle one feasible set + FR29 (Story 10.2, FR32).
+"""Direction-aware descent cap: GRASP ↔ oracle one feasible set + FR29 (FR32).
 
 With `--max-descent-slope` set, GRASP construction and the exhaustive oracle reject
 any *descending* traversal of an edge whose `max_windowed_descent_grad` exceeds the
@@ -87,20 +87,15 @@ def _edge_id_sets(sols: list) -> list[tuple[tuple[int, int, int], ...]]:  # noqa
     return [tuple((e.node_u, e.node_v, e.key) for e in s.edges) for s in sols]
 
 
-# ---------------------------------------------------------------------------
 # Fixture (4 nodes): the high-objective route descends an over-cap segment.
-# ---------------------------------------------------------------------------
-#
-#   0 --super 0→1--> 1 --descent 1→2--> 2
-#                    1 --super  1→3--> 3
-#
-# super   0→1: len 400, d+ 250, d- 0   (uphill; descent grad 0.0)
+# # 0 --super 0→1--> 1 --descent 1→2--> 2
+# 1 --super  1→3--> 3
+# # super   0→1: len 400, d+ 250, d- 0   (uphill; descent grad 0.0)
 # descent 1→2: len 400, d+ 0,  d- 300  (NET DESCENT; windowed grad 0.70) obj 300
 # super   1→3: len 400, d+ 100, d- 0   (uphill; descent grad 0.0)        obj 100
-#
-# Cap OFF: best route is [0→1, 1→2] (objective 550) — it descends segment 1↔2.
+# # Cap OFF: best route is [0→1, 1→2] (objective 550) — it descends segment 1↔2.
 # Cap 0.45: 1→2 is a net descent with grad 0.70 > 0.45 → blocked everywhere;
-#           best becomes [0→1, 1→3] (objective 350) and no route descends 1↔2.
+# best becomes [0→1, 1→3] (objective 350) and no route descends 1↔2.
 
 
 def _build_descent_fixture() -> ContractedGraph:

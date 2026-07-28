@@ -1,11 +1,11 @@
-"""E2E: `--quiet` suppresses progress lines during the solve (Story 7.1 AC #7).
+"""E2E: `--quiet` suppresses progress lines during the solve.
 
 Same offline in-process `CliRunner` path as `test_progress_cli.py`, but with
 `--quiet`: the CLI installs a `None` progress callback, so no `progress:` line
 should reach stdout even with a tiny `--progress-interval`. The run still
 completes normally (exit 0, cache-hit cue still printed) — `--quiet` suppresses
 only intermediate progress, not the run itself. The final run summary is out of
-scope here (Story 7.5).
+scope here.
 """
 
 from __future__ import annotations

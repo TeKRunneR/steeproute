@@ -1,10 +1,10 @@
-"""Unit tests for `cache.check_coverage` (Story 2.10).
+"""Unit tests for `cache.check_coverage`.
 
 Two surfaces are exercised here:
 
 1. Pure helpers (`_select_smallest_containing`, `_area_to_polygon`,
    `_no_prepared_cache_message`, `_partial_coverage_message`) — hand-built input,
-   no on-disk cache. These are the AC #9 boundary-pinning tests.
+   no on-disk cache. These are the boundary-pinning tests.
 2. `check_coverage` over real on-disk cache state — seeded via `write_entry` with
    minimal in-memory graphs. These cover the empty-cache, single-contains, and
    none-contains compositions end-to-end inside this module's scope. e2e tests in
@@ -12,7 +12,7 @@ Two surfaces are exercised here:
    query CLI.
 
 The integration tier (`tests/integration/test_cache_coverage.py`) covers the
-opportunistic `rebuild_index` path that closes Story 2.7 D1.
+opportunistic `rebuild_index` path that recovers an interrupted write.
 """
 
 # pyright: reportPrivateUsage=false, reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportMissingTypeArgument=false
@@ -67,11 +67,9 @@ def _seed_entry(cache_root: pathlib.Path, *, cache_key_hash: str, area: Area) ->
     )
 
 
-# --- _area_to_polygon: strict-containment boundary semantics -----------------
-
-
+# _area_to_polygon: strict-containment boundary semantics.
 def test_area_to_polygon_shape_matches_bounds_geojson_axis_order() -> None:
-    """AC #1: the query polygon and the entry polygon use the same axis convention.
+    """The query polygon and the entry polygon use the same axis convention.
 
     `_bounds_geojson` emits `[lon, lat]` per RFC 7946; `_area_to_polygon` must
     produce a polygon whose `.bounds` reflects the same ordering so containment
@@ -92,7 +90,7 @@ def test_area_to_polygon_shape_matches_bounds_geojson_axis_order() -> None:
 
 
 def test_area_to_polygon_containment_boundary_semantics() -> None:
-    """AC #9: pin `shapely.Polygon.contains` semantics for the coverage check.
+    """Pin `shapely.Polygon.contains` semantics for the coverage check.
 
     `shapely.contains` (DE-9IM `[T*****FF*]`) returns True when no point of the
     inner polygon lies in the outer's exterior. That means:
@@ -116,14 +114,12 @@ def test_area_to_polygon_containment_boundary_semantics() -> None:
     larger = cache_mod._area_to_polygon(Area(center=(45.0, 6.0), radius_km=3.0))
     assert not entry.contains(larger)
     # 4) Shifted off-center such that the inner bbox extends past the entry's
-    #    east edge → NOT contained.
+    # east edge → NOT contained.
     shifted = cache_mod._area_to_polygon(Area(center=(45.0, 6.05), radius_km=1.0))
     assert not entry.contains(shifted)
 
 
-# --- _select_smallest_containing: pure selection logic ----------------------
-
-
+# _select_smallest_containing: pure selection logic.
 def _entry(
     cache_key_hash: str, lat: float, lon: float, radius_km: float
 ) -> cache_mod._IndexedEntry:
@@ -152,7 +148,7 @@ def test_select_smallest_containing_returns_single_match_when_only_one_contains(
 
 
 def test_select_smallest_containing_picks_smallest_radius_when_multiple_contain() -> None:
-    """AC #5: smaller radius → less graph to load, so prefer the tightest fit."""
+    """Smaller radius → less graph to load, so prefer the tightest fit."""
     query = Area(center=(45.0, 6.0), radius_km=1.0)
     indexed = [
         _entry("aa" * 8, lat=45.0, lon=6.0, radius_km=10.0),
@@ -165,7 +161,7 @@ def test_select_smallest_containing_picks_smallest_radius_when_multiple_contain(
 
 
 def test_select_smallest_containing_tiebreaks_by_cache_key_hash() -> None:
-    """AC #5: deterministic tiebreak when two entries have identical radius."""
+    """Deterministic tiebreak when two entries have identical radius."""
     query = Area(center=(45.0, 6.0), radius_km=1.0)
     indexed = [
         _entry("ff" * 8, lat=45.0, lon=6.0, radius_km=3.0),
@@ -226,9 +222,9 @@ def _rotated_area(
 
 
 def test_select_smallest_containing_ranks_rotated_entries_by_true_area() -> None:
-    """Story 15.2 AC #5: selection ranks by true rectangle area, not `radius_km`.
+    """Selection ranks by true rectangle area, not `radius_km`.
 
-    A rotated entry carries an inert `radius_km=0.0`, so the old scalar key made
+    A rotated entry carries an inert `radius_km=0.0`, so a scalar `radius_km` key makes
     every rotated entry tie at "size 0" and handed the choice to a lexicographic
     hash coin-flip — loading a 40 km box when a 12 km one would do.
     """
@@ -260,7 +256,7 @@ def test_select_smallest_containing_compares_squares_and_rotated_on_one_scale() 
 
 
 def test_select_smallest_containing_rejects_query_poking_out_of_rotated_entry() -> None:
-    """AC #5: containment is orientation-aware — the envelope must not be used.
+    """Containment is orientation-aware — the envelope must not be used.
 
     This query sits inside the rotated entry's axis-aligned *envelope* but outside
     the rotated box itself (near a corner the rotation cut off). An
@@ -284,7 +280,7 @@ def test_select_smallest_containing_rejects_query_poking_out_of_rotated_entry() 
 
 
 def test_read_indexed_entries_accepts_a_rotated_row(tmp_path: pathlib.Path) -> None:
-    """AC #5 regression: a rotated row must survive index parsing.
+    """Regression: a rotated row must survive index parsing.
 
     A rotated entry's `radius_km` is `0.0`, and the pre-15.2 guard rejected any
     row with `radius_km <= 0` by returning `None` — which made `check_coverage`
@@ -342,7 +338,7 @@ def test_read_indexed_entries_reads_a_pre_migration_row_without_a_mode(
 def test_check_coverage_resolves_a_query_inside_a_rotated_entry(
     tmp_path: pathlib.Path,
 ) -> None:
-    """AC #5 end-to-end: a rotated prepared area serves a query it truly contains."""
+    """End-to-end: a rotated prepared area serves a query it truly contains."""
     _seed_entry(
         tmp_path,
         cache_key_hash="11" * 8,
@@ -355,16 +351,14 @@ def test_check_coverage_resolves_a_query_inside_a_rotated_entry(
     assert result.manifest.area.angle_deg == 30.0
 
 
-# --- Message formatters ------------------------------------------------------
-
-
+# Message formatters.
 def test_no_prepared_cache_message_echoes_query_center_and_radius() -> None:
-    """AC #3: empty-cache error suggests a directly copy-pasteable setup command.
+    """Empty-cache error suggests a directly copy-pasteable setup command.
 
     Lead phrase distinguishes the empty-cache case ("No prepared cache exists yet.")
     from the partial-coverage case ("No prepared cache covers this area.") so users
     can triage at a glance — pinned here so a future tightening of the wording
-    doesn't silently revert this UX (Story 2.10 P5).
+    doesn't silently revert this UX.
     """
     query = Area(center=(45.0716, 6.1079), radius_km=10.5)
     msg = cache_mod._no_prepared_cache_message(query)
@@ -375,7 +369,7 @@ def test_no_prepared_cache_message_echoes_query_center_and_radius() -> None:
 
 
 def test_partial_coverage_message_names_nearest_area_and_suggests_smaller_radius() -> None:
-    """AC #4: when entries exist but none contain, name the nearest one with actionable hint."""
+    """When entries exist but none contain, name the nearest one with actionable hint."""
     query = Area(center=(45.0, 6.0), radius_km=5.0)
     nearest = _entry("11" * 8, lat=45.05, lon=6.05, radius_km=2.0)
     msg = cache_mod._partial_coverage_message(query, nearest)
@@ -388,7 +382,7 @@ def test_partial_coverage_message_names_nearest_area_and_suggests_smaller_radius
 
 
 def test_no_prepared_cache_message_describes_a_rotated_query_area() -> None:
-    """AC #6: messaging derives from geometry — never a bogus `--radius 0`.
+    """Messaging derives from geometry — never a bogus `--radius 0`.
 
     A rotated area's `radius_km` is inert `0.0`, so the pre-15.2 formatter would
     have told the user to run `steeproute-setup --radius 0`.
@@ -407,7 +401,7 @@ def test_no_prepared_cache_message_describes_a_rotated_query_area() -> None:
 
 
 def test_partial_coverage_message_describes_a_rotated_nearest_entry() -> None:
-    """AC #6: the nearest-area line reports a rotated box honestly, not as a radius."""
+    """The nearest-area line reports a rotated box honestly, not as a radius."""
     query = Area(center=(45.0, 6.0), radius_km=5.0)
     nearest = _rotated_entry("11" * 8, 45.05, 6.05, 8.0, 3.0, 35.0)
 
@@ -424,7 +418,7 @@ def test_partial_coverage_message_describes_a_rotated_nearest_entry() -> None:
 
 
 def test_partial_coverage_message_skips_the_shrink_hint_for_a_rotated_entry() -> None:
-    """AC #6: the "smaller --radius" arithmetic only holds between two squares.
+    """The "smaller --radius" arithmetic only holds between two squares.
 
     `r_new = entry.radius - |delta|` presumes both boxes are concentric squares.
     Against a rotated entry it is meaningless, so the message must fall back to
@@ -440,7 +434,7 @@ def test_partial_coverage_message_skips_the_shrink_hint_for_a_rotated_entry() ->
 
 
 def test_diagnostic_detail_lists_both_shapes() -> None:
-    """AC #6: the --verbose inventory must be readable for a mixed cache."""
+    """The --verbose inventory must be readable for a mixed cache."""
     detail = cache_mod._diagnostic_detail(
         [
             _entry("aa" * 8, lat=45.0, lon=6.0, radius_km=2.0),
@@ -453,7 +447,7 @@ def test_diagnostic_detail_lists_both_shapes() -> None:
 
 
 def test_partial_coverage_message_falls_back_to_center_hint_when_query_center_outside() -> None:
-    """AC #4: query center outside the nearest entry → suggest narrowing `--center`, not a non-positive radius."""
+    """Query center outside the nearest entry → suggest narrowing `--center`, not a non-positive radius."""
     query = Area(center=(45.0, 6.0), radius_km=1.0)
     # Nearest is far enough that even radius 0 doesn't fit at the query center.
     nearest = _entry("11" * 8, lat=46.5, lon=6.0, radius_km=0.5)
@@ -464,13 +458,11 @@ def test_partial_coverage_message_falls_back_to_center_hint_when_query_center_ou
     assert "--radius -" not in msg
 
 
-# --- check_coverage end-to-end (in-process, real on-disk seeds) -------------
-
-
+# Check_coverage end-to-end (in-process, real on-disk seeds)
 def test_check_coverage_empty_cache_raises_with_setup_command_suggestion(
     tmp_path: pathlib.Path,
 ) -> None:
-    """AC #3: empty cache dir → CacheNotFoundError with copy-pasteable steeproute-setup hint."""
+    """Empty cache dir → CacheNotFoundError with copy-pasteable steeproute-setup hint."""
     query = Area(center=(45.0, 6.0), radius_km=1.0)
     with pytest.raises(CacheNotFoundError) as exc_info:
         _ = check_coverage(tmp_path, query)
@@ -483,7 +475,7 @@ def test_check_coverage_empty_cache_raises_with_setup_command_suggestion(
 def test_check_coverage_single_containing_entry_returns_prepared_data(
     tmp_path: pathlib.Path,
 ) -> None:
-    """AC #1: single strictly-containing entry → its PreparedData is returned."""
+    """Single strictly-containing entry → its PreparedData is returned."""
     _seed_entry(tmp_path, cache_key_hash="11" * 8, area=Area(center=(45.0, 6.0), radius_km=5.0))
     query = Area(center=(45.0, 6.0), radius_km=1.0)
 
@@ -495,7 +487,7 @@ def test_check_coverage_single_containing_entry_returns_prepared_data(
 def test_check_coverage_picks_smallest_radius_when_multiple_contain(
     tmp_path: pathlib.Path,
 ) -> None:
-    """AC #5: with two concentric entries containing the query, the smaller radius is loaded."""
+    """With two concentric entries containing the query, the smaller radius is loaded."""
     _seed_entry(tmp_path, cache_key_hash="aa" * 8, area=Area(center=(45.0, 6.0), radius_km=10.0))
     _seed_entry(tmp_path, cache_key_hash="bb" * 8, area=Area(center=(45.0, 6.0), radius_km=3.0))
     query = Area(center=(45.0, 6.0), radius_km=1.0)
@@ -509,7 +501,7 @@ def test_check_coverage_picks_smallest_radius_when_multiple_contain(
 def test_check_coverage_partial_coverage_raises_with_nearest_area_message(
     tmp_path: pathlib.Path,
 ) -> None:
-    """AC #4: query that pokes outside every entry → CacheNotFoundError with nearest-area hint."""
+    """Query that pokes outside every entry → CacheNotFoundError with nearest-area hint."""
     _seed_entry(tmp_path, cache_key_hash="11" * 8, area=Area(center=(45.0, 6.0), radius_km=2.0))
     # Query is bigger than the entry → bbox pokes out → not strictly contained.
     query = Area(center=(45.0, 6.0), radius_km=5.0)
@@ -525,9 +517,7 @@ def test_check_coverage_partial_coverage_raises_with_nearest_area_message(
     assert "radius 2 km" in msg
 
 
-# --- re-prepare after a pipeline change: stale entry must not survive --------
-
-
+# Re-prepare after a pipeline change: stale entry must not survive.
 def _write_marked_entry(
     cache_root: pathlib.Path,
     *,
@@ -560,13 +550,15 @@ def test_reprepare_after_pipeline_change_evicts_stale_entry_and_serves_fresh(
     stale entry the coverage tiebreak can silently serve.
 
     The cache key folds `pipeline_content_hash`, so a pipeline change re-prepares the
-    SAME area under a new key. Pre-fix the old entry stayed on disk forever and, having
-    an identical area (hence identical radius), tied with the new one in
-    `_select_smallest_containing` — broken only by lexicographic `cache_key_hash`, a
-    coin flip that could return the superseded graph with stale provenance. `write_entry`
-    now garbage-collects entries it supersedes, so the old one is gone and the tiebreak
-    is unreachable. This area's keys order old < new (the worst case: pre-fix the stale
-    entry would have *won* the tiebreak).
+    SAME area under a new key. Without garbage collection the superseded entry stays on
+    disk forever and, having an identical area (hence identical radius), ties with the
+    new one in `_select_smallest_containing` — broken only by lexicographic
+    `cache_key_hash`, a coin flip that can return the superseded graph with stale
+    provenance. `write_entry` collects entries it supersedes, so the tie is unreachable.
+
+    This area's keys order superseded < current, i.e. the stale entry is the one that
+    would *win* the tiebreak — the worst case, which is what makes the assertion
+    meaningful.
     """
     area = Area(center=(45.0, 6.0), radius_km=10.0)
     old_pipe, new_pipe = "0" * 64, "f" * 64
@@ -624,7 +616,7 @@ def test_write_entry_keeps_sibling_with_different_untagged_policy(
     assert entry_dir_for(tmp_path, "exclude0000b0000").is_dir()
 
 
-# --- _read_indexed_entries defensive branches --------------------------------
+# _read_indexed_entries defensive branches.
 # Hand-malformed payloads exercise the "return None → caller rebuilds" defenses.
 # Real `index.json` payloads from `rebuild_index` never reach these branches,
 # but a hand-edited / future-schema-drift / mid-write-corruption payload could.
@@ -677,7 +669,7 @@ def _write_index(cache_root: pathlib.Path, payload: object) -> None:
                 }
             ],
         },
-        # Story 2.10 P2: `radius_km` is NaN (would build a polygon with NaN
+        # `radius_km` is NaN (would build a polygon with NaN
         # coordinates → shapely raises raw `GEOSException`, violating FR24's
         # exit-2 contract). Defensive parser must reject.
         {
@@ -689,7 +681,7 @@ def _write_index(cache_root: pathlib.Path, payload: object) -> None:
                 }
             ],
         },
-        # Story 2.10 P2: `radius_km` is +Infinity (would produce a polygon
+        # `radius_km` is +Infinity (would produce a polygon
         # spanning infinite lon — corrupts containment math).
         {
             "schema_version": 1,
@@ -700,7 +692,7 @@ def _write_index(cache_root: pathlib.Path, payload: object) -> None:
                 }
             ],
         },
-        # Story 2.10 P2: `radius_km` is negative (inverted-winding polygon
+        # `radius_km` is negative (inverted-winding polygon
         # with undefined `.contains` semantics).
         {
             "schema_version": 1,
@@ -711,7 +703,7 @@ def _write_index(cache_root: pathlib.Path, payload: object) -> None:
                 }
             ],
         },
-        # Story 2.10 P2: `radius_km` is `True` — `isinstance(True, int)` is
+        # `radius_km` is `True` — `isinstance(True, int)` is
         # True in Python (bool subclasses int), so the prior `isinstance(...,
         # (int, float))` check would silently coerce to `1.0`.
         {
@@ -723,7 +715,7 @@ def _write_index(cache_root: pathlib.Path, payload: object) -> None:
                 }
             ],
         },
-        # Story 2.10 P2: `center` lat is NaN — would propagate into the polygon.
+        # `center` lat is NaN — would propagate into the polygon.
         {
             "schema_version": 1,
             "entries": [
@@ -775,12 +767,13 @@ def test_areas_has_valid_entries_returns_false_when_only_tmp_dirs_present(
 def test_areas_has_valid_entries_skips_old_dirs_holding_stale_manifest(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Story 2.10 P3: a `.old/` directory with a manifest is a rollback artifact, not a live entry.
+    """A `.old/` directory with a manifest is a rollback artifact, not a live entry.
 
     `write_entry`'s rollback path swaps the prior entry into `<hash>.old/` via
     `os.replace(entry_dir, backup_dir)` before the new manifest commit. A
     Ctrl-C in the narrow window before `shutil.rmtree(backup_dir)` leaves a
-    `<hash>.old/manifest.json` on disk. Pre-fix, `_areas_has_valid_entries`
+    `<hash>.old/manifest.json` on disk. Without the suffix filter,
+    `_areas_has_valid_entries`
     matched only on `manifest.json` presence and would have admitted this
     rollback artifact as a live entry — leading `rebuild_index` to include
     a key for which `areas/<hash>/` no longer exists, surfacing later as an
@@ -799,7 +792,7 @@ def test_areas_has_valid_entries_skips_old_dirs_holding_stale_manifest(
 def test_rebuild_index_skips_old_dirs_holding_stale_manifest(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Story 2.10 P3: `rebuild_index` must also ignore `<hash>.old/` directories.
+    """`rebuild_index` must also ignore `<hash>.old/` directories.
 
     Companion to the `_areas_has_valid_entries` test above — the same suffix
     skip applies to the on-disk rebuild walk. Otherwise the rebuilt
@@ -810,7 +803,7 @@ def test_rebuild_index_skips_old_dirs_holding_stale_manifest(
     areas.mkdir(parents=True)
     old_entry = areas / "abcd1234.old"
     old_entry.mkdir()
-    # A valid-looking manifest that, pre-fix, would have been admitted into
+    # A valid-looking manifest that, without the suffix filter, would be admitted into
     # the rebuilt index. Build it via `Manifest.to_dict()` so the parse round
     # trips through real schema validation (the stale-but-not-bogus case).
     stale_manifest = Manifest(

@@ -1,7 +1,7 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
 # Reason: builds a tiny networkx MultiDiGraph fixture whose edge-attribute access
 # surfaces as Unknown — same external-boundary pattern as the production modules.
-"""Unit tests for `output.render` (Story 3.10) on crafted in-memory fixtures.
+"""Unit tests for `output.render` on crafted in-memory fixtures.
 
 These exercise every metadata field, both banner branches, HTML self-containment,
 the `route-<i>.{html,json}` filename pattern, and interrupt-safety — all without
@@ -83,7 +83,7 @@ _EXPECTED_METADATA_STRINGS = [
     "RGEALTI-5M-v2",  # dem_version
     "abc123def456",  # pipeline_content_hash
     "budget-exhausted",  # convergence_status
-    "987",  # convergence_iteration (Story 7.3)
+    "987",  # convergence_iteration
     "1.9.4",  # leaflet asset version
     "4.4.0",  # chart.js asset version
 ]
@@ -122,7 +122,7 @@ def _base_graph() -> nx.MultiDiGraph:
     g.add_edge(2, 3, key=0, vertices_resampled=[(45.11, 6.11, 1050.0), (45.12, 6.12, 1120.0)])
     g.add_edge(3, 4, key=0, vertices_resampled=[(45.12, 6.12, 1120.0), (45.13, 6.13, 1090.0)])
     # Reverse of the (3,4) connector, so a route can traverse the linking segment
-    # both ways (Story 5.2 reusable connector) — used by the reuse-render test.
+    # both ways (a reusable connector) — used by the reuse-render test.
     g.add_edge(4, 3, key=0, vertices_resampled=[(45.13, 6.13, 1090.0), (45.12, 6.12, 1120.0)])
     return g
 
@@ -184,7 +184,7 @@ def test_metadata_fields_present_in_both_html_and_json(tmp_path: pathlib.Path) -
 def test_degradation_message_renders_in_both_html_and_json_when_set(
     tmp_path: pathlib.Path,
 ) -> None:
-    """The FR12 degradation explanation appears in both surfaces when present (AC #4)."""
+    """The FR12 degradation explanation appears in both surfaces when present."""
     msg = "Only 2 distinct routes satisfy J_max <= 0.27. Returning 2 routes; additional candidates would exceed the overlap threshold."
     _render(tmp_path, [_route()], degradation=msg)
     body = _html_body(tmp_path / "route-1.html")  # asset blobs stripped
@@ -197,7 +197,7 @@ def test_degradation_message_renders_in_both_html_and_json_when_set(
 
 
 def test_no_degradation_row_when_full_result(tmp_path: pathlib.Path) -> None:
-    """A non-degraded run carries no degradation row in HTML; JSON value is null (AC #4)."""
+    """A non-degraded run carries no degradation row in HTML; JSON value is null."""
     _render(tmp_path, [_route()])  # degradation defaults to None
     body = _html_body(tmp_path / "route-1.html")
     assert "<th>degradation</th>" not in body
@@ -228,7 +228,7 @@ def test_json_sidecar_structure(tmp_path: pathlib.Path) -> None:
 
 
 def test_metrics_and_validation_summary_render_in_html(tmp_path: pathlib.Path) -> None:
-    """Per-route metrics + the pass/fail summary appear in the HTML, not just JSON (AC #4)."""
+    """Per-route metrics + the pass/fail summary appear in the HTML, not just JSON."""
     _render(tmp_path, [_route(passed=True)])
     body = _html_body(tmp_path / "route-1.html")  # asset blobs stripped
     assert "300" in body  # length_m 300.0 -> "%.0f"
@@ -238,7 +238,7 @@ def test_metrics_and_validation_summary_render_in_html(tmp_path: pathlib.Path) -
 
 
 def test_rerender_overwrites_existing_files_in_place(tmp_path: pathlib.Path) -> None:
-    """Re-running render into a populated dir overwrites route-<i> in place (AC #1, idempotent)."""
+    """Re-running render into a populated dir overwrites route-<i> in place (, idempotent)."""
     _render(tmp_path, [_route(passed=True)])
     assert "VALIDATION FAILED" not in (tmp_path / "route-1.html").read_text(encoding="utf-8")
 
@@ -280,10 +280,10 @@ def test_route_with_unresolvable_edge_still_renders(tmp_path: pathlib.Path) -> N
 
 
 def test_render_handles_reusable_connector_traversed_twice(tmp_path: pathlib.Path) -> None:
-    """A route reusing a short connector in both directions renders without error (Story 5.2).
+    """A route reusing a short connector in both directions renders without error.
 
-    Story 5.2 lets an exempt short connector recur (both directions) in one
-    route. The renderer iterates `route.edges` sequentially and only dedups the
+    An exempt short connector may recur (both directions) in one route. The
+    renderer iterates `route.edges` sequentially and only dedups the
     shared join vertex, so the connector's geometry is simply drawn on each
     traversal — confirm it does not assume edge-uniqueness and crash.
     """
@@ -378,7 +378,7 @@ def test_map_and_profile_hover_linking_wired(tmp_path: pathlib.Path) -> None:
 
 
 def test_search_area_overlay_wired(tmp_path: pathlib.Path) -> None:
-    """The query area is drawn as an L.polygon from the injected ring (Story 15.3)."""
+    """The query area is drawn as an L.polygon from the injected ring."""
     _render(tmp_path, [_route()])
     html = (tmp_path / "route-1.html").read_text(encoding="utf-8")  # raw: overlay is in a <script>
     assert "L.polygon" in html
@@ -393,7 +393,7 @@ def test_search_area_overlay_wired(tmp_path: pathlib.Path) -> None:
 
 
 def test_search_area_overlay_draws_the_true_rotated_box(tmp_path: pathlib.Path) -> None:
-    """Story 15.3 AC #6: a rotated area draws its real corners, not an axis-aligned proxy.
+    """A rotated area draws its real corners, not an axis-aligned proxy.
 
     The envelope-leak guard: every emitted corner must lie strictly inside the
     axis-aligned envelope on at least one axis (a rotated rectangle touches its

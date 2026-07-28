@@ -1,4 +1,4 @@
-"""Real-signal interrupt for the query CLI (Story 7.3, FR14 / NFR3 / FR30 code 130).
+"""Real-signal interrupt for the query CLI (FR14 / NFR3 / FR30 code 130).
 
 Launches the query entry point as a genuine OS subprocess against a seeded cache
 and sends it a real interrupt mid-solve. Unlike the `CliRunner` e2e tests this
@@ -76,7 +76,7 @@ def test_real_ctrl_c_flushes_best_so_far_and_preserves_cache(
         str(output_dir),
         "--seed",
         "42",
-        # Pinned pre-2026-07-28 baseline (spec-cli-defaults-and-setup-radius-cap.md):
+        # Pinned pre-2026-07-28 baseline:
         # this test builds its own subprocess argv rather than going through
         # `run_query`, so it must pin its own baseline. `--workers 1` is the one
         # that matters most here — the CLI's own default is now 4, and this test

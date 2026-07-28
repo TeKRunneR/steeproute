@@ -2,7 +2,7 @@
 # Reason: same osmnx / networkx boundary as tests/integration/test_grasp_on_fixture.py;
 # `reportImplicitRelativeImport` — `from conftest import ...` is the shape that resolves
 # under pytest's prepend import mode (see test_oracle_correctness.py for the rationale).
-"""Validator integration tests on the real Grenoble fixture (Story 3.9 AC #6).
+"""Validator integration tests on the real Grenoble fixture.
 
 Two assertions the unit suite can't make:
 
@@ -54,8 +54,8 @@ def _params() -> SolverParams:
         untagged_policy="include",
         seed=GRENOBLE_SEED,
         iter_budget=_ITER_BUDGET,
-        # Story 7.2 made time/stagnation termination live; disable stagnation so
-        # the result stays an iter-budget-only function of the seed (the
+        # Disable stagnation so the result stays an iter-budget-only function of
+        # the seed (the
         # assertions below pin that exact route set). time_budget can't bind on
         # this small fixture's ~100 fast iterations.
         time_budget=60.0,

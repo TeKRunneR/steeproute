@@ -6,7 +6,7 @@
 # `from exhaustive_oracle import ...` in `test_solver_on_toy_graph.py`.
 """Metamorphic invariants for the GRASP solver — the 8 logical relations from
 PRD Appendix A(b) (Architecture §Cat 11a/11c), plus the FR32 descent-cap relation
-(Story 10.2).
+.
 
 Metamorphic testing catches logical bugs that unit tests miss — inverted Jaccard,
 broken seed threading, wrong objective direction, node-ID order leaking into the
@@ -23,7 +23,7 @@ an edge changes the restricted-candidate-list contents and therefore the
 seed-driven walk, so GRASP's best is only guaranteed monotone if GRASP actually
 reaches the optimum on both sides. We therefore use a deliberately small, sparse
 graph (`num_layers=5`, `layer_width=2`, `density=0.4` → 10 nodes) — the *opposite*
-of the Story 3.7 quality gate, which deepened the graph to make GRASP suboptimal.
+of the quality gate, which deepens the graph to make GRASP suboptimal.
 On this shape GRASP reaches the exhaustive optimum on every seed (verified against
 `enumerate_best` during design), so the monotonicity/equality relations hold
 deterministically rather than flakily.
@@ -48,7 +48,7 @@ detection-side monotonicity of `min_climb_slope` belongs to a climb-detection
 test, not to this solver-level suite. The `scale_elevation` invariant still
 co-scales it for intent (see that test), but the result is unaffected.
 
-Why there is no `l_connector` invariant (Story 5.3)
+Why there is no `l_connector` invariant
 ===================================================
 
 The Section-4C sprint-change proposal floated a `raise l_connector → best
@@ -67,16 +67,16 @@ concern, not a solver-level one.
 The undirected-reuse *behaviour* (out-and-back rejected, exempt connector may
 recur, undirected `base_segment_id` enforced in either direction) is proven by
 the dedicated solver/oracle/validator unit tests and the real-Grenoble-fixture
-test added in Story 5.2 — not here. This suite stays on the toy factory's
-*directed* per-edge tags (`conftest.py`) on purpose: that keeps its feasible set
-bit-identical to pre-5.2 so the 8 objective-monotonicity invariants below (which
-are orthogonal to reuse identity) and the Story 3.7 quality gate are unperturbed.
+dedicated reuse tests — not here. This suite stays on the toy factory's
+*directed* per-edge tags (`conftest.py`) on purpose: undirected tags would shrink
+its feasible set, and the 8 objective-monotonicity invariants below are orthogonal
+to reuse identity, so that would only add noise.
 The two invariants that *do* touch the base-segment identity — node-relabel
 isomorphism and add-edge monotonicity — exercise it explicitly (the relabel
 transform remaps the identity tuples; the add-edge transform tags the new edge
 with a fresh, non-colliding id so it cannot retro-block an existing segment).
 
-Why the descent-cap invariant uses its own fixture (Story 10.2)
+Why the descent-cap invariant uses its own fixture
 ==============================================================
 
 The 9th relation — `relax --max-descent-slope (raise the cap) → best objective
@@ -104,7 +104,7 @@ from conftest import make_toy_contracted_graph, make_toy_solver_params
 from steeproute.models import ContractedGraph, Edge, Solution, SolverParams
 from steeproute.solver.grasp import GraspSolver
 
-# --- Fixture shape: small + sparse so GRASP == the exhaustive optimum on every seed.
+# Fixture shape: small + sparse so GRASP == the exhaustive optimum on every seed.
 _NUM_LAYERS = 5
 _LAYER_WIDTH = 2
 _DENSITY = 0.4
@@ -146,12 +146,8 @@ def _best_objective(graph: ContractedGraph, params: SolverParams) -> float:
     return result[0].objective
 
 
-# --------------------------------------------------------------------------- #
 # Graph transforms — each builds a NEW ContractedGraph (the dataclasses are
 # frozen=True, slots=True; never mutate the shared fixture).
-# --------------------------------------------------------------------------- #
-
-
 def _with_added_edge(graph: ContractedGraph) -> ContractedGraph:
     """Add one feasible, high-objective super-edge from the first to the last spine node.
 
@@ -245,20 +241,16 @@ def _relabelled(graph: ContractedGraph, offset: int) -> ContractedGraph:
     return ContractedGraph(graph=g, super_edge_to_base=super_edge_to_base)
 
 
-# --------------------------------------------------------------------------- #
 # Monotonicity invariants — relaxing a constraint never decreases the best
 # objective. Each is non-vacuous: the relaxation demonstrably changes the result
 # on these tuned seeds.
-# --------------------------------------------------------------------------- #
-
-
 # Theta pair for the route-level relaxation. `θ` floors the WHOLE-route average
 # (D+ + D−)/length, not individual super-edges, so lowering it admits a superset
 # of routes and the best objective is monotone non-decreasing. old=0.45 keeps
 # every seed feasible (verified non-empty); new=0.25 admits the unfiltered
 # optimum. Non-vacuity is asserted at the suite level (see
 # `test_relax_theta_binds_on_at_least_one_seed`) rather than per-seed: under
-# route-level semantics the seeds' feasibility boundaries no longer coincide
+# route-level semantics the seeds' feasibility boundaries do not coincide
 # (seed 21 goes infeasible just above 0.45 while seed 26 only bends near 0.46 —
 # disjoint), so no single θ pair makes a per-seed strict-drop guard bind on all
 # five. The per-seed monotone (`>=`) invariant plus the suite-level strict-gain
@@ -350,7 +342,7 @@ def test_increase_iter_budget_objective_non_decreasing(seed: int) -> None:
     accumulates, so `best(M) >= best(N)` for `M > N`.
     """
     graph = _base_graph(seed)
-    small, large = 5, 10  # N, 2N — AC #3's best(2N) >= best(N) relation
+    small, large = 5, 10  # N, 2N — best(2N) >= best(N) relation
     old_obj = _best_objective(graph, _params(iter_budget=small))
     new_obj = _best_objective(graph, _params(iter_budget=large))
     assert new_obj >= old_obj, (
@@ -358,11 +350,7 @@ def test_increase_iter_budget_objective_non_decreasing(seed: int) -> None:
     )
 
 
-# --------------------------------------------------------------------------- #
 # Scaling / equality invariants.
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.parametrize("seed", _SEEDS)
 def test_scale_elevation_objective_scales_proportionally(seed: int) -> None:
     """Scaling all elevation by k scales the best objective by exactly k.
@@ -419,12 +407,8 @@ def test_graph_isomorphism_objective_identical(seed: int) -> None:
     )
 
 
-# --------------------------------------------------------------------------- #
-# FR32 descent-cap monotonicity (Story 10.2) — dedicated descent fixture (the
+# FR32 descent-cap monotonicity — dedicated descent fixture (the
 # toy factory models no descents; see the module docstring).
-# --------------------------------------------------------------------------- #
-
-
 def _descent_graph() -> ContractedGraph:
     """A 4-node graph whose best route descends a steep, cappable segment.
 
@@ -482,7 +466,7 @@ def _descent_params(*, max_descent_slope: float | None, seed: int) -> SolverPara
 
 @pytest.mark.parametrize("seed", _SEEDS)
 def test_relax_max_descent_slope_objective_non_decreasing(seed: int) -> None:
-    """Raising the descent cap admits descents it previously forbade → best objective must not drop."""
+    """A higher descent cap admits strictly more descents → best objective must not drop."""
     graph = _descent_graph()
     tight, loose = 0.45, 2.0  # 0.45 blocks the 0.70 descent; 2.0 admits everything
     old_obj = _best_objective(graph, _descent_params(max_descent_slope=tight, seed=seed))

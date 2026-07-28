@@ -2,8 +2,8 @@
 # Reason: same osmnx/networkx boundary as test_output_on_fixture.py; reportPrivateUsage
 # relaxed because the box==curve assertion deliberately reuses `output._route_vertices`
 # (the exact vertex list the renderer plots) to compare against the metric box.
-"""Story 6.3 regression test: the metric box, the solver objective, and the plotted
-elevation curve all read ONE canonical profile (box == curve).
+"""The metric box, the solver objective, and the plotted elevation curve all read
+ONE canonical profile (box == curve).
 
 The pre-6.3 design split the profile: the box/solver summed a per-edge-smoothed
 elevation while the deadband was applied only at sum-time (it produced a *number*
@@ -168,9 +168,9 @@ def test_rendered_vertices_identical_when_render_graph_is_filtered_in_place(
 ) -> None:
     """Rendering off the consumed (in-place filtered) graph resolves identical vertices.
 
-    Story 16.1 made the CLI's render graph *be* the filtered graph rather than an
-    unfiltered superset. `output._edge_vertices` returns `[]` for an edge absent
-    from the graph instead of raising, so a route edge lost to the filter would
+    The CLI's render graph *is* the filtered graph, not an unfiltered superset.
+    `output._edge_vertices` returns `[]` for an edge absent from the graph instead
+    of raising, so a route edge lost to the filter would
     silently shorten a rendered curve — this pins vertex-for-vertex equality
     against the superset path rather than arguing the invariant.
     """

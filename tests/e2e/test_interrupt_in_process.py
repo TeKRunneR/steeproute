@@ -2,7 +2,7 @@
 # Reason: these tests intentionally monkeypatch the solver's private
 # `_construct_one` seam — the per-iteration construction hook — to inject a
 # KeyboardInterrupt at a controlled point. There is no public equivalent.
-"""In-process Ctrl-C flow for the query CLI (Story 7.3, FR14 / §Cat 5b).
+"""In-process Ctrl-C flow for the query CLI (FR14 / §Cat 5b).
 
 Monkeypatches a `KeyboardInterrupt` into GRASP construction to drive the query
 CLI's interrupt handler deterministically — without a real OS signal — and

@@ -11,10 +11,10 @@ file covers the smaller primitives + recovery branches.
 # private so other call sites don't reach in, not so tests can't pin them. Same
 # rationale as `tests/unit/test_check_coverage.py`. The `reportUnknown*` /
 # `reportMissingTypeArgument` relaxations cover the networkx boundary in the
-# Story 16.2/16.3 payload tests, same pattern as `tests/unit/test_smoothing.py`;
+# the payload tests, same pattern as `tests/unit/test_smoothing.py`;
 # `reportUnknownParameterType` is the signature-level member of that same group,
-# needed once Story 16.3's helpers started taking/returning a bare
-# `nx.MultiDiGraph` (generic parameter unspecified upstream).
+# needed because the payload helpers take/return a bare `nx.MultiDiGraph`
+# (generic parameter unspecified upstream).
 
 from __future__ import annotations
 
@@ -42,12 +42,12 @@ from steeproute.models import Area
 
 _INDEX_SCHEMA_VERSION = 1
 # Mirrored (not imported) on purpose: a production bump must fail loudly here so
-# the on-disk-format change is a deliberate, reviewed edit. v3 = Story 15.2's
-# rotated `area` block.
+# the on-disk-format change is a deliberate, reviewed edit. v3 is the manifest
+# schema carrying the generalized (rotated) `area` block.
 _MANIFEST_SCHEMA_VERSION = 3
 
 
-# --- Story 16.2: consuming graph payload build --------------------------------
+# Consuming graph-payload build.
 
 
 def _two_edge_graph() -> nx.MultiDiGraph:
@@ -86,9 +86,9 @@ def _assert_payloads_equal(produced: dict[str, object], expected: dict[str, obje
 def _legacy_v2_payload(graph: nx.MultiDiGraph) -> dict[str, object]:
     """A schema-v2 payload: the stripped graph plus ragged geometry arrays.
 
-    Mirrors the pre-Story-16.3 `_graph_to_payload` output so the legacy read path
-    is exercised against the shape that is actually on disk in older entries,
-    rather than against a hand-waved approximation of it.
+    Mirrors the schema-v2 `_graph_to_payload` output so the legacy read path is
+    exercised against the shape that is actually on disk in older entries, rather
+    than against a hand-waved approximation of it.
     """
     stripped = graph.copy()
     geometries = [d.pop("geometry") for _u, _v, d in stripped.edges(data=True)]
@@ -102,21 +102,21 @@ def _legacy_v2_payload(graph: nx.MultiDiGraph) -> dict[str, object]:
 
 
 def test_graph_to_payload_consume_matches_the_copying_path() -> None:
-    """AC #5: the consuming payload build is content-identical to the copying one."""
+    """The consuming payload build is content-identical to the copying one."""
     expected = cache_mod._graph_to_payload(_two_edge_graph())
     produced = cache_mod._graph_to_payload(_two_edge_graph(), consume=True)
     _assert_payloads_equal(produced, expected)
 
 
 def test_graph_to_payload_default_leaves_caller_geometry_intact() -> None:
-    """AC #5: the copying default keeps its purity contract for every other caller."""
+    """The copying default keeps its purity contract for every other caller."""
     graph = _two_edge_graph()
     _ = cache_mod._graph_to_payload(graph)
     assert all("geometry" in d for _u, _v, d in graph.edges(data=True))
 
 
 def test_graph_to_payload_consume_strips_geometry_from_the_caller_graph() -> None:
-    """AC #5: opting in forfeits `geometry` on the caller's own graph."""
+    """Opting in forfeits `geometry` on the caller's own graph."""
     graph = _two_edge_graph()
     _ = cache_mod._graph_to_payload(graph, consume=True)
     assert all("geometry" not in d for _u, _v, d in graph.edges(data=True))
@@ -124,11 +124,11 @@ def test_graph_to_payload_consume_strips_geometry_from_the_caller_graph() -> Non
     assert all("vertices_resampled" in d for _u, _v, d in graph.edges(data=True))
 
 
-# --- Story 16.3: schema-v3 geometry-free payload ------------------------------
+# Schema-v3 geometry-free payload.
 
 
 def test_graph_to_payload_writes_no_geometry_parts() -> None:
-    """AC #3: v3 stores the graph and nothing else — no coordinate arrays."""
+    """V3 stores the graph and nothing else — no coordinate arrays."""
     payload = cache_mod._graph_to_payload(_two_edge_graph())
 
     assert payload["steeproute_graph_payload"] == 3
@@ -140,7 +140,7 @@ def test_graph_to_payload_writes_no_geometry_parts() -> None:
 
 
 def test_graph_from_payload_reads_a_legacy_v2_entry_without_reconstructing_geometry() -> None:
-    """AC #2/#4: a v2 payload still loads; its geometry arrays are ignored, not rebuilt."""
+    """A v2 payload still loads; its geometry arrays are ignored, not rebuilt."""
     source = _two_edge_graph()
     legacy = _legacy_v2_payload(source)
 
@@ -153,7 +153,7 @@ def test_graph_from_payload_reads_a_legacy_v2_entry_without_reconstructing_geome
 
 
 def test_graph_from_payload_v2_and_v3_agree_for_every_consumer() -> None:
-    """AC #2: the loaded graph is content-identical across the two payload versions."""
+    """The loaded graph is content-identical across the two payload versions."""
     source = _two_edge_graph()
 
     from_v2 = cache_mod._graph_from_payload(_legacy_v2_payload(source), "0123456789abcdef")
@@ -164,7 +164,7 @@ def test_graph_from_payload_v2_and_v3_agree_for_every_consumer() -> None:
 
 
 def test_graph_from_payload_rejects_an_unknown_payload_version() -> None:
-    """AC #4: an unrecognized version is corrupt, not silently read."""
+    """An unrecognized version is corrupt, not silently read."""
     payload = cache_mod._graph_to_payload(_two_edge_graph())
     payload["steeproute_graph_payload"] = 99
 
@@ -173,7 +173,7 @@ def test_graph_from_payload_rejects_an_unknown_payload_version() -> None:
 
 
 def test_graph_from_payload_rejects_a_non_graph_payload_part() -> None:
-    """AC #4: a payload whose `graph` part isn't a MultiDiGraph is corrupt."""
+    """A payload whose `graph` part isn't a MultiDiGraph is corrupt."""
     with pytest.raises(CacheCorruptedError, match="incompatible graph payload"):
         _ = cache_mod._graph_from_payload(
             {"steeproute_graph_payload": 3, "graph": "not-a-graph"}, "0123456789abcdef"
@@ -181,7 +181,7 @@ def test_graph_from_payload_rejects_a_non_graph_payload_part() -> None:
 
 
 def test_read_entry_loads_a_legacy_v2_entry_on_disk(tmp_path: pathlib.Path) -> None:
-    """AC #4: already-prepared v2 caches stay queryable across the format change."""
+    """Already-prepared v2 caches stay queryable across the format change."""
     area = Area(center=(45.26, 5.78), radius_km=2.0)
     manifest = dataclasses.replace(
         Manifest.from_dict(_manifest_payload()), area=area, cache_key_hash="0" * 16
@@ -201,7 +201,7 @@ def test_read_entry_loads_a_legacy_v2_entry_on_disk(tmp_path: pathlib.Path) -> N
 
 @pytest.mark.parametrize("consume", [False, True])
 def test_graph_to_payload_rejects_non_linestring_geometry_on_both_paths(consume: bool) -> None:
-    """AC #5: the post-stage-5 contract check is identical on both paths."""
+    """The post-stage-5 contract check is identical on both paths."""
     graph = _two_edge_graph()
     graph.edges[0, 1, 0]["geometry"] = "not-a-linestring"
     with pytest.raises(ValueError, match="requires a shapely LineString"):
@@ -209,7 +209,7 @@ def test_graph_to_payload_rejects_non_linestring_geometry_on_both_paths(consume:
 
 
 def test_write_entry_consume_round_trips_to_the_same_graph(tmp_path: pathlib.Path) -> None:
-    """AC #5: an entry written the consuming way reads back identical to the copying way.
+    """An entry written the consuming way reads back identical to the copying way.
 
     Content equality, not `graph.pkl` byte equality: networkx caches its lazily
     built `adj` / `succ` / `edges` view objects in the graph's `__dict__`, and
@@ -240,9 +240,7 @@ def test_write_entry_consume_round_trips_to_the_same_graph(tmp_path: pathlib.Pat
     assert all("geometry" not in d for _u, _v, d in consumed_graph.edges(data=True))
 
 
-# --- write_json_atomic --------------------------------------------------------
-
-
+# Write_json_atomic.
 def test_write_json_atomic_creates_target_with_expected_content(tmp_path: pathlib.Path) -> None:
     target = tmp_path / "index.json"
     write_json_atomic(target, {"entries": [], "schema_version": _INDEX_SCHEMA_VERSION})
@@ -270,7 +268,7 @@ def test_write_json_atomic_leaves_no_tmp_artifact(tmp_path: pathlib.Path) -> Non
 
 
 def test_write_json_atomic_emits_sorted_keys(tmp_path: pathlib.Path) -> None:
-    """AC #7 / #8: deterministic output enables diff-stable cache state across runs."""
+    """Deterministic output enables diff-stable cache state across runs."""
     target = tmp_path / "manifest.json"
     write_json_atomic(target, {"z": 1, "a": 2, "m": 3})
 
@@ -279,10 +277,10 @@ def test_write_json_atomic_emits_sorted_keys(tmp_path: pathlib.Path) -> None:
 
 
 def test_write_json_atomic_chokepoint_no_direct_writes_in_cache_module() -> None:
-    """AC #2: `cache.py` contains no direct `open(..., "w")` on JSON files.
+    """`cache.py` contains no direct `open(..., "w")` on JSON files.
 
-    Verified by AST-walking the module — every Story 2.7 JSON write must route
-    through `write_json_atomic` per Architecture §Key anti-patterns.
+    Verified by AST-walking the module — every JSON write must route through
+    `write_json_atomic` per Architecture §Key anti-patterns.
     """
     import ast
 
@@ -309,13 +307,11 @@ def test_write_json_atomic_chokepoint_no_direct_writes_in_cache_module() -> None
         )
         assert not (positional_mode or kw_mode), (
             f"Direct `open(..., 'w')` write at line {node.lineno} in cache.py — "
-            "Story 2.7 routes all JSON writes through `write_json_atomic`."
+            "All cache JSON writes must route through `write_json_atomic`."
         )
 
 
-# --- rebuild_index recovery ---------------------------------------------------
-
-
+# Rebuild_index recovery.
 _DEFAULT_AREA = Area(center=(45.0, 6.0), radius_km=2.0)
 
 
@@ -371,7 +367,7 @@ def test_rebuild_index_overwrites_corrupt_index(tmp_path: pathlib.Path) -> None:
 
 
 def test_rebuild_index_skips_dirs_without_manifest(tmp_path: pathlib.Path) -> None:
-    """AC #6: directories without `manifest.json` (`.tmp/`, `.old/`, half-written) are ignored."""
+    """Directories without `manifest.json` (`.tmp/`, `.old/`, half-written) are ignored."""
     areas_dir = tmp_path / "steeproute" / "areas"
     areas_dir.mkdir(parents=True)
     (areas_dir / "fedcba9876543210.tmp").mkdir()
@@ -387,7 +383,7 @@ def test_rebuild_index_skips_dirs_without_manifest(tmp_path: pathlib.Path) -> No
 
 
 def test_rebuild_index_emits_entries_sorted_by_cache_key_hash(tmp_path: pathlib.Path) -> None:
-    """AC #7: deterministic entry order → diff-stable index.json."""
+    """Deterministic entry order → diff-stable index.json."""
     _write_entry_dir(tmp_path, "ffffffffffffffff")
     _write_entry_dir(tmp_path, "0000000000000000")
     _write_entry_dir(tmp_path, "8888888888888888")
@@ -419,9 +415,7 @@ def test_rebuild_index_bootstraps_missing_areas_directory(tmp_path: pathlib.Path
     assert payload == {"schema_version": _INDEX_SCHEMA_VERSION, "entries": []}
 
 
-# --- Manifest.from_dict + PreparedData ---------------------------------------
-
-
+# Manifest.from_dict + PreparedData.
 def _manifest_payload(**overrides: object) -> dict[str, object]:
     base: dict[str, object] = {
         "schema_version": _MANIFEST_SCHEMA_VERSION,
@@ -462,8 +456,8 @@ def test_manifest_from_dict_raises_on_unknown_schema_version() -> None:
 def test_manifest_from_dict_raises_on_legacy_schema_version(legacy_version: int) -> None:
     """Every superseded schema is rejected with the re-prepare hint, no compat shim.
 
-    v1 → v2 changed the graph payload format (Story 13.2); v2 → v3 generalized the
-    `area` block to the rotated rectangle (Story 15.2). Architecture
+    v1 → v2 changed the graph payload format; v2 → v3 generalized the
+    `area` block to the rotated rectangle. Architecture
     §Versioned-contract-surfaces takes the same line for both: a stale entry
     re-prepares once via the existing recovery paths (query: exit 2 with the
     actionable message; setup: re-prepare-as-recovery).
@@ -501,11 +495,9 @@ def test_manifest_from_dict_raises_on_missing_required_field() -> None:
     assert exc_info.value.detail is not None and "dem_version" in exc_info.value.detail
 
 
-# --- read_entry error paths ---------------------------------------------------
-
-
+# Read_entry error paths.
 def test_read_entry_raises_cache_not_found_when_manifest_missing(tmp_path: pathlib.Path) -> None:
-    """AC #4: an entry directory without a `manifest.json` is treated as absent."""
+    """An entry directory without a `manifest.json` is treated as absent."""
     (tmp_path / "steeproute" / "areas" / "0123456789abcdef").mkdir(parents=True)
 
     with pytest.raises(CacheNotFoundError, match="0123456789abcdef"):
@@ -520,7 +512,7 @@ def test_read_entry_raises_cache_not_found_for_unknown_key(tmp_path: pathlib.Pat
 def test_read_entry_raises_cache_corrupted_on_malformed_manifest_json(
     tmp_path: pathlib.Path,
 ) -> None:
-    """AC #4: unparseable `manifest.json` surfaces as `CacheCorruptedError`."""
+    """Unparseable `manifest.json` surfaces as `CacheCorruptedError`."""
     entry_dir = tmp_path / "steeproute" / "areas" / "0123456789abcdef"
     entry_dir.mkdir(parents=True)
     (entry_dir / "manifest.json").write_text("{not valid", encoding="utf-8")
@@ -530,7 +522,7 @@ def test_read_entry_raises_cache_corrupted_on_malformed_manifest_json(
 
 
 def test_read_entry_raises_cache_corrupted_on_missing_graph_pkl(tmp_path: pathlib.Path) -> None:
-    """AC #4: manifest present + graph.pkl missing → `CacheCorruptedError`."""
+    """Manifest present + graph.pkl missing → `CacheCorruptedError`."""
     entry_dir = tmp_path / "steeproute" / "areas" / "0123456789abcdef"
     entry_dir.mkdir(parents=True)
     write_json_atomic(entry_dir / "manifest.json", _manifest_payload())
@@ -542,7 +534,7 @@ def test_read_entry_raises_cache_corrupted_on_missing_graph_pkl(tmp_path: pathli
 def test_read_entry_raises_cache_corrupted_on_legacy_graph_payload(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Story 13.2: a v2 manifest over an old-format `graph.pkl` (raw pickled graph) is corrupt.
+    """A v2+ manifest over a raw pickled graph (no payload dict) is corrupt.
 
     Unreachable through normal writes (the manifest version and the payload
     format move together), but a hand-assembled or half-converted entry must
@@ -576,17 +568,15 @@ def test_prepared_data_is_frozen() -> None:
         prepared.manifest = manifest  # pyright: ignore[reportAttributeAccessIssue]
 
 
-# --- resolve_cache_root -------------------------------------------------------
-
-
+# Resolve_cache_root.
 def test_resolve_cache_root_returns_override_when_provided(tmp_path: pathlib.Path) -> None:
-    """AC #9: explicit `--cache-dir` (Story 2.8) bypasses the platformdirs default."""
+    """Explicit `--cache-dir` bypasses the platformdirs default."""
     resolved = resolve_cache_root(tmp_path)
     assert resolved == tmp_path
 
 
 def test_resolve_cache_root_returns_platformdirs_default_when_no_override() -> None:
-    """AC #9: `None` → `platformdirs.user_cache_dir("steeproute")`."""
+    """`None` → `platformdirs.user_cache_dir("steeproute")`."""
     default_root = resolve_cache_root(None)
     # No strict-string assertion — platformdirs picks platform-specific paths
     # (`%LOCALAPPDATA%\\steeproute\\Cache\\` on Windows, `~/.cache/steeproute`
@@ -595,7 +585,7 @@ def test_resolve_cache_root_returns_platformdirs_default_when_no_override() -> N
     assert re.search(r"[\\/](?i:steeproute)([\\/]Cache)?$", str(default_root)) is not None
 
 
-# --- entry_dir_for (Story 2.8 review patch P3) -------------------------------
+# `entry_dir_for`.
 
 
 def test_entry_dir_for_matches_write_entry_layout(tmp_path: pathlib.Path) -> None:
@@ -614,13 +604,11 @@ def test_entry_dir_for_matches_write_entry_layout(tmp_path: pathlib.Path) -> Non
     assert result == tmp_path / "steeproute" / "areas" / cache_key
 
 
-# --- Review patch P2: bounds.geojson axis-order consistency ------------------
-
-
+# Bounds.geojson axis-order consistency.
 def test_bounds_geojson_geometry_and_properties_center_use_lon_lat_consistently(
     tmp_path: pathlib.Path,
 ) -> None:
-    """P2: `properties.center` and `geometry.coordinates` must agree on axis order.
+    """`properties.center` and `geometry.coordinates` must agree on axis order.
 
     GeoJSON RFC 7946 mandates `[lon, lat]` in `geometry.coordinates`; the
     properties block follows the same convention so a consumer reading both
@@ -665,7 +653,7 @@ def test_bounds_geojson_geometry_and_properties_center_use_lon_lat_consistently(
     assert properties_center == pytest.approx([6.1079, 45.0716])  # pyright: ignore[reportUnknownMemberType]
 
 
-# --- Story 15.2: rotated geometry through the on-disk surfaces ---------------
+# Rotated geometry through the on-disk surfaces.
 
 
 def _rotated_area() -> Area:
@@ -699,7 +687,7 @@ def _write_rotated_entry(cache_root: pathlib.Path) -> pathlib.Path:
 
 
 def test_bounds_geojson_records_the_true_rotated_ring(tmp_path: pathlib.Path) -> None:
-    """AC #8: the sidecar carries the real footprint, not the axis-aligned envelope.
+    """The sidecar carries the real footprint, not the axis-aligned envelope.
 
     A rotated box's envelope is strictly larger than the box, so a sidecar built
     from `.bounds` would misrepresent what was actually prepared. The ring must
@@ -725,7 +713,7 @@ def test_bounds_geojson_records_the_true_rotated_ring(tmp_path: pathlib.Path) ->
 
 
 def test_bounds_geojson_properties_describe_the_rotated_shape(tmp_path: pathlib.Path) -> None:
-    """AC #8: `properties` uses the manifest's vocabulary, with GeoJSON `[lon, lat]` center."""
+    """`properties` uses the manifest's vocabulary, with GeoJSON `[lon, lat]` center."""
     import json as _json
 
     entry_dir = _write_rotated_entry(tmp_path)
@@ -745,7 +733,7 @@ def test_bounds_geojson_properties_describe_the_rotated_shape(tmp_path: pathlib.
 def test_rebuild_index_writes_rotated_geometry_readable_by_coverage(
     tmp_path: pathlib.Path,
 ) -> None:
-    """AC #4/#5: the index write and read sides agree on a rotated row.
+    """The index write and read sides agree on a rotated row.
 
     `rebuild_index` and `Manifest.to_dict` share `_area_wire_dict`, so a rotated
     entry round-trips through `index.json` without the geometry being flattened to
@@ -809,11 +797,9 @@ def test_gc_scopes_superseded_entries_by_rotated_geometry(tmp_path: pathlib.Path
     assert entry_dir_for(tmp_path, "bbbbbbbbbbbbbbbb").is_dir()
 
 
-# --- Review patch P3: Manifest.from_dict input validation --------------------
-
-
+# Manifest.from_dict input validation.
 def test_manifest_from_dict_raises_on_null_string_field() -> None:
-    """P3: `null` for a required string field surfaces as CacheCorruptedError, not coerced to 'None'."""
+    """`null` for a required string field surfaces as CacheCorruptedError, not coerced to 'None'."""
     payload = _manifest_payload(dem_version=None)
 
     with pytest.raises(CacheCorruptedError) as exc_info:
@@ -823,7 +809,7 @@ def test_manifest_from_dict_raises_on_null_string_field() -> None:
 
 
 def test_manifest_from_dict_raises_on_non_string_dict_field() -> None:
-    """P3: a dict where a string is expected → CacheCorruptedError."""
+    """A dict where a string is expected → CacheCorruptedError."""
     payload = _manifest_payload(steeproute_commit={"unexpected": "shape"})
 
     with pytest.raises(CacheCorruptedError) as exc_info:
@@ -832,7 +818,7 @@ def test_manifest_from_dict_raises_on_non_string_dict_field() -> None:
 
 
 def test_manifest_from_dict_raises_on_non_numeric_area_coordinates() -> None:
-    """P3: `float()` rejection on non-numeric center surfaces as `CacheCorruptedError`.
+    """`float()` rejection on non-numeric center surfaces as `CacheCorruptedError`.
 
     The `isinstance(center, list) and len == 2` guard accepts a list of any
     element types — strings reach the `float()` conversion and the
@@ -846,14 +832,12 @@ def test_manifest_from_dict_raises_on_non_numeric_area_coordinates() -> None:
         Manifest.from_dict(payload)
 
 
-# --- Review patch P4: write_json_atomic cleans up .tmp on failure -----------
-
-
+# Write_json_atomic cleans up .tmp on failure.
 def test_write_json_atomic_cleans_up_tmp_when_os_replace_fails(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """P4: a failed `os.replace` must not leave the `.tmp` sibling behind."""
+    """A failed `os.replace` must not leave the `.tmp` sibling behind."""
     target = tmp_path / "manifest.json"
 
     def failing_replace(_src: object, _dst: object) -> None:
@@ -872,7 +856,7 @@ def test_write_json_atomic_cleans_up_tmp_when_write_fails(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """P4: a failure during `write_text` (ENOSPC sim) also cleans up the `.tmp` orphan."""
+    """A failure during `write_text` (ENOSPC sim) also cleans up the `.tmp` orphan."""
     import pathlib as _pl
 
     target = tmp_path / "manifest.json"
@@ -893,13 +877,11 @@ def test_write_json_atomic_cleans_up_tmp_when_write_fails(
     assert siblings == [], f"Expected no .tmp orphan; got {siblings}"
 
 
-# --- Review patch P5: read_entry exception widening -------------------------
-
-
+# Read_entry exception widening.
 def test_read_entry_raises_cache_corrupted_on_unicode_decode_error(
     tmp_path: pathlib.Path,
 ) -> None:
-    """P5: binary garbage in `manifest.json` → CacheCorruptedError (not raw UnicodeDecodeError)."""
+    """Binary garbage in `manifest.json` → CacheCorruptedError (not raw UnicodeDecodeError)."""
     entry_dir = tmp_path / "steeproute" / "areas" / "0123456789abcdef"
     entry_dir.mkdir(parents=True)
     # Non-UTF-8 bytes — `read_text(encoding="utf-8")` raises UnicodeDecodeError.
@@ -912,17 +894,17 @@ def test_read_entry_raises_cache_corrupted_on_unicode_decode_error(
 def test_read_entry_raises_cache_corrupted_on_unpicklable_stale_graph(
     tmp_path: pathlib.Path,
 ) -> None:
-    """P5: a pickle referencing a missing module → CacheCorruptedError (not raw ImportError)."""
+    """A pickle referencing a missing module → CacheCorruptedError (not raw ImportError)."""
     entry_dir = tmp_path / "steeproute" / "areas" / "0123456789abcdef"
     entry_dir.mkdir(parents=True)
     write_json_atomic(entry_dir / "manifest.json", _manifest_payload())
     # A pickle that references a non-existent module — `pickle.load` raises
     # `ModuleNotFoundError` (a subclass of `ImportError`) which P5 maps to
     # `CacheCorruptedError`.
-    #   `\x80\x04` = protocol 4 header
-    #   `\x95...` = frame
-    #   `\x8c<len><name>` = SHORT_BINUNICODE for module name
-    #   ...this is fiddly to hand-build. Use `pickle.dumps` against a class
+    # `\x80\x04` = protocol 4 header
+    # `\x95...` = frame
+    # `\x8c<len><name>` = SHORT_BINUNICODE for module name
+    # ...this is fiddly to hand-build. Use `pickle.dumps` against a class
     # whose module we'll then make unimportable via the qualified-name string.
     import pickle
 

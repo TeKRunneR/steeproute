@@ -1,11 +1,11 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
 # Reason: networkx operations on the MultiDiGraph surface as Unknown — same
 # boundary pattern as the pipeline modules and the other contraction tests.
-"""Story 6.1 regression tests — each reproduces a real-area structural condition
-the synthetic suite missed and **fails on the pre-fix code**.
+"""Route-discovery regression tests — each reproduces a real-area structural
+condition the synthetic suite missed.
 
-Two of the three Story 6.1 fixes are covered here (the third — junction-aware
-climb splitting — is pinned in `tests/unit/test_graph_contraction.py`):
+Two of the three route-discovery fixes are covered here; the third, junction-aware
+climb splitting, is pinned in `tests/unit/test_graph_contraction.py`:
 
 1. **SAC cap-aware contraction.** A long mostly-easy climb with one above-cap
    pitch must keep its under-cap terrain routable, with the over-cap pitch
@@ -66,9 +66,7 @@ def _add_edge(
     )
 
 
-# ----------------------------------------------------------------------------
 # Fix 2: SAC cap-aware contraction
-# ----------------------------------------------------------------------------
 
 
 def _build_mixed_difficulty_chain() -> nx.MultiDiGraph:
@@ -139,9 +137,7 @@ def test_sac_cap_prefilter_keeps_under_cap_terrain_routable() -> None:
     )
 
 
-# ----------------------------------------------------------------------------
 # Fix 3: undirected Jaccard distinctness
-# ----------------------------------------------------------------------------
 
 
 def _climb(edges: list[Edge]) -> Climb:
@@ -192,7 +188,7 @@ def _out_and_back_contracted() -> ContractedGraph:
 
 
 def test_opposite_direction_reuse_is_overlap_under_undirected_distinctness() -> None:
-    """Ascending a climb and descending its reverse register as overlapping (Story 6.1).
+    """Ascending a climb and descending its reverse register as overlapping.
 
     With the undirected `base_segment_id` segment map, the ascent (the super-edge
     0→2) and the descent (the reverse connectors 2→1→0) project to the SAME base

@@ -1,13 +1,13 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
 # Reason: same networkx boundary noise as the pipeline modules under test.
-"""Unit tests for pipeline.graph.contract_climbs (stage 9, Story 3.3).
+"""Unit tests for pipeline.graph.contract_climbs (stage 9).
 
 Synthetic graphs only — every test hand-builds a `MultiDiGraph` carrying the
 stage-7 contract (`length_m`, `d_plus_m`, `d_minus_m`, `avg_gradient`,
 `sac_scale`). Real-fixture coverage lives in
 `tests/integration/test_graph_contraction_fixture.py`.
 
-AC #2 scenarios drive the per-shape unit tests; AC #4 adds the `hypothesis`
+scenarios drive the per-shape unit tests; adds the `hypothesis`
 property test pinning back-mapping injectivity + purity.
 """
 
@@ -117,7 +117,7 @@ def test_single_climb_collapses_into_one_super_edge() -> None:
 
 
 def test_contract_carries_windowed_descent_metric() -> None:
-    """Story 10.2: `max_windowed_descent_grad` carries onto connectors verbatim and onto
+    """`max_windowed_descent_grad` carries onto connectors verbatim and onto
     super-edges as the max over their base edges."""
     connector = _make_edge(10, 11, length_m=100.0, d_plus_m=5.0, d_minus_m=5.0)
     climb_edges = [
@@ -146,7 +146,7 @@ def test_contract_carries_windowed_descent_metric() -> None:
 
 
 def test_super_edge_aggregate_equals_sum_of_underlying_edges() -> None:
-    """AC #2: super-edge `length_m` / `d_plus_m` / `d_minus_m` = sum of base edges."""
+    """Super-edge `length_m` / `d_plus_m` / `d_minus_m` = sum of base edges."""
     edges = [
         _make_edge(10, 11, length_m=150.0, d_plus_m=30.0, d_minus_m=5.0),
         _make_edge(11, 12, length_m=250.0, d_plus_m=70.0, d_minus_m=10.0),
@@ -189,9 +189,10 @@ def test_back_mapping_round_trips_to_underlying_edges() -> None:
 
 
 def test_all_connectors_retained_short_tagged_reusable() -> None:
-    """Story 5.1: every connector is kept; short ones are tagged `reusable=True`.
+    """Every connector is kept; short ones are tagged `reusable=True`.
 
-    Inverts the old drop behaviour — `length_m < l_connector` no longer drops
+    `l_connector` is a reuse-exemption threshold, not a drop threshold — `length_m
+    < l_connector` must not drop
     the edge, it flags it as a reuse-exempt short linking segment.
     """
     long_connector = _make_edge(0, 1, length_m=300.0, d_plus_m=10.0, d_minus_m=10.0)
@@ -214,7 +215,7 @@ def test_all_connectors_retained_short_tagged_reusable() -> None:
 
 
 def test_contracted_connectors_carry_no_heavy_render_attrs_but_keep_the_rest() -> None:
-    """Story 16.1: contraction is lean — `geometry`/`vertices_resampled` stay on the base graph.
+    """Contraction is lean — `geometry`/`vertices_resampled` stay on the base graph.
 
     The contracted graph exists for the solver and validator, neither of which
     reads those two attributes; `output.render` resolves geometry off the
@@ -272,7 +273,7 @@ def test_connector_exactly_at_l_connector_is_not_reusable() -> None:
 
 
 def test_minor_road_connector_follows_length_based_reuse_rule() -> None:
-    """Story 6.2: a road connector rides the same `length_m < l_connector` rule as a trail.
+    """A road connector rides the same `length_m < l_connector` rule as a trail.
 
     Contraction is highway-agnostic — there is no road-specific reuse carve-out —
     so a short minor road is reuse-exempt (`reusable=True`) and a long one is not,
@@ -335,7 +336,7 @@ def test_bidirectional_climb_with_short_reverse_retains_reverse_as_reusable() ->
     Inverts the old "short reverse dropped" behaviour: the reverse-direction
     edges are now retained as short reuse-exempt connectors. Critically, each
     reverse connector shares its undirected `base_segment_id` with the climb's
-    super-edge — the collision that lets Story 5.2 forbid descending the trail
+    super-edge — the collision that lets the reuse rule forbid descending the trail
     a climb just ascended.
     """
     uphill_edges = [
@@ -395,9 +396,9 @@ def test_empty_climbs_keeps_all_connectors() -> None:
 
 
 def test_no_orphan_prune_short_connector_node_retained() -> None:
-    """Story 5.1: a node reachable only via a short connector is now retained.
+    """A node reachable only via a short connector is retained.
 
-    Replaces the old orphan-prune-after-drop test — with no drop, there are no
+    There is no drop on `l_connector`, so there are no
     orphans to prune and the previously-pruned node survives.
     """
     long_edge = _make_edge(0, 1, length_m=300.0, d_plus_m=0.0, d_minus_m=0.0)
@@ -416,10 +417,10 @@ def test_no_orphan_prune_short_connector_node_retained() -> None:
 
 
 def test_forward_and_reverse_connectors_share_base_segment_id() -> None:
-    """AC #3: a connector and its reverse-direction counterpart get the same id.
+    """A connector and its reverse-direction counterpart get the same id.
 
     The undirected identity is the canonical sorted node-pair + key, so
-    `(0, 1, 0)` and `(1, 0, 0)` collapse to one id — the property Story 5.2
+    `(0, 1, 0)` and `(1, 0, 0)` collapse to one id — the property the reuse rule
     relies on to forbid re-walking a segment in the opposite direction.
     """
     forward = _make_edge(0, 1, length_m=300.0, d_plus_m=10.0, d_minus_m=10.0)
@@ -438,7 +439,7 @@ def test_forward_and_reverse_connectors_share_base_segment_id() -> None:
 
 
 def test_super_edge_base_segment_id_is_set_of_contracted_edge_ids() -> None:
-    """AC #2: a super-edge's `base_segment_id` is the set of its base edges' ids.
+    """A super-edge's `base_segment_id` is the set of its base edges' ids.
 
     `reusable=False`, and the set size equals the number of contracted edges
     (all distinct undirected segments on a simple climb chain).
@@ -463,11 +464,11 @@ def test_super_edge_base_segment_id_is_set_of_contracted_edge_ids() -> None:
 
 
 def test_super_edge_shares_base_segment_id_with_reverse_connector() -> None:
-    """AC #3: a climb super-edge shares an id with the reverse connectors of its trail.
+    """A climb super-edge shares an id with the reverse connectors of its trail.
 
     The climb ascends 0→1→2; the descent 2→1→0 survives as connectors (here
     long, so non-reusable). Each descent connector's id must lie inside the
-    super-edge's id set — so Story 5.2 sees the out-and-back as a segment reuse.
+    super-edge's id set — so the reuse rule sees the out-and-back as a segment reuse.
     """
     uphill = [
         _make_edge(0, 1, length_m=250.0, d_plus_m=60.0),
@@ -491,7 +492,7 @@ def test_super_edge_shares_base_segment_id_with_reverse_connector() -> None:
     assert contracted.graph[2][1][0]["reusable"] is False
     assert contracted.graph[2][1][0]["base_segment_id"] <= super_base_ids
     assert contracted.graph[1][0][0]["base_segment_id"] <= super_base_ids
-    # At least one shared id (the property the epics AC pins).
+    # At least one shared id — that overlap is the whole point of the tagging.
     assert super_base_ids & contracted.graph[2][1][0]["base_segment_id"]
 
 
@@ -595,13 +596,11 @@ def test_two_climbs_share_endpoints_get_distinct_super_edge_keys() -> None:
     assert len(super_ids_for_zero_three) == 2
 
 
-# ----------------------------------------------------------------------------
-# Story 6.1: junction-aware climb splitting
-# ----------------------------------------------------------------------------
+# Junction-aware climb splitting.
 
 
 def test_climb_split_at_interior_trail_junction_default_on() -> None:
-    """Story 6.1: a climb splits at an interior node where a different trail joins.
+    """A climb splits at an interior node where a different trail joins.
 
     Climb 0→1→2→3; a side trail (10→2) joins at interior node 2 — a real
     junction. Splitting is on by default, so the atomic whole-climb super-edge
@@ -694,7 +693,7 @@ def test_no_split_at_same_trail_reverse_only_interior_node() -> None:
 
 
 def test_contract_climbs_does_not_mutate_input_graph() -> None:
-    """AC #4 purity: input `base_graph` topology and every edge-data dict preserved.
+    """Purity: input `base_graph` topology and every edge-data dict preserved.
 
     Mirrors the snapshot pattern from
     `tests/unit/test_climb_detection.py::test_detect_climbs_does_not_mutate_input_graph` —
@@ -728,9 +727,7 @@ def test_contract_climbs_does_not_mutate_input_graph() -> None:
         assert dict(data) == snapshot_contents, f"edge ({u}, {v}, {k}) data dict contents mutated"
 
 
-# ----------------------------------------------------------------------------
-# Story 10.1: road/trail junction annotation (FR31)
-# ----------------------------------------------------------------------------
+# Road/trail junction annotation (FR31).
 
 
 def _add_edge_with_highway(g: nx.MultiDiGraph, edge: Edge, highway: str | list[str]) -> None:
@@ -835,7 +832,7 @@ def test_mixed_road_trail_edge_makes_node_a_junction() -> None:
     `classify_highway` calls this edge a `"trail"` (trails win), which would hide
     its road side. Junction detection tests road- and trail-tag presence
     independently, so a node whose only road evidence is such a mixed way is
-    still flagged a junction (Story 10.1 review #1).
+    still flagged a junction.
     """
     mixed = _make_edge(0, 1, length_m=300.0, d_plus_m=1.0, d_minus_m=1.0, sac_scale=None)
     trail = _make_edge(1, 2, length_m=300.0, d_plus_m=20.0, d_minus_m=20.0)
@@ -855,7 +852,7 @@ def test_junction_attribute_absent_when_not_requested() -> None:
     """With `annotate_junctions=False` (default), the O(E) pass is skipped — no attribute.
 
     The flag-off query path never sets `is_road_trail_junction`; downstream reads
-    go through `is_junction_node`, which fails closed (Story 10.1 review #3).
+    go through `is_junction_node`, which fails closed.
     """
     trail = _make_edge(0, 1, length_m=300.0, d_plus_m=20.0, d_minus_m=20.0)
     road = _make_edge(1, 2, length_m=300.0, d_plus_m=1.0, d_minus_m=1.0, sac_scale=None)
@@ -870,9 +867,7 @@ def test_junction_attribute_absent_when_not_requested() -> None:
     assert is_junction_node(contracted, 1) is False
 
 
-# ----------------------------------------------------------------------------
-# AC #4: hypothesis property test — back-mapping injectivity + purity
-# ----------------------------------------------------------------------------
+# Hypothesis property test — back-mapping injectivity + purity
 
 
 @st.composite

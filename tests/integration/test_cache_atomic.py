@@ -6,7 +6,7 @@ Architecture §Cat 4d guarantees Ctrl-C during `write_entry` cannot leave an ent
 that readers mistake for valid (manifest = commit signal). We test this by
 monkeypatching `os.replace` to raise `KeyboardInterrupt` exactly once, at the
 point where `graph.pkl` is on disk in the `.tmp/` directory but `manifest.json`
-has not yet been written. Story 2.7 AC #11.
+has not yet been written.
 """
 
 from __future__ import annotations
@@ -84,7 +84,7 @@ def test_keyboard_interrupt_before_manifest_leaves_no_valid_entry(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC #11: abort after `graph.pkl.tmp` exists but before `manifest.json` lands.
+    """Abort after `graph.pkl.tmp` exists but before `manifest.json` lands.
 
     We wrap `os.replace` so the directory rename (`<hash>.tmp/` → `<hash>/`)
     succeeds, then the manifest's own `os.replace` (`manifest.json.tmp` →
@@ -135,7 +135,7 @@ def test_aborted_overwrite_restores_previous_entry(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """P1: an interrupted overwrite must restore the prior good entry from `<hash>.old/`.
+    """An interrupted overwrite must restore the prior good entry from `<hash>.old/`.
 
     Without the rollback, the failed overwrite would leave `<hash>/` without a
     manifest and `<hash>.old/` orphan-staged for deletion on the next
@@ -205,7 +205,7 @@ def test_successful_retry_after_aborted_write_produces_clean_entry(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC #11: a clean second `write_entry` after an aborted first run produces a valid entry.
+    """A clean second `write_entry` after an aborted first run produces a valid entry.
 
     Verifies the per-key cleanup of stale `.tmp/` / `.old/` directories inside
     `write_entry` so a re-prepare after a Ctrl-C isn't blocked by leftover state.

@@ -3,7 +3,7 @@
 # Reason: networkx MultiDiGraph generics and shapely's overloaded constructors
 # surface as Unknown at the seeding/geometry boundary, same per-file relaxation as
 # the other cache tests.
-"""Unit tests for `cli_adapter.regions` — the `GET /regions` cache-read seam (App Story 1.6).
+"""Unit tests for `cli_adapter.regions` — the `GET /regions` cache-read seam.
 
 Exercises the seam against a crafted cache root (real `write_entry` with an empty
 graph, the pattern the cache-coverage tests use) so no build/network runs. The
@@ -11,8 +11,8 @@ injectable `cache_root` keeps the real user cache untouched. The seam maps the
 cache's public coverage view (`cache.list_prepared_areas`) into the App's
 `RegionInfo`, reusing the cache's own geometry helpers for the polygon + envelope.
 
-Story 5.1 extends this to rotated rectangles: a rotated entry reports its true
-polygon (derived from `cache.area_polygon`, the ring coverage is tested against),
+Rotated rectangles included: a rotated entry reports its true polygon (derived
+from `cache.area_polygon`, the ring coverage is tested against),
 its full dimensions and bearing, and `radius_km=None` instead of the inert `0.0` a
 rotated CLI `Area` carries. Geometry assertions compare against the cache helpers
 themselves so the App can never drift from the CLI's km→deg conversion.
@@ -31,7 +31,8 @@ from steeproute.app.models import AreaSpec, RegionInfo
 from steeproute.cache import Manifest, area_bbox_wgs84, area_polygon, write_entry
 from steeproute.models import Area
 
-# A rotated 16 x 6 km box at a 35° bearing — the "diagonal range" shape Epic 15 exists for.
+# A rotated 16 x 6 km box at a 35° bearing — the "diagonal range" shape rotated
+# areas exist for.
 _ROTATED_AREA = Area(
     center=(45.19, 5.72),
     radius_km=0.0,
@@ -152,9 +153,7 @@ def test_resolve_area_not_covered_when_outside_built_region(tmp_path: pathlib.Pa
     assert res.cache_key_hash is None
 
 
-# --- Rotated rectangles (App Story 5.1, CLI Epic 15) --------------------------
-
-
+# Rotated rectangles.
 def test_to_cli_area_halves_full_dimensions_once() -> None:
     # The wire carries FULL box dimensions; `Area` stores half-extents. Getting
     # this backwards silently doubles (or halves) every rotated area.

@@ -1,6 +1,6 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
 # Reason: same networkx-boundary pattern as tests/integration/test_oracle_correctness.py.
-"""GRASP construction unit tests (Story 3.6 AC #4).
+"""GRASP construction unit tests.
 
 Exercises the three things the solver-core must guarantee in isolation:
 
@@ -37,8 +37,8 @@ def _params(
     """Build a `SolverParams` carrying only the fields these tests exercise.
 
     The §Cat 5e budgets are pinned non-binding so iter-budget is the sole
-    terminator: `stagnation_iters=0` disables stagnation (Story 7.2 made it
-    live), and `time_budget=10.0` dwarfs these tiny hand-built-graph runs.
+    terminator: `stagnation_iters=0` disables stagnation, and `time_budget=10.0`
+    dwarfs these tiny hand-built-graph runs.
     """
     return SolverParams(
         theta=theta,
@@ -57,7 +57,7 @@ def _params(
 
 
 def _seg(u: int, v: int, key: int = 0) -> tuple[int, int, int]:
-    """Undirected base-segment id (canonical sorted node-pair + key), per Story 5.1."""
+    """Undirected base-segment id: canonical sorted node-pair + key."""
     return (min(u, v), max(u, v), key)
 
 
@@ -74,11 +74,11 @@ def _add_edge(
     base_segment_id: frozenset[tuple[int, int, int]] | None = None,
     reusable: bool = False,
 ) -> Edge:
-    """Add an edge carrying the post-stage-7 attribute contract + Story 5.1 reuse tags.
+    """Add an edge carrying the post-stage-7 attribute contract + reuse tags.
 
     `base_segment_id` defaults to the edge's own undirected id and `reusable` to
     `False` (a non-exempt segment) — the common case. Tests probing the
-    undirected-reuse / short-connector-exemption rule (Story 5.2) override them:
+    undirected-reuse / short-connector-exemption rule override them:
     a reverse-of-climb connector reuses the climb's `base_segment_id`; a short
     linking connector passes `reusable=True`.
     """
@@ -113,17 +113,12 @@ def _edge_ids(sol_edges: tuple[Edge, ...]) -> tuple[tuple[int, int, int], ...]:
     return tuple((e.node_u, e.node_v, e.key) for e in sol_edges)
 
 
-# ---------------------------------------------------------------------------
 # Fixture A — single dominant climb chain (4 nodes, 3 super-edges).
-# ---------------------------------------------------------------------------
-#
-#   0 --A1--> 1 --A2--> 2 --A3--> 3
-#
-# A1: 0→1 super, len=400, d+=200, d-=0  (avg_gradient=0.500)
+# # 0 --A1--> 1 --A2--> 2 --A3--> 3
+# # A1: 0→1 super, len=400, d+=200, d-=0  (avg_gradient=0.500)
 # A2: 1→2 super, len=600, d+=300, d-=0  (avg_gradient=0.500)
 # A3: 2→3 super, len=300, d+=150, d-=0  (avg_gradient=0.500)
-#
-# Every node has at most one outgoing edge → the RCL has size <= 1 at each
+# # Every node has at most one outgoing edge → the RCL has size <= 1 at each
 # step → GRASP construction is fully deterministic regardless of RNG state.
 # Useful both as a "the solver actually returns something" smoke check and as
 # a reproducibility base.
@@ -145,7 +140,7 @@ def _build_chain_fixture() -> ContractedGraph:
 
 
 def test_grasp_run_is_deterministic_under_same_seed() -> None:
-    """AC #4(a): two `default_rng(42)` runs produce identical `Solution.edges` tuples.
+    """Two `default_rng(42)` runs produce identical `Solution.edges` tuples.
 
     Foundation for the FR29 integration test in
     `tests/integration/test_grasp_reproducible.py` — the unit-level claim is
@@ -172,7 +167,7 @@ def test_grasp_run_is_deterministic_under_same_seed() -> None:
 
 
 def test_grasp_best_so_far_is_readable_before_run() -> None:
-    """AC #4(b): `best_so_far` is `[]` after constructor, before `run()` is called."""
+    """`best_so_far` is `[]` after constructor, before `run()` is called."""
     graph = _build_chain_fixture()
     params = _params(iter_budget=5, n=3)
 
@@ -182,7 +177,7 @@ def test_grasp_best_so_far_is_readable_before_run() -> None:
 
 
 def test_grasp_best_so_far_reflects_run_results() -> None:
-    """AC #4(b): after `run()`, `best_so_far` returns the same list `run()` returned.
+    """After `run()`, `best_so_far` returns the same list `run()` returned.
 
     `best_so_far` is `tracker.current_top()` — same admission state any time
     after the last `consider(...)` call.
@@ -197,23 +192,18 @@ def test_grasp_best_so_far_reflects_run_results() -> None:
     assert result, "chain fixture should yield at least one route"
 
 
-# ---------------------------------------------------------------------------
 # Fixture B — route-level slope-floor probe (3 nodes, 2 super-edges from node 0).
-# ---------------------------------------------------------------------------
-#
-#       B_pass route (above θ)
-#   0 -------------------------> 1     (dead-end)
-#    \
-#     `--B_fail route (below θ)--> 2   (dead-end)
-#
-# B_pass: 0→1, len=400, d+=200, d-=0  (route avg (D+ + D−)/length = 0.500 ≥ θ=0.20)
+# # B_pass route (above θ)
+# 0 -------------------------> 1     (dead-end)
+# \
+# `--B_fail route (below θ)--> 2   (dead-end)
+# # B_pass: 0→1, len=400, d+=200, d-=0  (route avg (D+ + D−)/length = 0.500 ≥ θ=0.20)
 # B_fail: 0→2, len=1000, d+=100, d-=0 (route avg = 0.100 < θ=0.20)
-#
-# Both are single-edge dead-end routes, so the whole-route average equals the
+# # Both are single-edge dead-end routes, so the whole-route average equals the
 # edge's own gradient. With higher `iter_budget` every start node is sampled;
 # in every case the B_fail route is rejected by `_route_slope_ok` at
-# finalization (NOT by any RCL membership filter — that no longer exists, Story
-# 4.2), so `(0, 2, 0)` must NEVER appear in any returned route.
+# finalization, NOT by any RCL membership filter (θ is deliberately not an RCL
+# filter), so `(0, 2, 0)` must NEVER appear in any returned route.
 
 
 def _build_slope_floor_fixture() -> ContractedGraph:
@@ -252,15 +242,11 @@ def test_grasp_discards_routes_below_route_level_theta() -> None:
     assert (0, 1, 0) in all_edge_ids
 
 
-# ---------------------------------------------------------------------------
 # Fixture C — SAC-cap filter probe (3 nodes, 2 outgoing connectors from 0).
-# ---------------------------------------------------------------------------
-#
-#   0 --C_pass (sac=hiking, rank 1)--> 1   (dead-end)
-#    \
-#     `-C_fail (sac=demanding_alpine_hiking, rank 5)-> 2   (dead-end)
-#
-# Cap = "T3" → cap_rank = 3. C_fail's `demanding_alpine_hiking` ranks 5 > 3 →
+# # 0 --C_pass (sac=hiking, rank 1)--> 1   (dead-end)
+# \
+# `-C_fail (sac=demanding_alpine_hiking, rank 5)-> 2   (dead-end)
+# # Cap = "T3" → cap_rank = 3. C_fail's `demanding_alpine_hiking` ranks 5 > 3 →
 # must be filtered. Both are plain connectors (not super-edges), so the slope
 # floor is not in play — this isolates the SAC branch from the θ branch.
 # C_pass carries non-zero D+ so it's a candidate the greedy would otherwise
@@ -275,7 +261,7 @@ def _build_sac_cap_fixture() -> ContractedGraph:
 
 
 def test_grasp_rcl_excludes_edges_above_sac_cap() -> None:
-    """AC #4(c) SAC-cap branch: edges ranking above `difficulty_cap` are filtered.
+    """SAC-cap branch: edges ranking above `difficulty_cap` are filtered.
 
     Even though `C_fail` carries the higher D+ contribution (200 vs 80), it
     must never appear in any route because its `sac_scale` ranks above the
@@ -296,18 +282,14 @@ def test_grasp_rcl_excludes_edges_above_sac_cap() -> None:
     assert (0, 1, 0) in all_edge_ids
 
 
-# ---------------------------------------------------------------------------
-# Fixture D — undirected base-segment reuse: out-and-back over a climb (Story 5.2).
-# ---------------------------------------------------------------------------
-#
-#   0 ==climb (super)==> 1
-#   1 --short reverse connector--> 0
-#
-# The climb 0→1 (super-edge, reusable=False) and the short reverse connector 1→0
+# Fixture D — undirected base-segment reuse: out-and-back over a climb.
+# # 0 ==climb (super)==> 1
+# 1 --short reverse connector--> 0
+# # The climb 0→1 (super-edge, reusable=False) and the short reverse connector 1→0
 # (reusable=True, length 100 < l_connector 200) share base_segment_id {(0,1,0)} —
 # the connector is the reverse of the climb's own trail. This is exactly the
-# short-edge-climb class deferred from Story 5.1: the connector is `reusable`
-# per-edge, but its id is non-exempt (carried by the non-reusable super-edge), so
+# short-edge-climb case: the connector is `reusable` per-edge, but its id is
+# non-exempt (carried by the non-reusable super-edge), so
 # per-id exemption forbids descending it after ascending the climb. No route may
 # contain both — the degenerate out-and-back is rejected by construction.
 
@@ -333,7 +315,7 @@ def _build_out_and_back_fixture() -> ContractedGraph:
 
 
 def test_grasp_rejects_out_and_back_over_a_climb() -> None:
-    """Story 5.2: ascending a climb forbids descending its reverse (per-id exemption).
+    """Ascending a climb forbids descending its reverse (per-id exemption).
 
     The climb and its short reverse connector share a base segment that is
     non-exempt (the super-edge carrying it is not reusable). So no returned route
@@ -341,7 +323,7 @@ def test_grasp_rejects_out_and_back_over_a_climb() -> None:
     out-and-back is killed at the source. The climb itself must still appear
     (non-vacuity guard).
 
-    Seed 44 is tuned to the Story 12.3 batched-draw sequence: the climb route and
+    Seed 44 is tuned to the current batched-draw sequence: the climb route and
     the reverse-connector route have EQUAL objectives (200 m each) and overlap
     (same base id), so whichever is constructed first is held forever — the
     non-vacuity guard needs the very first start-node draw to land on node 0
@@ -363,13 +345,9 @@ def test_grasp_rejects_out_and_back_over_a_climb() -> None:
     assert (0, 1, 0) in all_ids, "the climb should still be reachable as a route"
 
 
-# ---------------------------------------------------------------------------
-# Fixture E — a genuinely-exempt short connector may recur (Story 5.2).
-# ---------------------------------------------------------------------------
-#
-#   0 <==short connector (both directions)==> 1
-#
-# Both directed connectors are reusable and share base_segment_id {(0,1,0)}, and
+# Fixture E — a genuinely-exempt short connector may recur.
+# # 0 <==short connector (both directions)==> 1
+# # Both directed connectors are reusable and share base_segment_id {(0,1,0)}, and
 # NO non-reusable edge carries that id → it is reuse-exempt. So a route may
 # legitimately traverse the linking segment in both directions (0→1→0). The
 # directed-edge-simple bound still caps it at once per direction, guaranteeing
@@ -401,7 +379,7 @@ def _build_exempt_connector_loop_fixture() -> ContractedGraph:
 
 
 def test_grasp_allows_exempt_connector_in_both_directions() -> None:
-    """Story 5.2: an exempt short connector may recur (traversed both directions).
+    """An exempt short connector may recur (traversed both directions).
 
     Its base id is carried only by reusable edges, so it never blocks the
     once-only rule; the route `0→1→0` reuses the linking segment legitimately.
@@ -462,7 +440,7 @@ def test_grasp_admits_self_loop_super_edge_as_single_edge_route() -> None:
     self-loops (lollipop trail-ends, roundabouts) are real, and the solver
     admits them rather than special-casing. After traversing the self-loop the
     walk terminates (its only outgoing edge is now in `used_ids`). Any policy
-    on rejecting them is the Story 3.9 validator's job, not the solver's.
+    on rejecting them is the validator's job, not the solver's.
     """
     g: nx.MultiDiGraph = nx.MultiDiGraph()
     loop = _add_edge(g, 0, 0, length_m=400.0, d_plus_m=200.0)

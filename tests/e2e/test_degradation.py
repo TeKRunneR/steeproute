@@ -1,4 +1,4 @@
-"""Graceful degradation for sparse areas end-to-end (Story 7.4 / FR12).
+"""Graceful degradation for sparse areas end-to-end (FR12).
 
 When fewer than N routes satisfy the current constraints, `steeproute` returns
 the feasible subset with a clear explanation rather than silently loosening them.
@@ -13,11 +13,11 @@ relaxing `--theta` admits more — exercising Journey 2's "tighten, review, rela
 tuning loop. Counts are asserted as inequalities (not exact values) so the tests
 track the binding behavior, not a single GRASP tipping-point number.
 
-Why `--theta`, not `--j-max` (Story 9.3): the original regime induced degradation
+Why `--theta`, not `--j-max`: the original regime induced degradation
 with `--theta 0.35` and relaxed `--j-max` to admit more, exercising the *distinctness*
-constraint. The Epic 9 route-discovery fixes (climb maximality #7, θ-prefix recovery
-#10) made the solver find a far richer, near-disjoint route set on this fixture — it
-returns a full N=5 even at `--j-max 0.02`, so distinctness no longer binds at any
+constraint. That no longer works on this fixture: climb maximality and θ-prefix
+recovery let the solver find a far richer, near-disjoint route set here — it
+returns a full N=5 even at `--j-max 0.02`, so distinctness does not bind at any
 feasible θ. Degradation here is now feasibility-bound, so the binding lever the
 tuning loop relaxes is `--theta`. (Distinctness/Jaccard logic stays covered by the
 `TopNTracker` unit tests and the `relax_j_max` metamorphic invariant.)
@@ -57,21 +57,21 @@ def test_degradation_returns_fewer_than_n_with_explanation(
     output_dir = tmp_path / "reports"
     result = run_query(seeded_cache, output_dir, seed=42, extra_args=_DEGRADE_THETA)
 
-    # Graceful degradation is a normal outcome, not an error (AC #5).
+    # Graceful degradation is a normal outcome, not an error.
     assert result.exit_code == 0, result.output
 
     html_files = sorted(output_dir.glob("route-*.html"))
     returned = len(html_files)
     assert 0 < returned < 5, f"expected a degraded set (<N=5), got {returned}"
 
-    # The explanation appears on stdout (AC #3), naming the observed count, the N
+    # The explanation appears on stdout, naming the observed count, the N
     # requested, and the theta / J_max constraints in force.
     match = _DEGRADATION_PATTERN.search(result.output)
     assert match is not None, f"degradation line not found in stdout:\n{result.output}"
     assert int(match.group(1)) == returned, "message count must match emitted report count"
 
     # The explanation also rides in every report's metadata so a reader of a
-    # single report sees it was part of a degraded set (AC #4).
+    # single report sees it was part of a degraded set.
     # HTML autoescapes the `<` in `<=` to `&lt;=`; the JSON sidecar is raw.
     escaped = html.escape(match.group(0))
     for i in range(1, returned + 1):
@@ -89,7 +89,7 @@ def test_relaxed_theta_produces_more_routes(
 ) -> None:
     """Re-querying the same cache with a looser --theta admits more routes (Journey 2).
 
-    Theta is the binding lever on the post-Epic-9 fixture (see module docstring):
+    Theta is the binding lever on this fixture, not `--j-max` (see module docstring):
     the steep `--theta 0.50` floor degrades below N=5, and relaxing to `--theta 0.20`
     admits the full set — the same tighten→review→relax loop, on the constraint that
     actually limits the result here.

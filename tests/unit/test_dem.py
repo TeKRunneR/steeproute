@@ -22,9 +22,7 @@ from steeproute.pipeline.dem import sample_elevation
 
 _FIXTURE_DIR = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "grenoble_small"
 
-# --- helpers -----------------------------------------------------------------
-
-
+# Helpers.
 def _write_dem(
     path: pathlib.Path,
     data: np.ndarray,
@@ -50,7 +48,7 @@ def _write_dem(
 
 
 def _single_edge_graph(coords: list[tuple[float, float]]) -> nx.MultiDiGraph:
-    """Build a one-edge MultiDiGraph carrying the source-attribute contract from Story 2.1."""
+    """Build a one-edge MultiDiGraph carrying the post-stage-2 source-attribute contract."""
     g: nx.MultiDiGraph = nx.MultiDiGraph()
     g.add_node(0, x=coords[0][0], y=coords[0][1])
     g.add_node(1, x=coords[-1][0], y=coords[-1][1])
@@ -66,13 +64,11 @@ def _single_edge_graph(coords: list[tuple[float, float]]) -> nx.MultiDiGraph:
     return g
 
 
-# --- WGS84 GeoTIFF: attribute contract + axis ordering -----------------------
-
-
+# WGS84 GeoTIFF: attribute contract + axis ordering.
 def test_sample_elevation_adds_vertices_resampled_with_one_entry_per_geometry_coord(
     tmp_path: pathlib.Path,
 ) -> None:
-    """AC #1: per-edge `vertices_resampled` has the same length as `geometry.coords`."""
+    """Per-edge `vertices_resampled` has the same length as `geometry.coords`."""
     # 10x10 WGS84 raster centered near Le Sappey at 0.0001° pixel size (~11 m).
     data = np.arange(100, dtype=np.float32).reshape(10, 10) + 500.0
     transform = from_origin(west=5.788, north=45.261, xsize=0.0001, ysize=0.0001)
@@ -92,7 +88,7 @@ def test_sample_elevation_adds_vertices_resampled_with_one_entry_per_geometry_co
 def test_sample_elevation_vertices_resampled_axis_order_is_lat_lon_elev(
     tmp_path: pathlib.Path,
 ) -> None:
-    """AC #1: tuple ordering is `(lat, lon, elev)` — lat first (opposite shapely)."""
+    """Tuple ordering is `(lat, lon, elev)` — lat first (opposite shapely)."""
     data = np.full((4, 4), 700.0, dtype=np.float32)
     transform = from_origin(west=5.78, north=45.27, xsize=0.001, ysize=0.001)
     dem_path = _write_dem(tmp_path / "flat.tif", data, transform, "EPSG:4326")
@@ -112,7 +108,7 @@ def test_sample_elevation_vertices_resampled_axis_order_is_lat_lon_elev(
 
 
 def test_sample_elevation_preserves_attribute_contract(tmp_path: pathlib.Path) -> None:
-    """AC #1: `geometry`, `sac_scale`, `highway`, `osm_way_id` carried through unchanged."""
+    """`geometry`, `sac_scale`, `highway`, `osm_way_id` carried through unchanged."""
     data = np.full((4, 4), 850.0, dtype=np.float32)
     transform = from_origin(west=5.78, north=45.27, xsize=0.001, ysize=0.001)
     dem_path = _write_dem(tmp_path / "flat.tif", data, transform, "EPSG:4326")
@@ -148,7 +144,7 @@ def test_sample_elevation_does_not_mutate_input(tmp_path: pathlib.Path) -> None:
 def test_sample_elevation_inplace_returns_the_same_object_with_vertices_attached(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Story 16.2 AC #1: the ownership opt-in skips the copy and annotates the caller's graph."""
+    """The ownership opt-in skips the copy and annotates the caller's graph."""
     data = np.full((4, 4), 600.0, dtype=np.float32)
     transform = from_origin(west=5.78, north=45.27, xsize=0.001, ysize=0.001)
     dem_path = _write_dem(tmp_path / "flat.tif", data, transform, "EPSG:4326")
@@ -162,7 +158,7 @@ def test_sample_elevation_inplace_returns_the_same_object_with_vertices_attached
 
 
 def test_sample_elevation_inplace_matches_the_copying_path(tmp_path: pathlib.Path) -> None:
-    """Story 16.2 AC #1/#2: both paths produce identical `vertices_resampled`."""
+    """Copying and in-place paths produce identical `vertices_resampled`."""
     data = np.array(
         [[610.0, 620.0, 630.0], [640.0, 650.0, 660.0], [670.0, 680.0, 690.0]], dtype=np.float32
     )
@@ -180,7 +176,7 @@ def test_sample_elevation_inplace_matches_the_copying_path(tmp_path: pathlib.Pat
 
 
 def test_sample_elevation_inplace_validates_before_mutating(tmp_path: pathlib.Path) -> None:
-    """Story 16.2 AC #1: coverage failures still fire before any edge is annotated."""
+    """Coverage failures fire before any edge is annotated, even in-place."""
     data = np.full((4, 4), 500.0, dtype=np.float32)
     transform = from_origin(west=0.0, north=1.0, xsize=0.25, ysize=0.25)
     dem_path = _write_dem(tmp_path / "tiny.tif", data, transform, "EPSG:4326")
@@ -194,7 +190,7 @@ def test_sample_elevation_inplace_validates_before_mutating(tmp_path: pathlib.Pa
 
 
 def test_sample_elevation_returns_finite_floats(tmp_path: pathlib.Path) -> None:
-    """AC #3: no silent NaN — every returned elevation is finite."""
+    """No silent NaN — every returned elevation is finite."""
     data = np.array([[100.0, 200.0], [300.0, 400.0]], dtype=np.float32)
     transform = from_origin(west=0.0, north=1.0, xsize=0.5, ysize=0.5)
     dem_path = _write_dem(tmp_path / "small.tif", data, transform, "EPSG:4326")
@@ -219,13 +215,11 @@ def test_sample_elevation_empty_graph_is_a_noop(tmp_path: pathlib.Path) -> None:
     assert out.number_of_nodes() == 0
 
 
-# --- CRS-aware sampling on non-WGS84 raster ----------------------------------
-
-
+# CRS-aware sampling on non-WGS84 raster.
 def test_sample_elevation_transforms_wgs84_coords_to_dem_crs_lambert93(
     tmp_path: pathlib.Path,
 ) -> None:
-    """AC #6: WGS84 graph coords are projected into the DEM's native CRS (Lambert-93) before sampling.
+    """WGS84 graph coords are projected into the DEM's native CRS (Lambert-93) before sampling.
 
     Construct a 3x3 Lambert-93 (EPSG:2154) raster with a distinctive elevation
     per pixel, place graph vertices in WGS84 that project to known pixels, and
@@ -267,13 +261,11 @@ def test_sample_elevation_transforms_wgs84_coords_to_dem_crs_lambert93(
     assert verts[1][2] == pytest.approx(1110.0)
 
 
-# --- error paths -------------------------------------------------------------
-
-
+# Error paths.
 def test_sample_elevation_raises_dem_coverage_error_for_out_of_bounds_vertex(
     tmp_path: pathlib.Path,
 ) -> None:
-    """AC #3 + AC #7: vertex outside DEM bounds → DEMCoverageError naming edge + bounds."""
+    """Vertex outside DEM bounds → DEMCoverageError naming edge + bounds."""
     data = np.full((4, 4), 500.0, dtype=np.float32)
     # Tiny raster around (0, 0)
     transform = from_origin(west=0.0, north=1.0, xsize=0.25, ysize=0.25)
@@ -295,7 +287,7 @@ def test_sample_elevation_raises_dem_coverage_error_for_out_of_bounds_vertex(
 def test_sample_elevation_raises_dem_coverage_error_for_nodata_cell(
     tmp_path: pathlib.Path,
 ) -> None:
-    """AC #7: vertex landing on a nodata pixel → DEMCoverageError (same path as OOB)."""
+    """Vertex landing on a nodata pixel → DEMCoverageError (same path as OOB)."""
     data = np.full((4, 4), 500.0, dtype=np.float32)
     # Mark one cell as nodata.
     data[1, 1] = -9999.0
@@ -336,7 +328,7 @@ def test_sample_elevation_raises_type_error_for_non_linestring_geometry(
 def test_sample_elevation_raises_dem_coverage_error_when_dem_has_no_crs(
     tmp_path: pathlib.Path,
 ) -> None:
-    """AC #2 / Review P2: a GeoTIFF without CRS metadata fails fast with DEMCoverageError.
+    """A GeoTIFF without CRS metadata fails fast with DEMCoverageError.
 
     Without this guard, `pyproj.Transformer.from_crs(WGS84_EPSG, None, ...)` raises
     `pyproj.exceptions.CRSError`, which is not a `SteeprouteError` subclass and would
@@ -369,7 +361,7 @@ def test_sample_elevation_raises_dem_coverage_error_when_dem_has_no_crs(
 def test_sample_elevation_raises_dem_coverage_error_for_nan_nodata(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Review P3: a NaN-nodata raster correctly maps to DEMCoverageError via the isfinite branch.
+    """A NaN-nodata raster maps to DEMCoverageError via the isfinite branch.
 
     When the GeoTIFF declares nodata=NaN and a sampled pixel reads back as NaN,
     `not math.isfinite(elev)` catches it — the explicit equality branch would have
@@ -393,7 +385,7 @@ def test_sample_elevation_raises_dem_coverage_error_for_nan_nodata(
 def test_sample_elevation_rejects_vertex_at_exact_east_edge_of_bounds(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Review P1: bounds check is half-open on the east/right edge to match rasterio's pixel grid.
+    """The bounds check is half-open on the east/right edge, matching rasterio's pixel grid.
 
     A point at exactly `bounds.right` maps to pixel column `width` (outside the array).
     With closed-closed bounds the OOB guard would pass, then `dataset.sample` would
@@ -412,10 +404,9 @@ def test_sample_elevation_rejects_vertex_at_exact_east_edge_of_bounds(
         _ = sample_elevation(graph, dem_path)
 
 
-# --- real fixture tests (run only if dem.tif is committed) -------------------
-
+# Real fixture tests (run only if dem.tif is committed)
 _DEM_FIXTURE_PATH = _FIXTURE_DIR / "dem.tif"
-_FIXTURE_SIZE_LIMIT_BYTES = 5_000_000  # AC #4 (carries forward Story 2.1's pattern)
+_FIXTURE_SIZE_LIMIT_BYTES = 5_000_000  # keep committed fixtures reviewable
 
 
 @pytest.fixture(scope="module")
@@ -443,7 +434,7 @@ def _scalar_reference_sample_elevation(
 
     This is the exact loop-based algorithm the vectorized `sample_elevation` replaced
     (per-edge `transformer.transform`, per-vertex bounds check, per-point
-    `dataset.sample`). Story 14.1's contract is that the vectorized path produces
+    `dataset.sample`). The contract is that the vectorized production path produces
     **bit-identical** `vertices_resampled` to this reference over every fixture vertex.
     If this ever drifts from production behavior it is only used to prove equality on
     the success path, so a divergence surfaces as a test failure, not a silent skew.
@@ -481,7 +472,7 @@ def _scalar_reference_sample_elevation(
 def test_fixture_pipeline_bit_identical_to_scalar_reference(
     fixture_pipeline_through_stage5: nx.MultiDiGraph,
 ) -> None:
-    """AC #1: vectorized `sample_elevation` is bit-equal to the old per-point path.
+    """Vectorized `sample_elevation` is bit-equal to the old per-point path.
 
     Runs the same stages-1→4 fixture graph through the scalar reference (the pre-14.1
     algorithm) and asserts every edge's `vertices_resampled` tuple is `==` (exact, not
@@ -518,7 +509,7 @@ def test_fixture_pipeline_bit_identical_to_scalar_reference(
 
 
 def test_committed_dem_fixture_under_size_cap() -> None:
-    """AC #4: committed dem.tif must stay under 5 MB to keep the repo lean."""
+    """Committed dem.tif must stay under 5 MB to keep the repo lean."""
     if not _DEM_FIXTURE_PATH.exists():
         pytest.skip("dem.tif fixture not yet committed.")
     size = _DEM_FIXTURE_PATH.stat().st_size
@@ -527,7 +518,7 @@ def test_committed_dem_fixture_under_size_cap() -> None:
     )
 
 
-# --- inverted-bounds sanity check (Story 2.8 carry-forward, deferred D2 from 2.3) ---
+# Inverted-bounds sanity check.
 
 
 def test_sample_elevation_rejects_flipped_origin_dem(tmp_path: pathlib.Path) -> None:
@@ -550,7 +541,7 @@ def test_sample_elevation_rejects_flipped_origin_dem(tmp_path: pathlib.Path) -> 
 def test_fixture_pipeline_preserves_attribute_contract(
     fixture_pipeline_through_stage5: nx.MultiDiGraph,
 ) -> None:
-    """AC #5: every edge has the full attribute contract after stage 5."""
+    """Every edge has the full attribute contract after stage 5."""
     for _u, _v, _k, data in fixture_pipeline_through_stage5.edges(data=True, keys=True):
         assert isinstance(data["geometry"], shapely.LineString)
         assert "sac_scale" in data
@@ -564,7 +555,7 @@ def test_fixture_pipeline_preserves_attribute_contract(
 def test_fixture_pipeline_vertices_resampled_matches_geometry_coords(
     fixture_pipeline_through_stage5: nx.MultiDiGraph,
 ) -> None:
-    """AC #5: vertices_resampled (lat, lon) match the geometry (lon, lat) per edge."""
+    """Vertices_resampled (lat, lon) match the geometry (lon, lat) per edge."""
     for _u, _v, _k, data in fixture_pipeline_through_stage5.edges(data=True, keys=True):
         geom_coords = list(data["geometry"].coords)
         verts = data["vertices_resampled"]
@@ -576,7 +567,7 @@ def test_fixture_pipeline_vertices_resampled_matches_geometry_coords(
 def test_fixture_pipeline_elevations_are_finite_and_plausible(
     fixture_pipeline_through_stage5: nx.MultiDiGraph,
 ) -> None:
-    """AC #5: Chartreuse Massif elevations land in a sane Alpine band (300 m ≤ elev ≤ 2000 m).
+    """Chartreuse Massif elevations land in a sane Alpine band (300 m ≤ elev ≤ 2000 m).
 
     Le Sappey-en-Chartreuse bbox spans ~370–1620 m per the DEM source; widening
     the band a touch keeps the assertion robust against minor IGN data updates.
@@ -609,7 +600,7 @@ def test_sample_elevation_at_known_landmark_within_tolerance(
     ref_m: float,
     tol_m: float,
 ) -> None:
-    """AC #5: known-elevation cross-check against external references at named landmarks.
+    """Known-elevation cross-check against external references at named landmarks.
 
     Uses the committed `dem.tif` directly (not the chained pipeline) so a failure
     here pinpoints DEM-sampling correctness independent of stages 3-4.

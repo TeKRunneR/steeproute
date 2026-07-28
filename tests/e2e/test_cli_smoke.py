@@ -1,8 +1,8 @@
 """Subprocess-based smoke tests for the installed steeproute / steeproute-setup CLIs.
 
 Exercises the real `[project.scripts]` entry-point shim (not click's CliRunner — the
-unit layer covers that). Verifies help/version output, exit-code-2 paths from Story 1.6
-(BadCLIArgError → run_entry_point), and the Story 1.5 stub happy paths.
+unit layer covers that). Verifies help/version output, the exit-code-2
+`BadCLIArgError → run_entry_point` paths, and the happy paths.
 
 Prerequisite: `uv sync` must have run so `steeproute` and `steeproute-setup` are
 installed in the active environment. CI's "Sync dependencies" step satisfies this.
@@ -78,8 +78,7 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-# --- Task 2: --help ---
-
+# --help.
 # `--help` output is identical across every flag in a group, so the subprocess runs
 # once per CLI (module-scoped) instead of once per parametrized case. This turns ~35
 # `uv run --help` invocations (~80 s) into 2 (~5 s).
@@ -107,9 +106,7 @@ def test_setup_help_lists_flag(flag: str, setup_help: subprocess.CompletedProces
     assert flag in setup_help.stdout
 
 
-# --- Task 3: --version ---
-
-
+# --version.
 def test_query_version_exits_zero() -> None:
     result = _run_cli("steeproute", "--version")
     assert result.returncode == 0, result.stderr
@@ -126,9 +123,7 @@ def test_setup_version_exits_zero() -> None:
     assert len(tokens) >= 2
 
 
-# --- Task 4: exit-code-2 paths ---
-
-
+# exit-code-2 paths.
 def test_query_malformed_center_exits_2() -> None:
     result = _run_cli("steeproute", "--center", "abc,def", "--radius", "10")
     assert result.returncode == 2
@@ -143,10 +138,10 @@ def test_query_area_cap_flag_removed() -> None:
 
 
 def test_query_no_start_at_junction_flag_removed() -> None:
-    """`--start-at-junction` is now a plain presence flag (spec-cli-defaults-and-
-    setup-radius-cap.md): the old `--start-at-junction/--no-start-at-junction`
-    pair's negation spelling is gone outright, not deprecated — unknown-option,
-    exit 2, same treatment as `--area-cap` above.
+    """`--start-at-junction` is a plain presence flag with no negation spelling.
+
+    `--no-start-at-junction` is not deprecated, it is gone outright — unknown-option,
+    exit 2, the same treatment as `--area-cap` above.
     """
     result = _run_cli(
         "steeproute", "--center", "45.07,6.11", "--radius", "30", "--no-start-at-junction"
@@ -155,17 +150,15 @@ def test_query_no_start_at_junction_flag_removed() -> None:
     assert "no such option" in result.stderr.lower()
 
 
-# --- Task 5: query CLI surface ---
-
-
+# query CLI surface.
 def test_query_unprepared_area_exits_2_with_setup_command_suggestion(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Story 2.10 FR24: a query against an empty cache exits 2 with an actionable error.
+    """FR24: a query against an empty cache exits 2 with an actionable error.
 
-    The Epic-1-era stub returned 0; Story 2.10 wired the CLI through
-    `cache.check_coverage`, which raises `CacheNotFoundError` when no prepared
-    cache covers the query area. The CLI is exercised with `--cache-dir <tmp>`
+    `cache.check_coverage` raises `CacheNotFoundError` when no prepared cache covers
+    the query area, and that maps to exit 2 — *not* to exit 0 with an empty result,
+    which is the failure this pins. The CLI is exercised with `--cache-dir <tmp>`
     so the test stays isolated from the user's real cache root.
     """
     result = _run_cli(
@@ -178,13 +171,13 @@ def test_query_unprepared_area_exits_2_with_setup_command_suggestion(
         str(tmp_path),
     )
     assert result.returncode == 2, result.stderr
-    # P5: empty-cache lead distinguishes from partial-coverage lead.
+    # Empty-cache lead distinguishes from partial-coverage lead.
     assert result.stderr.startswith("error: No prepared cache exists yet.")
     assert "steeproute-setup --center 45.0716,6.1079" in result.stderr
 
 
 def test_query_negative_min_climb_slope_exits_2() -> None:
-    """Story 4.1: `--min-climb-slope` below 0 → BadCLIArgError → exit 2 (§Cat 10)."""
+    """`--min-climb-slope` below 0 → BadCLIArgError → exit 2 (§Cat 10)."""
     result = _run_cli(
         "steeproute",
         "--center",
@@ -200,7 +193,7 @@ def test_query_negative_min_climb_slope_exits_2() -> None:
 
 
 def test_query_zero_workers_exits_2() -> None:
-    """Story 14.4: `--workers 0` → BadCLIArgError → exit 2 (§Cat 10)."""
+    """`--workers 0` → BadCLIArgError → exit 2 (§Cat 10)."""
     result = _run_cli(
         "steeproute",
         "--center",
@@ -231,7 +224,7 @@ def test_setup_dem_path_flag_removed() -> None:
 
 
 def test_setup_zero_dem_fetch_workers_exits_2() -> None:
-    """Story 14.3 scope revision: `--dem-fetch-workers 0` → BadCLIArgError → exit 2 (§Cat 10)."""
+    """`--dem-fetch-workers 0` → BadCLIArgError → exit 2 (§Cat 10)."""
     result = _run_cli(
         "steeproute-setup",
         "--center",

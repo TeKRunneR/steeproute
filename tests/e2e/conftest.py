@@ -5,9 +5,8 @@
 Holds the shared Journey-1 (`steeproute` query happy-path) plumbing used by
 `test_journey_1_happy_path.py`, `test_seeded_reproducibility.py`, and
 `test_validation_failure_path.py`: seeding a real fixture cache in-process and
-invoking the query CLI against it. Kept here (rather than copied per-file like
-the older Story 2.x e2e tests) so the three Story 3.11 tests share one
-seeding path.
+invoking the query CLI against it. Shared here rather than copied per-file so the
+three tests cannot drift on how the cache is seeded.
 """
 
 from __future__ import annotations
@@ -123,8 +122,7 @@ def seeded_cache(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
     return cache_root
 
 
-# Pre-change effective defaults for the flags `spec-cli-defaults-and-setup-
-# radius-cap.md` (2026-07-28) bumped, pinned here so every e2e test that omits
+# Pre-change effective defaults for the flags (2026-07-28) bumped, pinned here so every e2e test that omits
 # these flags keeps today's pre-change behavior/runtime instead of silently
 # picking up the new fast-iteration-unfriendly defaults (iter-budget/
 # stagnation-iters alone would jump 2000/100 -> 1_000_000/200_000). Mirrors the

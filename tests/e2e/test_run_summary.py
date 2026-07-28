@@ -1,4 +1,4 @@
-"""End-of-run summary on stdout (Story 7.5 / FR22).
+"""End-of-run summary on stdout (FR22).
 
 Every successful `steeproute` invocation prints a labeled run-summary block to
 stdout after rendering — parameters, routes returned vs. N requested,
@@ -12,7 +12,7 @@ All tests run in-process via `CliRunner` (the shared `run_query` fixture) — no
 process is needed. `--theta 0.50` reuses `test_degradation.py`'s regime to induce
 graceful degradation (< N=5 routes clear that floor) on the committed fixture for
 the degraded-path test — see that module for why theta, not j-max, is the binding
-lever after the Epic 9 route-discovery fixes.
+lever on this fixture (see `test_degradation.py` for why `--j-max` is not).
 """
 
 from __future__ import annotations
@@ -101,7 +101,7 @@ def test_degraded_path(
     returned, requested = int(routes_m.group(1)), int(routes_m.group(2))
     assert returned < requested, f"expected a degraded set (<N), got {out}"
 
-    # The degradation explanation (Story 7.4) now lives in the summary's field.
+    # The degradation explanation now lives in the summary's field.
     deg_m = re.search(r"degradation:\s*Only (\d+) of \d+ requested routes satisfy the current", out)
     assert deg_m is not None, out
     assert int(deg_m.group(1)) == returned

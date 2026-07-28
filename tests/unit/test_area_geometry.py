@@ -5,7 +5,7 @@
 # The `Unknown*` relaxations cover shapely's untyped `.exterior.coords` /
 # `.bounds` and pytest's `approx`, same external-boundary pattern as
 # `tests/unit/test_check_coverage.py`.
-"""Unit tests for the rotated-rectangle `Area` model and geometry helpers (Story 15.1).
+"""Unit tests for the rotated-rectangle `Area` model and geometry helpers.
 
 Two surfaces:
 
@@ -13,7 +13,8 @@ Two surfaces:
    half-extents at `angle=0`, indistinguishable from a v1 `Area`.
 2. `cache._area_to_polygon` / `cache.area_bbox_wgs84` — the polygon is built in
    a local `cos(lat)` km frame, rotated by `angle_deg`, and converted back to
-   WGS84; the `angle=0` path reproduces the pre-Epic-15 square ring byte-for-byte.
+   WGS84; the `angle=0` path must reproduce the axis-aligned square ring
+   byte-for-byte (every already-written `bounds.geojson` was computed that way).
 
 `tests/unit/test_check_coverage.py` continues to pin the square-path containment
 semantics these helpers feed; this file adds the rotated / non-square coverage.
@@ -31,11 +32,9 @@ from steeproute.models import Area
 _ROOT2 = math.sqrt(2.0)
 
 
-# --- Area model: square shorthand backward-compatibility ---------------------
-
-
+# Area model: square shorthand backward-compatibility.
 def test_radius_shorthand_resolves_to_equal_half_extents_at_angle_zero() -> None:
-    """AC #1: `Area(center, radius_km=r)` is a centered axis-aligned square."""
+    """`Area(center, radius_km=r)` is a centered axis-aligned square."""
     area = Area(center=(45.0, 6.0), radius_km=2.0)
     assert area.radius_km == 2.0  # still a readable field for every v1 reader
     assert area.half_extents_km == (2.0, 2.0)
@@ -44,7 +43,7 @@ def test_radius_shorthand_resolves_to_equal_half_extents_at_angle_zero() -> None
 
 
 def test_explicit_extents_override_radius_and_can_be_non_square() -> None:
-    """AC #1: an explicit rectangle need not be square, and rotation drops `is_square`."""
+    """An explicit rectangle need not be square, and rotation drops `is_square`."""
     rect = Area(center=(45.0, 6.0), radius_km=0.0, half_width_km=3.0, half_height_km=8.0)
     assert rect.half_extents_km == (3.0, 8.0)
     assert not rect.is_square  # unequal extents
@@ -62,15 +61,13 @@ def test_half_extents_recompute_after_dataclasses_replace_of_radius() -> None:
     assert smaller.half_extents_km == (1.5, 1.5)
 
 
-# --- _area_to_polygon: byte-identical square ring (backward compat) ----------
+# _area_to_polygon: byte-identical square ring (backward compat)
+def test_square_ring_is_byte_identical_to_the_axis_aligned_formula() -> None:
+    """`angle=0` equal-extents reproduces the square ring exactly.
 
-
-def test_square_ring_is_byte_identical_to_pre_epic15_formula() -> None:
-    """AC #2: `angle=0` equal-extents reproduces today's square ring exactly.
-
-    Rebuilds the pre-Epic-15 ring with the historical formula and asserts the
-    generated coordinates match float-for-float — the guard behind the
-    no-golden-rebake guarantee for existing `--center/--radius` runs.
+    Rebuilds the ring from the plain axis-aligned formula and asserts the generated
+    coordinates match float-for-float. This is the guard that keeps existing
+    `--center/--radius` cache entries and goldens readable.
     """
     area = Area(center=(45.0, 6.0), radius_km=2.0)
     lat, lon = area.center
@@ -87,11 +84,9 @@ def test_square_ring_is_byte_identical_to_pre_epic15_formula() -> None:
     assert got == expected_ring
 
 
-# --- _area_to_polygon: axis-aligned non-square rectangle (fast path) ---------
-
-
+# _area_to_polygon: axis-aligned non-square rectangle (fast path)
 def test_axis_aligned_rectangle_spans_match_extents() -> None:
-    """AC #1/#2: an `angle=0` non-square rectangle uses each extent independently."""
+    """An `angle=0` non-square rectangle uses each extent independently."""
     # At the equator cos(lat)=1 so km→deg is symmetric; lon-span tracks the
     # half-width, lat-span tracks the half-height, with no cross-contamination.
     rect = Area(center=(0.0, 0.0), radius_km=0.0, half_width_km=1.0, half_height_km=3.0)
@@ -101,9 +96,7 @@ def test_axis_aligned_rectangle_spans_match_extents() -> None:
     assert lat_span == pytest.approx(6.0 / 111.0)
 
 
-# --- _area_to_polygon: rotation ---------------------------------------------
-
-
+# _area_to_polygon: rotation.
 def test_rotating_a_square_by_90_degrees_preserves_its_envelope() -> None:
     """A square is 90°-symmetric: rotating it must not change its bounds."""
     center = (45.0, 6.0)
@@ -115,7 +108,7 @@ def test_rotating_a_square_by_90_degrees_preserves_its_envelope() -> None:
 
 
 def test_rotated_square_becomes_a_diamond_with_known_vertices() -> None:
-    """AC #4: rotation is verified against hand-computed corner coordinates.
+    """Rotation is verified against hand-computed corner coordinates.
 
     A 1 km-half-side square at the equator (cos(lat)=1) rotated 45° clockwise
     becomes a diamond whose four vertices sit on the axes at distance
@@ -147,7 +140,7 @@ def test_rotated_square_becomes_a_diamond_with_known_vertices() -> None:
 
 
 def test_rotation_uses_cos_lat_frame_not_raw_degree_space() -> None:
-    """AC #4: the degree-space-skew case — rotation must lift into a km frame.
+    """The degree-space-skew case — rotation must lift into a km frame.
 
     At 60° N, cos(lat)=0.5, so one east-km is ~twice the longitude-degrees of one
     north-km. A 45°-rotated square there reaches the same km distance east and
@@ -168,11 +161,9 @@ def test_rotation_uses_cos_lat_frame_not_raw_degree_space() -> None:
     assert lon_reach > lat_reach * 1.5
 
 
-# --- area_bbox_wgs84: true envelope of the (possibly rotated) polygon ---------
-
-
+# Area_bbox_wgs84: true envelope of the (possibly rotated) polygon.
 def test_envelope_of_square_coincides_with_the_box() -> None:
-    """AC #3: for an axis-aligned square the envelope is the box itself."""
+    """For an axis-aligned square the envelope is the box itself."""
     area = Area(center=(45.0, 6.0), radius_km=2.0)
     south, west, north, east = cache_mod.area_bbox_wgs84(area)
     minx, miny, maxx, maxy = cache_mod._area_to_polygon(area).bounds
@@ -180,12 +171,12 @@ def test_envelope_of_square_coincides_with_the_box() -> None:
 
 
 def test_envelope_of_rotated_box_is_strictly_larger_than_the_box() -> None:
-    """AC #3: a rotated rectangle's envelope over-approximates the box.
+    """A rotated rectangle's envelope over-approximates the box.
 
     The axis-aligned envelope of a 45°-rotated square is the bounding diamond's
     box — `sqrt(2)`× wider/taller than the un-rotated square — so treating the
     envelope as "the region" over-reports coverage. Pinned so the envelope-leak
-    audit (Stories 15.2/15.3) has a guard.
+    audit has a guard.
     """
     center = (45.0, 6.0)
     square = Area(center=center, radius_km=2.0)

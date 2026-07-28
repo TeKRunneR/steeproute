@@ -1,6 +1,6 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
 # Reason: same networkx-boundary pattern as tests/unit/test_grasp_construction.py.
-"""Unit tests for `validator.py` (Story 3.9).
+"""Unit tests for `validator.py`.
 
 One crafted-violating + one crafted-clean fixture per constraint (PRD
 structural requirement), asserting the right `constraint_id` and the
@@ -13,11 +13,11 @@ All graphs are hand-built `MultiDiGraph`s wrapped in a `ContractedGraph`, with
 non-connector climbs — the same shape `solver/grasp.py` consumes.
 
 Coverage map (AC → test):
-- AC #2 slope_floor / difficulty_cap / edge_reuse / graph_membership
+- slope_floor / difficulty_cap / edge_reuse / graph_membership
   → the four `test_validate_route_*` violating+clean pairs.
-- AC #3 pairwise Jaccard → `test_validate_set_*`.
-- AC #4 orchestration / metrics / ordering → `test_validate_*`.
-- AC #1 purity → `test_validate_route_does_not_mutate_inputs`.
+- pairwise Jaccard → `test_validate_set_*`.
+- orchestration / metrics / ordering → `test_validate_*`.
+- purity → `test_validate_route_does_not_mutate_inputs`.
 """
 
 from __future__ import annotations
@@ -40,9 +40,7 @@ from steeproute.models import (
 from steeproute.solver import reuse
 from steeproute.validator import validate, validate_route, validate_set
 
-# ----------------------------------------------------------------------------
 # Helpers
-# ----------------------------------------------------------------------------
 
 _THETA = 0.20
 _DIFFICULTY_CAP = "T3"  # rank 3
@@ -99,7 +97,7 @@ def _edge(
 
 
 def _seg(u: int, v: int, key: int = 0) -> tuple[int, int, int]:
-    """Undirected base-segment id (canonical sorted node-pair + key), per Story 5.1."""
+    """Undirected base-segment id: canonical sorted node-pair + key."""
     return (min(u, v), max(u, v), key)
 
 
@@ -117,8 +115,8 @@ def _graph(
     each gets a single-element `super_edge_to_base` entry (the back-mapping
     content is irrelevant to the validator — only membership matters).
 
-    Every edge is tagged with the Story 5.1 reuse attributes the validator now
-    reads: `base_segment_id` defaults to the edge's own undirected id and
+    Every edge is tagged with the reuse attributes the validator reads:
+    `base_segment_id` defaults to the edge's own undirected id and
     `reusable` to `False`. `base_ids` / `reusable_ids` override per identity so
     the undirected-reuse tests can make a climb and its reverse connector share
     a base id, or mark a short connector exempt.
@@ -161,9 +159,7 @@ def _route(edges: list[Edge]) -> Route:
     )
 
 
-# ----------------------------------------------------------------------------
-# AC #2 — slope floor (route-level: (D+ + D−)/length ≥ θ)
-# ----------------------------------------------------------------------------
+# Slope floor (route-level: (D+ + D−)/length ≥ θ)
 
 
 def test_validate_route_flags_route_below_theta() -> None:
@@ -208,9 +204,7 @@ def test_validate_route_slope_floor_counts_descent_in_average() -> None:
     assert result.violations == []
 
 
-# ----------------------------------------------------------------------------
-# AC #2 — difficulty cap (per edge)
-# ----------------------------------------------------------------------------
+# Difficulty cap (per edge)
 
 
 def test_validate_route_flags_edge_above_difficulty_cap() -> None:
@@ -237,9 +231,7 @@ def test_validate_route_admits_edge_within_cap_and_untagged() -> None:
     assert result.violations == []
 
 
-# ----------------------------------------------------------------------------
-# AC #5 (Story 10.2) — direction-aware descent cap (per edge, opt-in FR32)
-# ----------------------------------------------------------------------------
+# Direction-aware descent cap (per edge, opt-in FR32)
 
 
 def test_validate_route_flags_descent_above_cap() -> None:
@@ -291,9 +283,7 @@ def test_validate_route_descent_cap_off_by_default() -> None:
     assert result.violations == []
 
 
-# ----------------------------------------------------------------------------
-# AC #2 — edge-reuse limit (undirected base segment, Story 5.2)
-# ----------------------------------------------------------------------------
+# Edge-reuse limit (undirected base segment).
 
 
 def test_validate_route_flags_repeated_edge() -> None:
@@ -337,13 +327,11 @@ def test_validate_route_dedups_per_edge_violations_on_reuse() -> None:
     assert reuse[0].numeric == {"observed": 2.0, "required": 1.0}
 
 
-# ----------------------------------------------------------------------------
-# Story 5.2 — undirected base-segment reuse + short-connector exemption
-# ----------------------------------------------------------------------------
+# Undirected base-segment reuse + short-connector exemption.
 
 
 def test_validate_route_flags_undirected_base_segment_reuse() -> None:
-    """Ascending a climb then descending its reverse violates `edge_reuse` (FR5, Story 5.2).
+    """Ascending a climb then descending its reverse violates `edge_reuse` (FR5).
 
     The climb `(0,1,0)` (super-edge, non-reusable) and the short reverse connector
     `(1,0,0)` share base segment `(0,1,0)`. Even though the connector is
@@ -368,7 +356,7 @@ def test_validate_route_flags_undirected_base_segment_reuse() -> None:
 
 
 def test_validate_route_does_not_flag_repeated_exempt_connector() -> None:
-    """A genuinely-exempt short connector traversed both directions is not `edge_reuse` (Story 5.2).
+    """A genuinely-exempt short connector traversed both directions is not `edge_reuse`.
 
     Base segment `(0,1,0)` is carried only by reusable edges → reuse-exempt, so
     walking the linking segment `0→1→0` is legitimate and raises no violation.
@@ -388,9 +376,7 @@ def test_validate_route_does_not_flag_repeated_exempt_connector() -> None:
     assert [v.constraint_id for v in result.violations] == []
 
 
-# ----------------------------------------------------------------------------
-# AC #2 — graph membership
-# ----------------------------------------------------------------------------
+# Graph membership
 
 
 def test_validate_route_flags_edge_absent_from_graph() -> None:
@@ -417,9 +403,7 @@ def test_validate_route_admits_edges_present_in_graph() -> None:
     assert result.violations == []
 
 
-# ----------------------------------------------------------------------------
-# AC #3 — set-level pairwise Jaccard
-# ----------------------------------------------------------------------------
+# Set-level pairwise Jaccard
 
 
 def test_validate_set_flags_overlapping_pair() -> None:
@@ -449,9 +433,7 @@ def test_validate_set_admits_distinct_pair() -> None:
     assert validate_set(routes, _params()) == []
 
 
-# ----------------------------------------------------------------------------
-# AC #4 — orchestrator: Solution → Route, metrics, ordering, purity
-# ----------------------------------------------------------------------------
+# Orchestrator: Solution → Route, metrics, ordering, purity
 
 
 def test_validate_builds_routes_with_aggregate_metrics() -> None:
@@ -505,9 +487,9 @@ def test_validate_rejects_empty_solution() -> None:
 
 
 def test_validate_derives_graph_invariants_once_per_call() -> None:
-    """Story 16.1: the graph-wide reuse invariants are built once, not once per route.
+    """The graph-wide reuse invariants are built once, not once per route.
 
-    They were derived inside the per-route check, so an N-route set paid N full
+    Derived inside the per-route check instead, an N-route set pays N full
     contracted-graph scans (10 identical ~327k-edge scans at r20).
     """
     edges_a = [_edge(0, 1, avg_gradient=0.3), _edge(1, 2, avg_gradient=0.3)]
@@ -583,9 +565,7 @@ def test_validate_route_does_not_mutate_inputs() -> None:
     assert len(graph.super_edge_to_base) == 1  # graph untouched
 
 
-# ----------------------------------------------------------------------------
 # FR31 — start-at-junction (only when params.start_at_junction is set)
-# ----------------------------------------------------------------------------
 
 
 def _mark_junctions(graph: ContractedGraph, junction_nodes: set[int]) -> None:

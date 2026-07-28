@@ -1,8 +1,8 @@
 # pyright: reportPrivateUsage=false
 # Reason: tests deliberately import `_get_commit_short_at` + `_UNKNOWN_COMMIT_SENTINEL`
-# — the cwd-parameterized helper is private to the public API per Story 2.6 AC #7's
-# "testable against a chosen working directory without leaking that arg into the
-# public API" requirement; the sentinel is a stable contract value tests need to
+# — the cwd-parameterized helper is deliberately private, so the public API doesn't
+# grow a working-directory argument just to be testable; the sentinel is a stable
+# contract value tests need to
 # assert against. Same per-file relaxation pattern as
 # tests/integration/test_pipeline_end_to_end.py.
 """Unit tests for provenance.get_commit_short, _get_commit_short_at, iso8601_utc_now.
@@ -44,12 +44,12 @@ def _init_throwaway_repo(repo: pathlib.Path) -> pathlib.Path:
     """
     subprocess.run(["git", "init", "-q"], check=True, cwd=repo)
     subprocess.run(
-        ["git", "config", "user.email", "story-26-test@example.com"],
+        ["git", "config", "user.email", "provenance-test@example.com"],
         check=True,
         cwd=repo,
     )
     subprocess.run(
-        ["git", "config", "user.name", "Story 2.6 Test"],
+        ["git", "config", "user.name", "Provenance Test"],
         check=True,
         cwd=repo,
     )
@@ -84,10 +84,10 @@ def test_get_commit_short_at_appends_dirty_when_working_tree_modified(
 def test_get_commit_short_at_ignores_untracked_only_changes(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Untracked-only working trees stay clean — Story 2.8 deferred-work D1 from 2.6.
+    """Untracked-only working trees stay clean.
 
-    A typical `bmad-dev-story` run leaves planning artifacts in the working tree
-    that the user never intended to commit (story files, etc.). Those should not
+    A planning or agent run routinely leaves untracked artifacts in the working tree
+    that were never intended to be committed. Those must not
     flip the report-visible commit string to `-dirty` when no tracked file was
     modified — matches `git describe --dirty` convention.
     """

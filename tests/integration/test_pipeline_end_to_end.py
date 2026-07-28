@@ -1,10 +1,10 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false, reportPrivateUsage=false
 # Reason: same osmnx/networkx/shapely boundary as the underlying pipeline modules.
-# reportPrivateUsage relaxed because the AC #5 guard tests deliberately import
+# reportPrivateUsage relaxed because the guard tests deliberately import
 # `pipeline._assert_*` / `_drop_*` helpers — the pipeline boundary keeps these
 # private to outside callers (Architecture §Boundaries) but unit-style
 # orchestrator-guard coverage needs direct access.
-"""Integration test for `pipeline.run_setup_stages` (Story 2.5).
+"""Integration test for `pipeline.run_setup_stages`.
 
 The fixture test runs the orchestrator end-to-end on the committed Grenoble
 data by monkeypatching `pipeline.osm_load` to read `tests/fixtures/grenoble_small/`
@@ -60,10 +60,10 @@ def _load_fixture_constants() -> tuple[float, float, int]:
 _CENTER_LAT, _CENTER_LON, _DIST_M = _load_fixture_constants()
 
 
-# AC #4 baselines — recorded by running `run_setup_stages` against the committed
+# Baselines — recorded by running `run_setup_stages` against the committed
 # fixtures. The committed Grenoble Le Sappey 2 km bbox is dense hiking-trail
 # terrain; on the current fixture (844 nodes, 2086 edges — trails + minor-road
-# connectors since Story 6.2) none of the orchestrator guards activate (all
+# connectors) none of the orchestrator guards activate (all
 # trails pass T6, no self-loops, no NaN elevations) so the orchestrator output
 # matches the input shape exactly. The ±10% band absorbs routine fixture
 # regeneration drift.
@@ -73,9 +73,7 @@ _BASELINE_TOTAL_LENGTH_M = 242_443.0  # ~242 km of trail + road across the 16 km
 _DRIFT_TOLERANCE = 0.10
 
 
-# --- AC #4: real-fixture orchestrator integration ----------------------------
-
-
+# Real-fixture orchestrator integration.
 @pytest.fixture(scope="module")
 def prepared_graph() -> nx.MultiDiGraph:
     """Run `run_setup_stages` against the committed Grenoble fixture.
@@ -102,7 +100,7 @@ def prepared_graph() -> nx.MultiDiGraph:
 
 @pytest.fixture(scope="module")
 def operational_graph(prepared_graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
-    """Query-side reshaping of the cached graph (Story 6.3): stages 6-7 applied.
+    """Query-side reshaping of the cached graph: stages 6-7 applied.
 
     `run_setup_stages` now caches the raw post-stage-5 elevation; the per-edge
     metrics (`length_m`, `d_plus_m`, ...) are computed query-side by
@@ -113,7 +111,7 @@ def operational_graph(prepared_graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
 
 
 def test_run_setup_stages_topology_baseline(prepared_graph: nx.MultiDiGraph) -> None:
-    """AC #4: node + edge counts are within ±10% of recorded baselines."""
+    """Node + edge counts are within ±10% of recorded baselines."""
     nodes = prepared_graph.number_of_nodes()
     edges = prepared_graph.number_of_edges()
     node_drift = abs(nodes - _BASELINE_NODES) / _BASELINE_NODES
@@ -129,9 +127,9 @@ def test_run_setup_stages_topology_baseline(prepared_graph: nx.MultiDiGraph) -> 
 
 
 def test_run_setup_stages_raw_attribute_contract(prepared_graph: nx.MultiDiGraph) -> None:
-    """AC #4: every edge carries the raw post-stage-5 contract (no metrics yet).
+    """Every edge carries the raw post-stage-5 contract (no metrics yet).
 
-    Story 6.3 moved stages 6-7 query-side: the cached setup graph carries
+    Stages 6-7 are query-side, so the cached setup graph carries
     `geometry`, raw `vertices_resampled`, and the source attributes, but NOT the
     per-edge metrics (those are added by `operationalize_graph` — see
     `test_operational_graph_metric_contract`).
@@ -150,7 +148,7 @@ def test_run_setup_stages_raw_attribute_contract(prepared_graph: nx.MultiDiGraph
 
 
 def test_operational_graph_metric_contract(operational_graph: nx.MultiDiGraph) -> None:
-    """AC #4: after query-side reshaping every edge carries the four metric attributes."""
+    """After query-side reshaping every edge carries the four metric attributes."""
     assert operational_graph.number_of_edges() > 0
     for u, v, k, data in operational_graph.edges(data=True, keys=True):
         ctx = f"edge ({u}, {v}, {k})"
@@ -163,7 +161,7 @@ def test_operational_graph_metric_contract(operational_graph: nx.MultiDiGraph) -
 def test_operational_graph_sign_and_finiteness_invariants(
     operational_graph: nx.MultiDiGraph,
 ) -> None:
-    """AC #4: every query-side metric is finite; sign invariants hold per edge."""
+    """Every query-side metric is finite; sign invariants hold per edge."""
     for u, v, k, data in operational_graph.edges(data=True, keys=True):
         ctx = f"edge ({u}, {v}, {k})"
         assert math.isfinite(data["length_m"]), ctx
@@ -179,11 +177,11 @@ def test_operational_graph_sign_and_finiteness_invariants(
 def test_operational_graph_aggregate_length_plausibility(
     operational_graph: nx.MultiDiGraph,
 ) -> None:
-    """AC #4: `sum(length_m)` is within ±10% of the recorded baseline.
+    """`sum(length_m)` is within ±10% of the recorded baseline.
 
     Catches gross axis-swap / unit / sign-flip bugs at the orchestrator scale.
     `length_m` is a 2D (lat/lon) distance, unaffected by elevation smoothing, so
-    the Story 2.5 baseline still holds. Sub-edge bugs are caught by the unit-layer
+    the edge-count baseline still holds. Sub-edge bugs are caught by the unit-layer
     tests in `test_climbs.py` and `test_smoothing.py`.
     """
     total = sum(
@@ -197,14 +195,12 @@ def test_operational_graph_aggregate_length_plausibility(
 
 
 def test_run_setup_stages_no_orphan_nodes(prepared_graph: nx.MultiDiGraph) -> None:
-    """AC #4: orphan-node prune leaves every node with degree ≥ 1."""
+    """Orphan-node prune leaves every node with degree ≥ 1."""
     min_degree = min(deg for _, deg in prepared_graph.degree())
     assert min_degree >= 1, f"Expected min degree ≥ 1 after orphan prune, got {min_degree}."
 
 
-# --- AC #5: orchestrator-guard tests against crafted inputs ------------------
-
-
+# Orchestrator-guard tests against crafted inputs.
 def _make_single_edge_graph_with_geometry(
     coords: list[tuple[float, float]],
 ) -> nx.MultiDiGraph:
@@ -247,7 +243,7 @@ def _make_single_edge_graph_with_elevation(
 
 
 def test_drop_short_edges_removes_out_and_back_self_loop() -> None:
-    """AC #5: out-and-back coincident-2D polyline is dropped (Story 2.4 D3).
+    """An out-and-back coincident-2D polyline is dropped.
 
     A self-loop `(u, u)` whose geometry is `[(lon, lat), (lon+eps, lat+eps),
     (lon, lat)]` has near-zero length-along-polyline but passes stage 4's
@@ -263,7 +259,7 @@ def test_drop_short_edges_removes_out_and_back_self_loop() -> None:
 
 
 def test_drop_short_edges_keeps_normal_edge() -> None:
-    """AC #5 (negative case): a normal ~100 m edge survives the prune."""
+    """negative case: a normal ~100 m edge survives the prune."""
     # 0.001° latitude ≈ 111 m — well above the 1 mm floor.
     coords = [(5.0, 45.0), (5.0, 45.001)]
     g = _make_single_edge_graph_with_geometry(coords)
@@ -272,7 +268,7 @@ def test_drop_short_edges_keeps_normal_edge() -> None:
 
 
 def test_assert_finite_elevations_raises_on_nan_elevation() -> None:
-    """AC #5: NaN elevation post-stage-6 → `PipelineContractError` naming the edge (Story 2.4 D2)."""
+    """NaN elevation post-stage-6 → `PipelineContractError` naming the edge."""
     verts = [(45.0, 5.0, 1000.0), (45.001, 5.0, math.nan), (45.002, 5.0, 1010.0)]
     g = _make_single_edge_graph_with_elevation(verts)
     with pytest.raises(PipelineContractError, match=r"\(0, 1, 0\)") as exc_info:
@@ -281,14 +277,14 @@ def test_assert_finite_elevations_raises_on_nan_elevation() -> None:
 
 
 def test_assert_finite_elevations_accepts_all_finite() -> None:
-    """AC #5 (negative case): all-finite elevations do not raise."""
+    """negative case: all-finite elevations do not raise."""
     verts = [(45.0, 5.0, 1000.0), (45.001, 5.0, 1005.0), (45.002, 5.0, 1010.0)]
     g = _make_single_edge_graph_with_elevation(verts)
     _assert_finite_elevations(g)  # no raise
 
 
 def test_assert_non_empty_raises_on_zero_edges() -> None:
-    """AC #5: zero edges after stage 2 → `PipelineContractError` naming area + policy (Story 2.1 D2)."""
+    """Zero edges after stage 2 → `PipelineContractError` naming area + policy."""
     g: nx.MultiDiGraph = nx.MultiDiGraph()
     g.add_node(0, x=5.0, y=45.0)  # node-only, no edges
     area = Area(center=(45.0, 5.0), radius_km=1.0)
@@ -300,18 +296,16 @@ def test_assert_non_empty_raises_on_zero_edges() -> None:
 
 
 def test_assert_non_empty_accepts_non_empty_graph() -> None:
-    """AC #5 (negative case): one-edge graph is accepted."""
+    """negative case: one-edge graph is accepted."""
     coords = [(5.0, 45.0), (5.0, 45.001)]
     g = _make_single_edge_graph_with_geometry(coords)
     area = Area(center=(45.0, 5.0), radius_km=1.0)
     _assert_non_empty(g, area, "include")  # no raise
 
 
-# --- Review patch P2: dem_path fail-fast at orchestrator entry ---------------
-
-
+# Dem_path fail-fast at orchestrator entry.
 def test_run_setup_stages_fails_fast_on_missing_dem_path(tmp_path: pathlib.Path) -> None:
-    """P2: `run_setup_stages` raises `BadCLIArgError` before stage 1 if `dem_path`
+    """`run_setup_stages` raises `BadCLIArgError` before stage 1 if `dem_path`
     does not exist, so the expensive stages 1-4 are not run on bad input.
     """
     area = Area(center=(_CENTER_LAT, _CENTER_LON), radius_km=_DIST_M / 1000.0)

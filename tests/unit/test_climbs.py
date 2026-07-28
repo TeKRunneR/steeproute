@@ -110,9 +110,7 @@ def test_compute_edge_metrics_fails_fast_on_non_finite_without_corrupting_others
         compute_edge_metrics(g)
 
 
-# --- AC #4: analytical correctness on synthetic edges -------------------------
-
-
+# Analytical correctness on synthetic edges.
 def test_compute_edge_metrics_flat_profile_has_zero_d_plus_d_minus() -> None:
     """Flat elevation → d_plus_m == 0, d_minus_m == 0, avg_gradient == 0."""
     verts = [
@@ -190,8 +188,7 @@ def test_compute_edge_metrics_mixed_up_down_separates_components() -> None:
     assert math.isclose(data["avg_gradient"], expected_grad, rel_tol=1e-6)
 
 
-# --- AC #1 (Story 10.2): windowed descent metric -----------------------------
-
+# Windowed descent metric.
 # Per-segment horizontal distance for a 0.0001° latitude step (the spacing every
 # synthetic profile below uses): same equirectangular projection as production.
 _SEG_LEN_M = _DEG_TO_M_LAT * 0.0001
@@ -295,9 +292,7 @@ def test_max_windowed_descent_grad_ignores_steep_ascent_within_net_descent() -> 
     assert metric < 12.0 / _SEG_LEN_M
 
 
-# --- pure-function discipline + attribute contract ---------------------------
-
-
+# Pure-function discipline + attribute contract.
 def test_compute_edge_metrics_does_not_mutate_input() -> None:
     """Pure-function discipline: input graph is unchanged after compute_edge_metrics."""
     verts = [(45.0, 5.0, 1000.0), (45.0001, 5.0, 1050.0), (45.0002, 5.0, 1100.0)]
@@ -321,9 +316,7 @@ def test_compute_edge_metrics_preserves_attribute_contract() -> None:
     assert data["osm_way_id"] == 12345
 
 
-# --- AC #5: integration-style fixture test through stages 1-7 ----------------
-
-
+# Integration-style fixture test through stages 1-7.
 _GRADIENT_PLAUSIBILITY_CAP = 0.8  # 80% — extreme Alpine cap for a sanity-only check.
 _GRADIENT_PLAUSIBILITY_MIN_FRACTION = 0.95  # ≥ 95% of edges below the cap.
 
@@ -332,7 +325,7 @@ _GRADIENT_PLAUSIBILITY_MIN_FRACTION = 0.95  # ≥ 95% of edges below the cap.
 def fixture_pipeline_through_stage7() -> nx.MultiDiGraph:
     """Run stages 1→5 (setup) then the query-side 6→7 reshaping on the Grenoble fixtures.
 
-    Story 6.3 moved stages 6-7 query-side: setup stops at stage 5 (raw elevation),
+    Stages 6-7 are query-side: setup stops at stage 5 (raw elevation),
     and `operationalize_graph` (smooth → deadband → naive-sum `compute_edge_metrics`)
     produces the operational metrics at query time. Calls `operationalize_graph` at
     its production defaults so the fixture mirrors `cli/query.py` exactly.
@@ -356,7 +349,7 @@ def fixture_pipeline_through_stage7() -> nx.MultiDiGraph:
 def test_fixture_pipeline_full_contract_populated(
     fixture_pipeline_through_stage7: nx.MultiDiGraph,
 ) -> None:
-    """AC #5: every output edge carries the full stages-1-7 attribute contract."""
+    """Every output edge carries the full stages-1-7 attribute contract."""
     assert fixture_pipeline_through_stage7.number_of_edges() > 0
     for _u, _v, _k, data in fixture_pipeline_through_stage7.edges(data=True, keys=True):
         assert isinstance(data["geometry"], shapely.LineString)
@@ -373,7 +366,7 @@ def test_fixture_pipeline_full_contract_populated(
 def test_fixture_pipeline_metrics_are_finite_and_signed_correctly(
     fixture_pipeline_through_stage7: nx.MultiDiGraph,
 ) -> None:
-    """AC #5: every metric is a finite float; sign invariants hold per edge."""
+    """Every metric is a finite float; sign invariants hold per edge."""
     for u, v, k, data in fixture_pipeline_through_stage7.edges(data=True, keys=True):
         ctx = f"edge ({u}, {v}, {k})"
         assert math.isfinite(data["length_m"]), ctx
@@ -389,7 +382,7 @@ def test_fixture_pipeline_metrics_are_finite_and_signed_correctly(
 def test_fixture_pipeline_gradients_are_plausibly_alpine(
     fixture_pipeline_through_stage7: nx.MultiDiGraph,
 ) -> None:
-    """AC #5: ≥ 95% of edges have avg_gradient < 80% — Alpine sanity cap.
+    """≥ 95% of edges have avg_gradient < 80% — Alpine sanity cap.
 
     Rationale: 80% (4 in 5) is well above any sustained-trail gradient and
     catches sign-flip / axis-swap / unit bugs in stages 6-7 without being a
@@ -408,9 +401,7 @@ def test_fixture_pipeline_gradients_are_plausibly_alpine(
     )
 
 
-# --- AC #6: hypothesis property test on metric invariants --------------------
-
-
+# Hypothesis property test on metric invariants.
 @given(
     verts=st.lists(
         st.tuples(
@@ -433,11 +424,11 @@ def test_fixture_pipeline_gradients_are_plausibly_alpine(
 def test_compute_edge_metrics_property_metric_invariants(
     verts: list[tuple[float, float, float]],
 ) -> None:
-    """AC #6: for any non-degenerate input, d_plus_m ≥ 0, d_minus_m ≥ 0, length_m > 0, gradient finite.
+    """For any non-degenerate input, d_plus_m ≥ 0, d_minus_m ≥ 0, length_m > 0, gradient finite.
 
     Uses the same `is_valid_for_metrics` predicate as the stage's input guard,
     via `hypothesis.assume`, so the strategy filter and production check agree
-    on what counts as valid (mirrors Story 2.2's `is_valid_polyline` pattern).
+    on what counts as valid (same pattern as `is_valid_polyline`).
     """
     assume(is_valid_for_metrics(verts))
     g = _single_edge_graph_with_elevation(verts)
@@ -450,12 +441,12 @@ def test_compute_edge_metrics_property_metric_invariants(
     assert data["avg_gradient"] >= 0.0
 
 
-# === Story 14.2 bit-equality oracles (Q2: vectorized stage-7 metrics + deadband) ===
-#
-# Verbatim copies of the pre-14.2 scalar metric/deadband helpers, kept as
-# bit-equality oracles: the vectorized production code must produce `==` (exact,
-# not approx) metrics/elevations over every edge of the real grenoble_small
-# fixture. "Verify before deleting the old code" gate (AC #1).
+# Bit-equality oracles for the vectorized stage-7 metrics + deadband.
+# # Verbatim copies of the scalar metric/deadband helpers, kept here as bit-equality
+# oracles: the vectorized production code must produce `==` (exact, not approx)
+# metrics/elevations over every edge of the real grenoble_small fixture. Keep these
+# even though nothing in `src/` calls them — they are the only independent statement
+# of what the vectorized code is supposed to compute.
 
 # Track the production constant directly so the oracle can never drift from it.
 _ORACLE_DESCENT_WINDOW_M = _DESCENT_WINDOW_M
@@ -565,7 +556,7 @@ def _fixture_metrics_input_graph() -> nx.MultiDiGraph:
     return graph_deadband_elevation(graph)
 
 
-# The flat-array metrics (Story 14.2) use `np.hypot`/`np.add.reduceat` instead of
+# The flat-array metrics use `np.hypot`/`np.add.reduceat` instead of
 # `math.hypot`/sequential `+=`, so they match the scalar oracle to floating-point
 # reordering (measured max ~1.7e-10 on the fixture; d_plus/d_minus were exactly
 # equal), not bit-for-bit. Tolerances below prove numerical equivalence while
@@ -576,7 +567,7 @@ _GRAD_ATOL = 1e-9  # dimensionless gradient
 
 
 def test_compute_edge_metrics_numerically_equivalent_to_scalar_reference() -> None:
-    """AC #1: vectorized stage-7 metrics equal the scalar oracle to fp-reordering on the fixture."""
+    """Vectorized stage-7 metrics equal the scalar oracle to fp-reordering on the fixture."""
     if not _DEM_FIXTURE_PATH.exists():
         pytest.skip("grenoble_small DEM fixture not committed.")
     metrics_input = _fixture_metrics_input_graph()
@@ -603,7 +594,7 @@ def test_compute_edge_metrics_numerically_equivalent_to_scalar_reference() -> No
 
 
 def test_graph_deadband_elevation_bit_identical_to_scalar_reference() -> None:
-    """AC #1: deadband output is bit-equal to the scalar oracle on the fixture (deadband stays scalar)."""
+    """Deadband output is bit-equal to the scalar oracle on the fixture (deadband stays scalar)."""
     if not _DEM_FIXTURE_PATH.exists():
         pytest.skip("grenoble_small DEM fixture not committed.")
     import osmnx

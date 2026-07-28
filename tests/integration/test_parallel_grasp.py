@@ -4,7 +4,7 @@
 # `test_grasp_reproducible.py` / `test_oracle_correctness.py`;
 # `reportPrivateUsage` — `_aggregate_progress` is a module-private pure helper the
 # threaded drainer delegates to, unit-tested directly here (the thread isn't).
-"""Parallel GRASP restarts — Story 14.4 (`solver/parallel.py`).
+"""Parallel GRASP restarts (`solver/parallel.py`).
 
 Exercises the multiprocess orchestration on the offline toy `ContractedGraph`
 (`conftest.make_toy_contracted_graph`) so no OSM/DEM fixture or network is
@@ -55,9 +55,7 @@ def _edge_id_sequences(solutions: list[Solution]) -> list[list[tuple[int, int, i
     return [[(e.node_u, e.node_v, e.key) for e in s.edges] for s in solutions]
 
 
-# --- split_iter_budget (pure; no processes) ----------------------------------
-
-
+# Split_iter_budget (pure; no processes)
 def test_split_iter_budget_even_division() -> None:
     assert split_iter_budget(100, 4) == [25, 25, 25, 25]
 
@@ -93,9 +91,7 @@ def test_split_iter_budget_rejects_non_positive_workers(bad: int) -> None:
         split_iter_budget(100, bad)
 
 
-# --- round_count / round_plan (island-migration budget planning; pure) ------
-
-
+# Round_count / round_plan (island-migration budget planning; pure)
 def test_round_count_disabled_or_too_coarse_is_single_round() -> None:
     assert round_count(1_000_000, 0, 4) == 1  # migration off
     assert round_count(1_000_000, 1_000_000, 4) == 1  # interval >= budget
@@ -153,9 +149,7 @@ def test_parallel_deterministic_with_migration() -> None:
     assert _edge_id_sequences(first.solutions) == _edge_id_sequences(second.solutions)
 
 
-# --- solver_graph_view + progress aggregation (pure; no processes) -----------
-
-
+# Solver_graph_view + progress aggregation (pure; no processes)
 def test_solver_graph_view_strips_heavy_attrs_but_preserves_solver_output() -> None:
     """The lean view drops rendering-only attrs yet yields byte-identical solver output.
 
@@ -185,7 +179,7 @@ def test_solver_graph_view_strips_heavy_attrs_but_preserves_solver_output() -> N
 def test_lean_graph_skips_the_solver_graph_view_rebuild(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Story 16.1: a graph advertising `lean=True` is shipped as-is, not rebuilt.
+    """A graph advertising `lean=True` is shipped as-is, not rebuilt.
 
     The rebuild was a full ~327k-edge graph copy at r20. A possibly-heavy graph
     (`lean=False`, the default for anything not from `contract_climbs`) must still
@@ -226,9 +220,7 @@ def test_aggregate_progress_folds_latest_per_worker() -> None:
     )
 
 
-# --- Parallel solve (spawns worker processes) --------------------------------
-
-
+# Parallel solve (spawns worker processes)
 def test_parallel_deterministic_per_seed_workers() -> None:
     """Two runs with the same `(seed, workers)` are byte-identical (reproducible)."""
     graph = make_toy_contracted_graph(11)

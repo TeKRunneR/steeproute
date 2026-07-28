@@ -7,11 +7,11 @@
 # actually resolves at runtime. Relative imports fail because the test file
 # isn't loaded as part of a package; the fully-qualified `tests.integration.*`
 # fails because `tests/` is never on sys.path either.
-"""Oracle-correctness tests (Story 3.5).
+"""Oracle-correctness tests.
 
 Pinned by PRD Appendix A: the brute-force enumerator used as the GRASP
-reference (Story 3.7) is itself verified against 2-3 tiny handcrafted graphs
-with known-by-inspection optima. Architecture §Cat 11c lists oracle correctness
+reference is itself verified against tiny handcrafted graphs with
+known-by-inspection optima. Architecture §Cat 11c lists oracle correctness
 as a CI gate, pass-required — `pytest.skip` / `xfail` are forbidden here.
 
 Each fixture is constructed inline with an ASCII comment block documenting the
@@ -61,7 +61,7 @@ def _params(*, n: int = 1, theta: float = _THETA, j_max: float = _J_MAX) -> Solv
 
 
 def _seg(u: int, v: int, key: int = 0) -> tuple[int, int, int]:
-    """Undirected base-segment id (canonical sorted node-pair + key), per Story 5.1."""
+    """Undirected base-segment id: canonical sorted node-pair + key."""
     return (min(u, v), max(u, v), key)
 
 
@@ -78,7 +78,7 @@ def _add_edge(
     base_segment_id: frozenset[tuple[int, int, int]] | None = None,
     reusable: bool = False,
 ) -> Edge:
-    """Add an edge to `g` carrying the post-stage-7 attribute contract + Story 5.1 reuse tags.
+    """Add an edge to `g` carrying the post-stage-7 attribute contract + reuse tags.
 
     Returns the corresponding `Edge` value so super-edge fixtures can pass it
     into `super_edge_to_base`. `avg_gradient` is computed as
@@ -148,24 +148,19 @@ def _assert_valid_walk(sol_edges: tuple[Edge, ...]) -> None:
             )
 
 
-# ---------------------------------------------------------------------------
 # Fixture A — dominant single-climb path (5 nodes, 5 edges)
-# ---------------------------------------------------------------------------
-#
-#   0 --A1--> 1 --A2--> 2 --A3--> 3 --conn--> 4
-#    \                                       ^
-#     `------------- bypass ---------------'
-#
-# Edges (all directed):
-#   A1: 0→1   super,  len=400, d+=200, d-=0     (avg_gradient=0.500)
-#   A2: 1→2   super,  len=600, d+=300, d-=0     (avg_gradient=0.500)
-#   A3: 2→3   super,  len=300, d+=150, d-=0     (avg_gradient=0.500)
-#   conn: 3→4 long connector, len=500, d+=20, d-=20
-#   bypass: 0→4 long connector, len=1000, d+=0, d-=0
-#
-# Expected top-1 (n=1, j_max=0.30):
-#   route = 0→1→2→3→4 via A1+A2+A3+conn
-#   objective = (200+0) + (300+0) + (150+0) + (20+20) = 690.0
+# # 0 --A1--> 1 --A2--> 2 --A3--> 3 --conn--> 4
+# \                                       ^
+# `------------- bypass ---------------'
+# # Edges (all directed):
+# A1: 0→1   super,  len=400, d+=200, d-=0     (avg_gradient=0.500)
+# A2: 1→2   super,  len=600, d+=300, d-=0     (avg_gradient=0.500)
+# A3: 2→3   super,  len=300, d+=150, d-=0     (avg_gradient=0.500)
+# conn: 3→4 long connector, len=500, d+=20, d-=20
+# bypass: 0→4 long connector, len=1000, d+=0, d-=0
+# # Expected top-1 (n=1, j_max=0.30):
+# route = 0→1→2→3→4 via A1+A2+A3+conn
+# objective = (200+0) + (300+0) + (150+0) + (20+20) = 690.0
 # No competing route comes close: any subset drops a climb or the conn,
 # any path through `bypass` skips all three climbs.
 
@@ -199,29 +194,24 @@ def test_enumerate_best_finds_dominant_climb_path_in_chain() -> None:
     _assert_valid_walk(result[0].edges)
 
 
-# ---------------------------------------------------------------------------
 # Fixture B — two structurally-distinct, equal-objective paths (5 nodes, 4 edges)
-# ---------------------------------------------------------------------------
-#
-#         B1 (super)         B2 (super)
-#     0 ---------> 1 ---------> 2
-#      \
-#       \ B3 (super)         B4 (super)
-#        `-------> 3 ---------> 4
-#
-# Edges:
-#   B1: 0→1   super, len=200, d+=100, d-=0   (avg_gradient=0.500)
-#   B2: 1→2   super, len=400, d+=200, d-=0   (avg_gradient=0.500)
-#   B3: 0→3   super, len=400, d+=200, d-=0   (avg_gradient=0.500)
-#   B4: 3→4   super, len=200, d+=100, d-=0   (avg_gradient=0.500)
-#
-# Expected top-2 (n=2, j_max=0.30 — permissive enough for fully disjoint
+# # B1 (super)         B2 (super)
+# 0 ---------> 1 ---------> 2
+# \
+# \ B3 (super)         B4 (super)
+# `-------> 3 ---------> 4
+# # Edges:
+# B1: 0→1   super, len=200, d+=100, d-=0   (avg_gradient=0.500)
+# B2: 1→2   super, len=400, d+=200, d-=0   (avg_gradient=0.500)
+# B3: 0→3   super, len=400, d+=200, d-=0   (avg_gradient=0.500)
+# B4: 3→4   super, len=200, d+=100, d-=0   (avg_gradient=0.500)
+# # Expected top-2 (n=2, j_max=0.30 — permissive enough for fully disjoint
 # routes, threshold = 1 - 0.30 = 0.70):
-#   path P1 = 0→1→2  via B1+B2,  objective = 100 + 200 = 300.0
-#   path P2 = 0→3→4  via B3+B4,  objective = 200 + 100 = 300.0
+# path P1 = 0→1→2  via B1+B2,  objective = 100 + 200 = 300.0
+# path P2 = 0→3→4  via B3+B4,  objective = 200 + 100 = 300.0
 # Edge-sets are disjoint → jaccard_distance = 1.0 ≥ 0.70 → both admitted.
 # Deterministic tie-break (`(-objective, sorted_edge_ids)`):
-#   sorted_edge_ids(P1) = ((0,1,0), (1,2,0)) < ((0,3,0), (3,4,0)) = sorted_edge_ids(P2)
+# sorted_edge_ids(P1) = ((0,1,0), (1,2,0)) < ((0,3,0), (3,4,0)) = sorted_edge_ids(P2)
 # so P1 sorts before P2.
 
 
@@ -257,23 +247,18 @@ def test_enumerate_best_returns_two_distinct_paths_under_permissive_jmax() -> No
         _assert_valid_walk(sol.edges)
 
 
-# ---------------------------------------------------------------------------
 # Fixture C — disjoint-component graph (7 nodes, 5 edges)
-# ---------------------------------------------------------------------------
-#
-#   Component 1:  0 --C1--> 1 --C2--> 2 --C3--> 3
-#   Component 2:  4 --C4--> 5 --C5--> 6
-#
-# Edges:
-#   C1: 0→1   super, len=200, d+=100, d-=0    (avg_gradient=0.500)
-#   C2: 1→2   super, len=400, d+=200, d-=0    (avg_gradient=0.500)
-#   C3: 2→3   super, len=300, d+=150, d-=0    (avg_gradient=0.500)
-#   C4: 4→5   super, len=300, d+=120, d-=0    (avg_gradient=0.400)
-#   C5: 5→6   super, len=200, d+=80,  d-=0    (avg_gradient=0.400)
-#
-# Expected top-2 (n=2, j_max=0.30):
-#   dominant: 0→1→2→3 (full Component-1 chain), objective = 100+200+150 = 450.0
-#   next:     4→5→6   (full Component-2 chain), objective = 120+80      = 200.0
+# # Component 1:  0 --C1--> 1 --C2--> 2 --C3--> 3
+# Component 2:  4 --C4--> 5 --C5--> 6
+# # Edges:
+# C1: 0→1   super, len=200, d+=100, d-=0    (avg_gradient=0.500)
+# C2: 1→2   super, len=400, d+=200, d-=0    (avg_gradient=0.500)
+# C3: 2→3   super, len=300, d+=150, d-=0    (avg_gradient=0.500)
+# C4: 4→5   super, len=300, d+=120, d-=0    (avg_gradient=0.400)
+# C5: 5→6   super, len=200, d+=80,  d-=0    (avg_gradient=0.400)
+# # Expected top-2 (n=2, j_max=0.30):
+# dominant: 0→1→2→3 (full Component-1 chain), objective = 100+200+150 = 450.0
+# next:     4→5→6   (full Component-2 chain), objective = 120+80      = 200.0
 # Cross-component disjointness → distance 1.0 ≥ 0.70 → both admitted.
 # Sub-chains within Component 1 overlap the dominant path (e.g. 1→2→3 shares
 # 2 of 3 edges with the dominant route → distance = 1 - 2/3 ≈ 0.333 < 0.70),
@@ -314,32 +299,26 @@ def test_enumerate_best_picks_top_route_from_each_disjoint_component() -> None:
         _assert_valid_walk(sol.edges)
 
 
-# ---------------------------------------------------------------------------
 # Fixture D — parallel multi-edges (2 nodes, 2 edges sharing endpoints)
-# ---------------------------------------------------------------------------
-#
-#         D1 (super, key=0)
-#     0 ===================> 1
-#         D2 (super, key=1)
-#     0 ===================> 1
-#
-# Edges:
-#   D1: 0→1   super, key=0, len=200, d+=100, d-=0   (avg_gradient=0.500)
-#   D2: 0→1   super, key=1, len=300, d+=150, d-=0   (avg_gradient=0.500)
-#
-# Both edges share `(node_u, node_v) = (0, 1)` and are distinguished only by
+# # D1 (super, key=0)
+# 0 ===================> 1
+# D2 (super, key=1)
+# 0 ===================> 1
+# # Edges:
+# D1: 0→1   super, key=0, len=200, d+=100, d-=0   (avg_gradient=0.500)
+# D2: 0→1   super, key=1, len=300, d+=150, d-=0   (avg_gradient=0.500)
+# # Both edges share `(node_u, node_v) = (0, 1)` and are distinguished only by
 # the networkx multi-edge `key`. Production `contract_climbs` deliberately
 # emits parallel keys when a connector and a super-edge share endpoints
 # (`pipeline/graph.py::_next_key_for`), so the `(u, v, key)` granularity in
 # the oracle's dedup, `used_ids` tracking, and `super_edge_to_base` lookup
 # must distinguish them.
-#
-# Expected top-2 (n=2, j_max=0.30):
-#   Each parallel edge is a single-edge walk on its own. Their edge-sets
-#   `{(0,1,0)}` and `{(0,1,1)}` are disjoint by key, so
-#   jaccard_distance = 1.0 ≥ 0.70 → both admitted.
-#   Sorted by `(-objective, sorted_edge_ids)`:
-#     D2 alone (obj 150) sorts first; D1 alone (obj 100) sorts second.
+# # Expected top-2 (n=2, j_max=0.30):
+# Each parallel edge is a single-edge walk on its own. Their edge-sets
+# `{(0,1,0)}` and `{(0,1,1)}` are disjoint by key, so
+# jaccard_distance = 1.0 ≥ 0.70 → both admitted.
+# Sorted by `(-objective, sorted_edge_ids)`:
+# D2 alone (obj 150) sorts first; D1 alone (obj 100) sorts second.
 # A regression that keyed `used_ids` or the dedup-set on `(u, v)` instead of
 # `(u, v, key)` would either collapse them into one candidate or fail to
 # enumerate the second walk at all.
@@ -372,9 +351,7 @@ def test_enumerate_best_distinguishes_parallel_edges_by_key() -> None:
         _assert_valid_walk(sol.edges)
 
 
-# ---------------------------------------------------------------------------
-# Pathological inputs (AC #3)
-# ---------------------------------------------------------------------------
+# Pathological inputs
 
 
 def test_enumerate_best_returns_empty_on_empty_graph() -> None:
@@ -483,18 +460,13 @@ def test_enumerate_best_admits_super_edge_at_theta_boundary() -> None:
     assert math.isclose(result[0].objective, 40.0, abs_tol=1e-9)
 
 
-# ---------------------------------------------------------------------------
-# Fixture E — undirected reuse changes the optimum (Story 5.2)
-# ---------------------------------------------------------------------------
-#
-#         climb (super)          reverse long connector
-#     0 ===============> 1   and   1 ---------------> 0
-#
-#   climb:   0→1 super, len=400, d+=200, d-=0   (avg 0.500), base_segment_id {(0,1,0)}
-#   reverse: 1→0 connector, len=400, d+=0, d-=200 (avg 0.500), base_segment_id {(0,1,0)}
-#
-# Both edges carry the SAME undirected base id (the reverse is the climb's own
-# trail walked downhill); neither is reusable. Under the OLD directed
+# Fixture E — undirected reuse changes the optimum
+# # climb (super)          reverse long connector
+# 0 ===============> 1   and   1 ---------------> 0
+# # climb:   0→1 super, len=400, d+=200, d-=0   (avg 0.500), base_segment_id {(0,1,0)}
+# reverse: 1→0 connector, len=400, d+=0, d-=200 (avg 0.500), base_segment_id {(0,1,0)}
+# # Both edges carry the SAME undirected base id (the reverse is the climb's own
+# trail walked downhill); neither is reusable. Under purely directed
 # edge-simple rule the two-edge walk 0→1→0 was feasible with objective
 # 200 + 200 = 400 (the degenerate out-and-back). Under undirected base-segment
 # reuse the second edge is blocked, so the best feasible route is a single edge,
@@ -542,9 +514,7 @@ def test_enumerate_best_undirected_reuse_blocks_out_and_back() -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Timing bound (AC #4)
-# ---------------------------------------------------------------------------
+# Timing bound
 
 
 def test_enumerate_best_completes_under_one_second_on_five_node_fixture() -> None:

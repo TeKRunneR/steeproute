@@ -2,7 +2,7 @@
 # Reason: Starlette's TestClient re-exports httpx, whose response accessors
 # (.get/.status_code/.headers/.text/.json()) surface as Unknown — a stub
 # boundary, same per-file relaxation used in test_app_api.py.
-"""Integration tests for the SSE progress stream (App Story 1.4).
+"""Integration tests for the SSE progress stream.
 
 `GET /jobs/{id}/events` classifies a setup job's stdout into the `ProgressModel`,
 persists it to `progress.ndjson`, and streams it snapshot-then-tail. Driven
@@ -26,7 +26,7 @@ from steeproute.app.models import JobRecord
 
 # Fake CLI: emit the real setup stdout line shapes, sleeping `SLEEP` between each
 # (to widen the window for a live connect), then exit 0.
-#   argv: <sleep_s>
+# argv: <sleep_s>
 _FAKE_CLI = textwrap.dedent(
     """
     import sys, time

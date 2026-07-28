@@ -2,7 +2,7 @@
 # Reason: same osmnx / networkx boundary as tests/integration/test_grasp_reproducible.py;
 # `reportImplicitRelativeImport` — `from conftest import ...` is the shape that resolves
 # under pytest's prepend import mode (see test_oracle_correctness.py for the rationale).
-"""Time-budget termination (Story 7.2, Architecture §Cat 5e).
+"""Time-budget termination (Architecture §Cat 5e).
 
 GRASP must stop once `--time-budget` wall-clock is exhausted (checked between
 iterations) and tag the run `budget-exhausted`. This runs the solver on the real

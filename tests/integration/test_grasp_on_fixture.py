@@ -2,7 +2,7 @@
 # Reason: same osmnx / networkx boundary as tests/integration/test_graph_contraction_fixture.py;
 # `reportImplicitRelativeImport` — `from conftest import ...` is the shape that resolves
 # under pytest's prepend import mode (see test_oracle_correctness.py for the rationale).
-"""GRASP solver integration test on the real Grenoble fixture (Story 3.6 AC #5).
+"""GRASP solver integration test on the real Grenoble fixture.
 
 Runs `GraspSolver.run()` against the shared session-scoped `grenoble_fixture`
 (tests/integration/conftest.py — the setup → climbs → contract chain) and
@@ -22,8 +22,8 @@ FR10 strict-containment is checked transitively: every edge is drawn from the
 area-clipped contracted graph, which `contract_climbs` cuts to the query area
 upstream.
 
-`iter_budget` is tuned for a CI-friendly wall-clock — Story 3.6 AC #5 caps the
-test at ~30 s.
+`iter_budget` is tuned for a CI-friendly wall-clock — the module's budget is
+~30 s.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ from steeproute.solver.reuse import blocking_ids, non_exempt_base_segment_ids
 
 _N = 3
 # Conservative: enough iterations to populate the tracker on this small
-# fixture without blowing the CI wall-clock cap (AC #5: ~30 s).
+# fixture without blowing the CI wall-clock cap (~30 s).
 _ITER_BUDGET = 100
 
 
@@ -70,8 +70,8 @@ def _params() -> SolverParams:
         untagged_policy="include",
         seed=GRENOBLE_SEED,
         iter_budget=_ITER_BUDGET,
-        # Story 7.2 made time/stagnation termination live; disable stagnation so
-        # the quality-gate run is an iter-budget-only function of the seed (early
+        # Disable stagnation so the quality-gate run is an iter-budget-only
+        # function of the seed (early
         # stagnation could cut the search before a late improvement). time_budget
         # can't bind on this small fixture's ~100 fast iterations.
         time_budget=60.0,
@@ -86,7 +86,7 @@ def solver_chain(grenoble_fixture: GrenobleFixture) -> tuple[ContractedGraph, li
     Module-scoped because every assertion operates on the same output —
     re-running construction for each test would multiply the wall-clock by the
     test count for no semantic gain. The contracted graph is exposed alongside
-    the routes so the Story 5.2 reuse check can read the `base_segment_id` tags.
+    the routes so the reuse check can read the `base_segment_id` tags.
     The `assert result` here is the single non-vacuity guard for the whole
     module — every dependent test iterates the result, so pinning non-emptiness
     once at the fixture trips them all if a regression empties the output.
@@ -158,7 +158,7 @@ def test_every_edge_in_every_route_satisfies_sac_cap(
     """Architecture §Cat 6: per-edge SAC cap holds on every route edge.
 
     `max_sac_rank(None)` and unrecognized values return `None` and are
-    admitted (same policy as the oracle in Story 3.5). Only known SAC scales
+    admitted (same policy as the exhaustive oracle). Only known SAC scales
     above `cap_rank` should be rejected — and none can appear in any route.
     """
     cap_rank = parse_difficulty_cap(GRENOBLE_DIFFICULTY_CAP)
@@ -175,12 +175,12 @@ def test_every_edge_in_every_route_satisfies_sac_cap(
 def test_no_grasp_route_reuses_a_nonexempt_base_segment(
     solver_chain: tuple[ContractedGraph, list[Solution]],
 ) -> None:
-    """Story 5.2 / FR5: no returned route walks a non-exempt base segment twice, in any direction.
+    """FR5: no returned route walks a non-exempt base segment twice, in any direction.
 
     Reads the `base_segment_id` tags off the real contracted graph and replays
     the once-only rule (`solver.reuse`) over each route. This is the empirical
-    confirmation — deferred from Story 5.1 — that the undirected ids actually
-    collide on real OSM data (forward/reverse of a trail share an id), so the
+    confirmation that the undirected ids actually collide on real OSM data
+    (forward/reverse of a trail share an id), so the
     out-and-back is killed in practice and not just on synthetic fixtures.
     """
     contracted, result = solver_chain

@@ -1,13 +1,13 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
 # Reason: same osmnx / networkx boundary as tests/integration/test_pipeline_end_to_end.py.
-"""Integration test for `pipeline.graph.contract_climbs` (stage 9, Story 3.3).
+"""Integration test for `pipeline.graph.contract_climbs` (stage 9).
 
 Runs the full setup → climb-detection → contraction chain against the
 committed Grenoble Le Sappey fixture and asserts the two contract relations
-required by AC #3: (1) the contracted graph has strictly fewer edges than
+required here: (1) the contracted graph has strictly fewer edges than
 the post-stage-7 base graph (multi-edge climbs collapse into single
-super-edges; since Story 5.1 all connectors are retained, so the reduction
-comes purely from climb collapse), (2) for every super-edge the back-mapped
+super-edges; all connectors are retained, so the reduction comes purely from
+climb collapse), (2) for every super-edge the back-mapped
 base-edge sequence's `sum(e.length_m)` and `sum(e.d_plus_m)` equal the
 super-edge's stored aggregates within `math.isclose(abs_tol=1e-9)`.
 
@@ -78,7 +78,7 @@ def base_graph() -> nx.MultiDiGraph:
 
 
 def test_contracted_graph_has_fewer_edges_than_base(base_graph: nx.MultiDiGraph) -> None:
-    """AC #3: contracted graph is smaller via climb collapse (connectors all retained)."""
+    """Contracted graph is smaller via climb collapse (connectors all retained)."""
     climbs = detect_climbs(
         base_graph,
         min_climb_slope=_MIN_CLIMB_SLOPE,
@@ -92,16 +92,16 @@ def test_contracted_graph_has_fewer_edges_than_base(base_graph: nx.MultiDiGraph)
         f"contracted graph not smaller: "
         f"{contracted.graph.number_of_edges()} >= {base_graph.number_of_edges()}"
     )
-    # Sanity: at least one super-edge per climb. Junction-aware splitting (Story
-    # 6.1, default on) can break a climb into several super-edges at interior
-    # trail junctions, so the count is `>= len(climbs)` rather than `==`.
+    # Sanity: at least one super-edge per climb. Junction-aware splitting (on by
+    # default) can break a climb into several super-edges at interior trail
+    # junctions, so the count is `>= len(climbs)` rather than `==`.
     assert len(contracted.super_edge_to_base) >= len(climbs)
 
 
 def test_super_edge_aggregates_match_back_expanded_base_metrics(
     base_graph: nx.MultiDiGraph,
 ) -> None:
-    """AC #3: per super-edge, sum of metrics in `base_graph` matches stored aggregate.
+    """Per super-edge, sum of metrics in `base_graph` matches stored aggregate.
 
     Cross-checks aggregation correctness end-to-end: the super-edge's stored
     `length_m` / `d_plus_m` / `d_minus_m` must equal the sum of the SAME-named

@@ -3,13 +3,13 @@
 # `reportPrivateUsage` — the fixture chain calls the orchestrator's private guard
 # prunes (`_drop_orphan_nodes`/`_drop_short_edges`) so each stage's benchmark input
 # matches production exactly (same shape as tests/integration/test_pipeline_end_to_end.py).
-"""Benchmark-suite fixtures + locally-pinned parameters (Story 11.3).
+"""Benchmark-suite fixtures + locally-pinned parameters.
 
 Everything here is pinned **locally, on purpose** — never imported from
 `steeproute.regression` or CLI defaults. The regression pins exist so route
 *output* can't drift silently; these pins exist so throughput *baselines*
-can't drift silently. A future re-tune of either must not move the other
-(Story 11.3 AC #4).
+can't drift silently. Re-tuning either must not move the other, which importing
+one from the other would guarantee it did.
 
 The suite measures time, never route output (quality is the goldens' job —
 mixing the two in one metric makes both noisy, per the performance-tuning
@@ -64,9 +64,9 @@ BENCH_SEED: int = 42
 # `stagnation_iters=0` disables stagnation (§Cat 5e) and `time_budget` is pinned
 # high so wall-clock never binds — `iter_budget` is the only live terminator, and
 # `test_solver_throughput.py` asserts it was the one that fired. The remaining
-# values mirror the fast-tier regression pins as of 2026-07-03 (copied, not
-# imported); `untagged_policy`/`difficulty_cap` also drive the graph-shaping
-# calls in the fixtures below.
+# values mirror the fast-tier regression pins (copied, not imported — see the
+# local-pinning rule above); `untagged_policy`/`difficulty_cap` also drive the
+# graph-shaping calls in the fixtures below.
 BENCH_UNTAGGED_POLICY: str = "include"
 BENCH_DIFFICULTY_CAP: str = "T3"
 BENCH_ELEVATION_SMOOTHING_M: float = 50.0
@@ -128,9 +128,8 @@ def contracted_graph() -> ContractedGraph:
     )
 
 
-# --- Setup-stage input chain -------------------------------------------------
-#
-# Each fixture builds one stage's *input* exactly as `pipeline.build_graph_geometry`
+# Setup-stage input chain.
+# # Each fixture builds one stage's *input* exactly as `pipeline.build_graph_geometry`
 # would hand it over (including the inter-stage guard prunes, which live in the
 # fixtures — outside the measured region — mirroring the orchestrator's folding of
 # guards into their preceding stage). Stage functions are pure (the architecture's
@@ -168,9 +167,8 @@ def resampled_graph(smoothed_graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
     return _drop_short_edges(resample_edges(smoothed_graph))
 
 
-# --- Query-stage input chain (stages 6b/7/9) --------------------------------
-#
-# These replay the query-side reshaping from `cli/query.py` off the committed
+# Query-stage input chain (stages 6b/7/9)
+# # These replay the query-side reshaping from `cli/query.py` off the committed
 # e2e cache (the same raw post-stage-5 graph the solver benchmark starts from),
 # so the stage-6b / stage-7 / stage-9 seams measure exactly what a real query
 # pays. Session-scoped: built once, read many; the stage functions are pure.
@@ -181,7 +179,7 @@ def post_stage5_graph(resampled_graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
     """Post-stage-5 graph built by the setup chain — geometry-bearing, as setup owns it.
 
     Distinct from `prepared_grenoble_graph`, which comes back out of the cache and
-    therefore carries no `geometry` (schema v3, Story 16.3). The cache-*write*
+    therefore carries no `geometry` (payload schema v3). The cache-*write*
     benchmarks need the shape `steeproute-setup` actually hands to `write_entry`.
     """
     return sample_elevation(resampled_graph.copy(), DEM_FIXTURE_PATH, inplace=True)
@@ -217,7 +215,7 @@ def operational_graph(metrics_input_graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
 
     Distinct from `filtered_graph` (the setup-side stage-2 input at `T6` over the
     raw graph): the query re-filters this metrics-bearing graph at the user's
-    `--difficulty-cap`, which is the seam Story 16.1's consuming path targets.
+    `--difficulty-cap`, which is the seam the consuming (`consume=True`) path targets.
     """
     return compute_edge_metrics(metrics_input_graph)
 

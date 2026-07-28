@@ -10,15 +10,15 @@ Unlike the committed `tests/fixtures/grenoble_small/cache/` (a bare manifest use
 by the integration tests), this produces a full cache root — `steeproute/index.json`
 + `steeproute/areas/<hash>/{graph.pkl,bounds.geojson,manifest.json}` — that the
 `steeproute` query CLI can run against with a plain `--cache-dir` and no patching.
-It is what the Story 8.1 regression harness (`tests/e2e/test_pinned_regressions.py`)
-and `uv run update-regression` query to (re)build the golden.
+It is what the regression harness (`tests/e2e/test_pinned_regressions.py`) and
+`uv run update-regression` query to (re)build the golden.
 
-**Two entries are prepared into this one cache root (Story 15.3):** the original
+**Two entries are prepared into this one cache root:** the original
 axis-aligned square, and a rotated rectangle. The rotated entry is what gives the
 rotated-rectangle golden something to *pin*: the query area only selects a cache
 entry — it never clips the search — so a rotated query against the square entry
 would reproduce the square golden's routes exactly and prove nothing. The
-behaviour Epic 15 introduces lives in **setup**, where the graph is truncated to
+rotated-area behaviour lives in **setup**, where the graph is truncated to
 the rotated ring, so the golden has to run against a genuinely rotated *prepared*
 entry.
 
@@ -54,8 +54,8 @@ CENTER_LAT = 45.260
 CENTER_LON = 5.788
 SEED_RADIUS_KM = 2.0
 
-# Rotated seed area (Story 15.3). Bearing 45 deg — the SW-NE orientation that
-# motivated the epic. Sized so its axis-aligned envelope (1.91 km half-extent at
+# Rotated seed area. Bearing 45 deg — the SW-NE orientation a real diagonal
+# mountain range takes. Sized so its axis-aligned envelope (1.91 km half-extent at
 # this bearing) still fits inside the 2.0 km square the source graphml was fetched
 # at, while dropping ~57% of that square's area — enough that the truncation
 # visibly changes the graph, and therefore the routes.
@@ -68,8 +68,8 @@ def _osm_load_from_fixture(area: Area) -> nx.MultiDiGraph:
     """Stand in for stage 1, reproducing the real fetch's shape handling offline.
 
     The committed graphml *is* the square `graph_from_point(dist_type="bbox")`
-    fetch, so a square area returns it untouched (the pre-Story-15.3 behaviour —
-    the square golden must not move). A non-square area gets the same treatment
+    fetch, so a square area must be returned untouched — anything else moves the
+    square golden. A non-square area gets the same treatment
     the real `graph_from_polygon` applies to a downloaded network: truncate to the
     ring, then keep the largest weakly-connected component. Reusing osmnx's own
     `truncate` functions is what makes this a faithful stand-in rather than a

@@ -2,7 +2,7 @@
 # Reason: same networkx-boundary pattern as test_grasp_construction.py;
 # `reportImplicitRelativeImport` — `from exhaustive_oracle import ...` is the shape
 # that resolves under pytest's prepend import mode (see test_solver_on_toy_graph.py).
-"""GRASP θ-feasible prefix recovery regression test (Story 9.2, review finding #10).
+"""GRASP θ-feasible prefix recovery regression test (review finding #10).
 
 Fail-first regression for the gap where `run()` offered only the maximal walk to
 the tracker and checked θ on that whole walk, so a steep θ-clearing prefix forced
@@ -89,18 +89,13 @@ def _edge_id_sets(sols: list) -> list[tuple[tuple[int, int, int], ...]]:  # noqa
     return [tuple((e.node_u, e.node_v, e.key) for e in s.edges) for s in sols]
 
 
-# ---------------------------------------------------------------------------
 # Steep-edge-plus-forced-flat-tail graph (3 nodes, 2 edges).
-# ---------------------------------------------------------------------------
-#
-#   0 --steep (super)--> 1 --flat connector--> 2
-#
-# steep 0→1: len=400, d+=200 (avg 0.500, clears θ=0.20 on its own).
+# # 0 --steep (super)--> 1 --flat connector--> 2
+# # steep 0→1: len=400, d+=200 (avg 0.500, clears θ=0.20 on its own).
 # flat  1→2: len=2000, d+=0  (avg 0.000) — always RCL-feasible, so the greedy
-#            walk is forced to append it, dragging the maximal-walk average
-#            (200 / 2400 ≈ 0.083) below θ.
-#
-# The only θ-clearing route is the steep-only prefix [0→1]. Pre-9.2 GRASP
+# walk is forced to append it, dragging the maximal-walk average
+# (200 / 2400 ≈ 0.083) below θ.
+# # The only θ-clearing route is the steep-only prefix [0→1]. Pre-9.2 GRASP
 # offered only the maximal walk and rejected it → []. The oracle enumerates the
 # prefix → [0→1].
 
@@ -113,9 +108,9 @@ def _build_forced_flat_tail_fixture() -> ContractedGraph:
 
 
 def test_grasp_recovers_theta_clearing_prefix_under_forced_flat_tail() -> None:
-    """Story 9.2 / FR3: GRASP returns the θ-clearing prefix the oracle returns.
+    """FR3: GRASP returns the θ-clearing prefix the oracle returns.
 
-    Fail-first: pre-fix `run()` returns `[]` here because only the maximal walk
+    Without prefix recovery `run()` returns `[]` here, because only the maximal walk
     `[0→1, 1→2]` (avg ≈ 0.083 < θ) is offered to the tracker. After the fix the
     longest θ-clearing prefix `[0→1]` is offered, so GRASP matches the oracle and
     never returns a false empty result.

@@ -1,9 +1,9 @@
-"""Tests for `steeproute.models` — Story 3.1 query-side data contract.
+"""Tests for `steeproute.models` — the query-side data contract.
 
 The four invariants (frozen, slots, value-equality, round-trip) are pinned per
-Architecture §"Python code conventions" and Story 3.1 AC #3. The parametrized
-suite covers all 12 new dataclasses; the per-class round-trip tests document
-the field list explicitly so the diff is reviewable.
+Architecture §"Python code conventions". The parametrized suite covers every
+dataclass; the per-class round-trip tests spell out the field list explicitly, so a
+field added or renamed shows up as a test diff.
 """
 
 from __future__ import annotations
@@ -30,11 +30,11 @@ from steeproute.models import (
     ValidatedRouteSet,
 )
 
-# --- Canonical-instance factories ---------------------------------------------
+# Canonical-instance factories.
 # A shared MultiDiGraph instance lets ContractedGraph equality fall back on
 # identity for the `graph` field (networkx graphs don't define value-equality).
-# Story 3.1 only pins the *dataclass* contract; graph-content equality is an
-# Epic-3-downstream concern.
+# This module pins the *dataclass* contract only; graph-content equality belongs to
+# the pipeline tiers.
 _SHARED_GRAPH: nx.MultiDiGraph = nx.MultiDiGraph()  # pyright: ignore[reportMissingTypeArgument, reportUnknownVariableType]
 
 
@@ -162,12 +162,10 @@ _FACTORIES: dict[type, Callable[[], object]] = {
 _ALL_CLASSES = list(_FACTORIES.keys())
 
 
-# --- Parametrized invariants (AC #3 a/b/c/d) ----------------------------------
-
-
+# Parametrized invariants.
 @pytest.mark.parametrize("cls", _ALL_CLASSES, ids=lambda c: c.__name__)
 def test_dataclass_is_frozen(cls: type) -> None:
-    """AC #3b: `frozen=True` raises `FrozenInstanceError` on any field mutation."""
+    """`frozen=True` raises `FrozenInstanceError` on any field mutation."""
     instance = _FACTORIES[cls]()
     first_field = dataclasses.fields(cls)[0].name  # pyright: ignore[reportUnknownArgumentType]
     with pytest.raises(dataclasses.FrozenInstanceError):
@@ -176,7 +174,7 @@ def test_dataclass_is_frozen(cls: type) -> None:
 
 @pytest.mark.parametrize("cls", _ALL_CLASSES, ids=lambda c: c.__name__)
 def test_dataclass_uses_slots(cls: type) -> None:
-    """AC #3c: `slots=True` declares `__slots__` matching the field names exactly.
+    """`slots=True` declares `__slots__` matching the field names exactly.
 
     A direct `instance.new_attr = ...` test would conflict with `frozen=True`
     (which raises `FrozenInstanceError` first); `__slots__` introspection is the
@@ -192,15 +190,13 @@ def test_dataclass_uses_slots(cls: type) -> None:
 
 @pytest.mark.parametrize("cls", _ALL_CLASSES, ids=lambda c: c.__name__)
 def test_dataclass_value_equality(cls: type) -> None:
-    """AC #3d: two instances with identical fields compare equal."""
+    """Two instances with identical fields compare equal."""
     a = _FACTORIES[cls]()
     b = _FACTORIES[cls]()
     assert a == b
 
 
-# --- Per-class round-trip tests (AC #3a; field lists explicit) ---------------
-
-
+# Per-class round-trip tests.
 def test_edge_round_trip() -> None:
     edge = _make_edge()
     assert edge.node_u == 1

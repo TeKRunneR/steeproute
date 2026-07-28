@@ -1,4 +1,4 @@
-"""Unit tests for the single-worker queue + worker loop (App Story 1.3).
+"""Unit tests for the single-worker queue + worker loop.
 
 The worker is driven through real `asyncio.create_subprocess_exec` spawns of a
 tiny fake CLI script (so the spawn → stdout-drain → exit-code path is genuinely
@@ -25,7 +25,7 @@ from steeproute.app.store import JobStore
 
 # Fake CLI: prints a few stdout lines, optionally stamps a shared marker file with
 # start/end (for the serial test), sleeps, and exits with a chosen code.
-#   argv: <marker-or-"-"> <tag> <exit_code> <sleep_s>
+# argv: <marker-or-"-"> <tag> <exit_code> <sleep_s>
 _FAKE_CLI = textwrap.dedent(
     """
     import sys, time

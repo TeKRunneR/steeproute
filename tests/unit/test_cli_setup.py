@@ -3,9 +3,8 @@
 # drives osmnx's own private `_http` cache functions on purpose.
 """Unit tests for the setup CLI's non-pipeline helpers.
 
-`emit_osm_age_warning` (Story 2.9) originally lived in `cli/setup.py`; Story 2.10
-lifted it to `cli/_shared.py` so `cli/query.py`'s cache-hit path could reuse the
-same boundary semantics. Its tests retain their original location to avoid churn —
+`emit_osm_age_warning` lives in `cli/_shared.py` so both CLIs' cache-hit paths
+share one set of boundary semantics. Its tests live here rather than beside it —
 they pin the helper's contract regardless of its host module. The second half of
 this file covers `cli/setup.py::_configure_osmnx_logging`.
 """
@@ -66,7 +65,7 @@ def _iso_days_before(days: float) -> str:
 def test_emit_osm_age_warning_warns_when_age_exceeds_threshold(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """AC #6: an `osm_extract_date` dated >90 days ago triggers a single `logging.warning`."""
+    """An `osm_extract_date` dated >90 days ago triggers a single `logging.warning`."""
     manifest = _manifest_with(_iso_days_before(120))
     with caplog.at_level(logging.WARNING, logger="steeproute.cli._shared"):
         emit_osm_age_warning(manifest=manifest, threshold_days=90, now=_NOW)
@@ -82,7 +81,7 @@ def test_emit_osm_age_warning_warns_when_age_exceeds_threshold(
 def test_emit_osm_age_warning_silent_below_threshold(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """AC #6: a fresh `osm_extract_date` (0 days old) emits no warning."""
+    """A fresh `osm_extract_date` (0 days old) emits no warning."""
     manifest = _manifest_with(_iso_days_before(0))
     with caplog.at_level(logging.WARNING, logger="steeproute.cli._shared"):
         emit_osm_age_warning(manifest=manifest, threshold_days=90, now=_NOW)
@@ -106,7 +105,7 @@ def test_emit_osm_age_warning_boundary_semantics(
     age_days: float,
     should_warn: bool,
 ) -> None:
-    """AC #6 boundary: `age == threshold` does NOT warn; `age > threshold` does."""
+    """Boundary: `age == threshold` does NOT warn; `age > threshold` does."""
     manifest = _manifest_with(_iso_days_before(age_days))
     with caplog.at_level(logging.WARNING, logger="steeproute.cli._shared"):
         emit_osm_age_warning(manifest=manifest, threshold_days=90, now=_NOW)
@@ -131,7 +130,7 @@ def test_emit_osm_age_warning_swallows_malformed_extract_date(
 ) -> None:
     """A manifest with a malformed `osm_extract_date` does not crash the cache-hit path.
 
-    `Manifest.from_dict` (Story 2.7) raises `CacheCorruptedError` on schema
+    `Manifest.from_dict` raises `CacheCorruptedError` on schema
     violations before this helper ever sees the manifest, so reaching this branch
     requires the user hand-editing the file mid-run. The age warning is auxiliary
     diagnostic information — losing it on a malformed date is acceptable; crashing
@@ -143,9 +142,8 @@ def test_emit_osm_age_warning_swallows_malformed_extract_date(
     assert caplog.records == []
 
 
-# --- `_configure_osmnx_logging` (setup observability) -------------------------
-#
-# osmnx logs its Overpass cache hit at INFO through its own `utils.log`, which by
+# `_configure_osmnx_logging` (setup observability)
+# # osmnx logs its Overpass cache hit at INFO through its own `utils.log`, which by
 # default reaches neither the stdlib `logging` tree nor any stream. The setup CLI
 # opts in via `settings.log_file` + a pre-attached `NullHandler` — see the function's
 # docstring for why that specific pair. These tests pin the three properties the
@@ -250,9 +248,7 @@ def test_configure_osmnx_logging_is_idempotent(
     assert len(isolated_osmnx_logging.handlers) == 1
 
 
-# --- `_OsmnxFetchReporter` (cache-hit visibility without --verbose) -----------
-
-
+# `_OsmnxFetchReporter` (cache-hit visibility without --verbose)
 def _reporting_progress(*, quiet: bool = False) -> list[str]:
     """Install a reporter writing into a fresh line list; return the list."""
     lines: list[str] = []

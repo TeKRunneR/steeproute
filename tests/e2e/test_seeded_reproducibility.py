@@ -1,10 +1,10 @@
-"""Seeded reproducibility end-to-end (Story 3.11 AC #4 / FR29, NFR4).
+"""Seeded reproducibility end-to-end (FR29, NFR4).
 
 Runs the same `steeproute --seed 42` query twice against the same prepared cache
 and asserts the JSON sidecars are byte-identical across runs. This verifies the
 seed threads cleanly from the CLI through `np.random.default_rng` into GRASP's
-construction loop (Story 3.6 already pins byte-identical edge-sets at the solver
-layer; this closes the loop end-to-end through render).
+construction loop — the solver-tier tests already pin byte-identical edge-sets, so
+what this adds is the path through validation and render.
 """
 
 from __future__ import annotations

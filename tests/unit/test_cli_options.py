@@ -38,9 +38,7 @@ from steeproute.cli.query import cli as query_cli
 from steeproute.cli.setup import cli as setup_cli
 from steeproute.errors import BadCLIArgError, CacheNotFoundError
 
-# --- LatLonParamType ---
-
-
+# LatLonParamType.
 def test_lat_lon_param_type_parses_valid_input() -> None:
     assert LAT_LON.convert("45.0716,6.1079", None, None) == (45.0716, 6.1079)
 
@@ -63,9 +61,7 @@ def test_lat_lon_param_type_name_is_lat_lon() -> None:
     assert LatLonParamType.name == "lat,lon"
 
 
-# --- All decorators are callable ---
-
-
+# All decorators are callable.
 ALL_DECORATORS = [
     center_option,
     radius_option,
@@ -99,18 +95,16 @@ def test_decorator_is_callable(decorator: object) -> None:
     assert callable(decorator)
 
 
-# --- --verbose wires set_verbose(True) on both CLIs ---
-
-
+# --verbose wires set_verbose(True) on both CLIs.
 def test_verbose_flag_sets_verbose_state_on_query_cli(tmp_path: pathlib.Path) -> None:
     """`--verbose` is an eager click callback — state flips even when the body fails.
 
-    Post-Story-2.10 the query CLI goes through `check_coverage`, which raises
+    The query CLI goes through `check_coverage`, which raises
     `CacheNotFoundError` against an empty `--cache-dir`. The eager-callback
     contract is "set state during the first parse pass" — it runs before the
     body executes, so verifying `is_verbose()` after a deliberately-failing
     invocation confirms eager evaluation still works. Same pattern as the
-    setup-side test below (Story 2.8).
+    setup-side test below.
     """
     runner = CliRunner()
     result = runner.invoke(
@@ -154,8 +148,8 @@ def test_verbose_flag_sets_verbose_state_on_setup_cli() -> None:
     runs before the command body raises. We trip the body with a malformed
     `--center`, which fails `LatLonParamType.convert` before any cache/network
     work — so the assertion stays offline while still proving eager evaluation.
-    (The setup CLI's radius/dimension ceiling this test used to trip was removed
-    2026-07-28, `spec-cli-defaults-and-setup-radius-cap.md`.)
+    (There is deliberately no size ceiling on either CLI, so a large `--radius`
+    cannot be used to trip the body here.)
     """
     runner = CliRunner()
     result = runner.invoke(setup_cli, ["--center", "abc,def", "--radius", "10", "--verbose"])
@@ -172,9 +166,8 @@ def test_setup_cli_without_verbose_leaves_state_false() -> None:
     # carried over from a previous test.
     # A malformed --center fails in `LatLonParamType.convert` before any
     # cache/network work, so the invocation stays offline while still proving
-    # the callback didn't flip state. (Previously tripped via an above-ceiling
-    # `--radius`; that ceiling was removed 2026-07-28,
-    # `spec-cli-defaults-and-setup-radius-cap.md`.)
+    # the callback didn't flip state. (There is deliberately no size ceiling on
+    # either CLI, so a large `--radius` cannot be used to trip the body here.)
     runner = CliRunner()
     result = runner.invoke(setup_cli, ["--center", "abc,def", "--radius", "10"])
     assert isinstance(result.exception, BadCLIArgError)

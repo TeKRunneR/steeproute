@@ -1,10 +1,10 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false, reportUnusedFunction=false
 # Reason: same osmnx/networkx boundary as the underlying pipeline modules.
 # `reportUnusedFunction` relaxed for the `_skip_if_fixtures_missing` autouse fixture.
-"""End-to-end coverage for `steeproute` query CLI's FR24 fail-fast (Story 2.10).
+"""End-to-end coverage for `steeproute` query CLI's FR24 fail-fast.
 
 Seeds real cache entries via in-process `setup_cli` invocations (no mocked
-coverage data per the epic's AC), then drives the query CLI against those
+coverage data), then drives the query CLI against those
 entries to assert the three documented outcomes:
 
 1. **Empty cache** → exit 2 + actionable `steeproute-setup …` command.
@@ -128,7 +128,7 @@ def _invoke_query(
     return runner.invoke(query_cli, args, catch_exceptions=False)
 
 
-# Pre-2026-07-28 effective defaults (spec-cli-defaults-and-setup-radius-cap.md),
+# Pre-2026-07-28 effective defaults,
 # pinned here for the same reason `tests/e2e/conftest.py::run_query` pins them:
 # this file builds its own query argv independently of that shared fixture, so
 # it needs its own copy of the baseline or every query invocation below would
@@ -209,17 +209,15 @@ def _invoke_query_with_wrapper(args: list[str]) -> tuple[int, str]:
             set_verbose(False)
 
 
-# --- AC #7 (a): empty cache → exit 2 with steeproute-setup command -----------
-
-
+# Empty cache → exit 2 with steeproute-setup command.
 def test_query_no_prepared_cache_exits_2_with_setup_command(tmp_path: pathlib.Path) -> None:
-    """AC #3 / AC #7 (a): query against an empty `--cache-dir` raises FR24 fail-fast."""
+    """Query against an empty `--cache-dir` raises FR24 fail-fast."""
     exit_code, stderr = _invoke_query_with_wrapper(
         _query_args(tmp_path, center=(_CENTER_LAT, _CENTER_LON), radius_km=_FIXTURE_RADIUS_KM)
     )
 
     assert exit_code == 2, stderr
-    # AC #3 / P5: empty-cache lead distinguishes from partial-coverage lead.
+    # Empty-cache lead distinguishes from partial-coverage lead.
     assert "No prepared cache exists yet." in stderr
     # The suggested command echoes the query's own --center / --radius so it's
     # directly copy-pasteable.
@@ -229,11 +227,9 @@ def test_query_no_prepared_cache_exits_2_with_setup_command(tmp_path: pathlib.Pa
     assert "--dem-path" not in stderr
 
 
-# --- AC #7 (b): partial coverage → exit 2 with nearest-area diagnostic -------
-
-
+# Partial coverage → exit 2 with nearest-area diagnostic.
 def test_query_partial_coverage_exits_2_with_nearest_area_message(tmp_path: pathlib.Path) -> None:
-    """AC #4 / AC #7 (b): seed one entry, then query an area that pokes outside it.
+    """Seed one entry, then query an area that pokes outside it.
 
     The seeded entry is the 2-km-radius fixture; the query asks for a 5-km
     radius at the same center, so its bbox extends beyond every side of the
@@ -261,11 +257,9 @@ def test_query_partial_coverage_exits_2_with_nearest_area_message(tmp_path: path
     assert "--radius" in stderr or "--center" in stderr
 
 
-# --- AC #7 (c): multi-containment → exit 0, picks smallest radius ------------
-
-
+# Multi-containment → exit 0, picks smallest radius.
 def test_query_multi_containment_picks_smallest_radius(tmp_path: pathlib.Path) -> None:
-    """AC #5 / AC #7 (c): two concentric seeds, query contained by both → smallest wins."""
+    """Two concentric seeds, query contained by both → smallest wins."""
     # Seed the 2-km fixture as the first prepared area. Use the same fixture's
     # OSM graph (loaded via `_osm_load_from_fixture`) for both seeds — only the
     # area metadata differs, which is what coverage selection keys on.
@@ -304,11 +298,9 @@ def test_query_multi_containment_picks_smallest_radius(tmp_path: pathlib.Path) -
     assert expected_hash in result.output
 
 
-# --- AC #6: OSM-age warning on the query-side cache-hit path ------------------
-
-
+# OSM-age warning on the query-side cache-hit path.
 def test_query_emits_osm_age_warning_on_stale_cache_hit(tmp_path: pathlib.Path) -> None:
-    """AC #6: a stale cache-hit on the query CLI fires the OSM-age warning on stderr.
+    """A stale cache-hit on the query CLI fires the OSM-age warning on stderr.
 
     Mirrors `test_source_unavailable.py::test_osm_age_warning_emitted_on_stale_cache_hit`
     but exercises the query CLI's `emit_osm_age_warning` integration. The seed uses
@@ -316,9 +308,10 @@ def test_query_emits_osm_age_warning_on_stale_cache_hit(tmp_path: pathlib.Path) 
     `osm_extract_date` lands ~870 days in the past; the verification step runs the
     query CLI without any patches so the warning fires against real `datetime.now(UTC)`.
 
-    Story 2.9's setup-side parallel test asserts the warning on `steeproute-setup`;
-    this test pins the same contract on `steeproute` — closing the test gap the
-    code review flagged (Story 2.10 P8).
+    The setup-side sibling in `test_source_unavailable.py` asserts the warning on
+    `steeproute-setup`; this pins the same contract on `steeproute`, which has no
+    `--force-refresh` of its own and so takes a different code path to the same
+    message.
     """
     # Seed via setup with a stale `iso8601_utc_now` so the manifest's
     # `osm_extract_date` is way past the default 90-day threshold.
@@ -360,17 +353,15 @@ def test_query_no_osm_age_warning_on_fresh_cache_hit(tmp_path: pathlib.Path) -> 
     assert "steeproute-setup --force-refresh" not in stderr
 
 
-# --- Setup-side radius/dimension ceiling removed (spec-cli-defaults-and- ----
-# --- setup-radius-cap.md, 2026-07-28) ---------------------------------------
-
-
+# Setup-side radius/dimension ceiling removed.
+# Setup-radius-cap.md, 2026-07-28)
 def test_setup_accepts_a_radius_far_above_the_former_ceiling(tmp_path: pathlib.Path) -> None:
     """The setup CLI's former 50 km `_SETUP_MAX_RADIUS_KM` ceiling is gone.
 
     `_osm_load_from_fixture`/`_resolve_dem_from_fixture` ignore the requested
     area and always return the small committed fixture, so this only exercises
     CLI-boundary validation, not a real 200 km fetch — exactly what's needed to
-    pin "no longer rejected on size grounds" (I/O matrix) without a real
+    pin "not rejected on size grounds" (I/O matrix) without a real
     Overpass/DEM request.
     """
     seed = _seed_setup(tmp_path, radius_km=200.0)

@@ -1,9 +1,9 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportMissingTypeArgument=false
 # Reason: networkx MultiDiGraph generics same as the rest of cache integration tests.
-"""Integration: opportunistic `index.json` rebuild from `check_coverage` (Story 2.10 AC #8).
+"""Integration: opportunistic `index.json` rebuild from `check_coverage`.
 
-Closes Story 2.7 D1: a `KeyboardInterrupt` between `manifest.json`'s `os.replace`
-and the final `rebuild_index` call inside `write_entry` leaves an `index.json`
+The window this covers: a `KeyboardInterrupt` between `manifest.json`'s
+`os.replace` and the final `rebuild_index` call inside `write_entry` leaves an `index.json`
 that doesn't list the newly-committed entry. The next query-side `check_coverage`
 call must notice the discrepancy (parsed-but-empty index while `areas/` has
 valid entries) and rebuild before evaluating containment — otherwise the user
@@ -79,7 +79,7 @@ def test_check_coverage_rebuilds_index_when_unparseable(tmp_path: pathlib.Path) 
 def test_check_coverage_rebuilds_when_index_lists_zero_but_areas_has_entries(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Story 2.7 D1: Ctrl-C between manifest commit and `rebuild_index` window.
+    """Ctrl-C in the window between manifest commit and `rebuild_index`.
 
     `index.json` parses cleanly as an empty list, but `areas/` contains a valid
     entry. `check_coverage` must notice and rebuild — otherwise the user gets
@@ -108,7 +108,7 @@ def test_check_coverage_genuinely_empty_cache_does_not_rebuild_into_phantom_entr
     """A genuinely empty cache (no `areas/` entries, no `index.json`) raises empty-cache error.
 
     Pinning the negative path: rebuild on a fully-empty filesystem must not
-    fabricate entries; the user should see the AC #3 message.
+    fabricate entries; the user should see the message.
     """
     with pytest.raises(CacheNotFoundError) as exc_info:
         _ = check_coverage(tmp_path, Area(center=(45.0, 6.0), radius_km=1.0))
@@ -119,7 +119,7 @@ def test_check_coverage_genuinely_empty_cache_does_not_rebuild_into_phantom_entr
 def test_check_coverage_picks_smallest_radius_across_two_real_write_entry_seeds(
     tmp_path: pathlib.Path,
 ) -> None:
-    """AC #5 via real `write_entry × 2` — exercises the I/O composition end-to-end."""
+    """Via real `write_entry × 2` — exercises the I/O composition end-to-end."""
     _seed_entry(tmp_path, cache_key_hash="aa" * 8, area=Area(center=(45.0, 6.0), radius_km=10.0))
     _seed_entry(tmp_path, cache_key_hash="bb" * 8, area=Area(center=(45.0, 6.0), radius_km=3.0))
 

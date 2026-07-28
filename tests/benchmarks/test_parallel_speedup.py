@@ -2,7 +2,7 @@
 # Reason: pytest-benchmark ships no type information (the `benchmark` fixture and
 # `BenchmarkFixture` resolve as Unknown); `reportImplicitRelativeImport` — `from
 # conftest import ...` is the prepend-import shape (see test_solver_throughput.py).
-"""Parallel GRASP startup + speedup baseline (Story 14.4 AC #3).
+"""Parallel GRASP startup + speedup baseline.
 
 Two opt-in measurements on the grenoble_small contracted graph (excluded from the
 default suite — run with `uv run pytest tests/benchmarks -m benchmark`):
@@ -35,18 +35,18 @@ def _edge_id_sequences(solutions: list[Solution]) -> list[list[tuple[int, int, i
 
 
 def test_contracted_graph_pickle_size(contracted_graph: ContractedGraph) -> None:
-    """Report the per-worker pickle payload — the dominant spawn startup cost (AC #3).
+    """Report the per-worker pickle payload — the dominant spawn startup cost.
 
-    Since Story 16.1 this measures the payload workers *actually* receive:
-    `contract_climbs` emits a lean graph (`HEAVY_EDGE_ATTRS` never attached), so
-    this is the same blob `run_parallel_grasp` ships — previously it measured the
-    heavy graph, which was rebuilt into a lean view before being sent.
+    Measures the payload workers *actually* receive: `contract_climbs` emits a lean
+    graph (`HEAVY_EDGE_ATTRS` never attached), so this is the same blob
+    `run_parallel_grasp` ships. Do not substitute a heavy graph here — that measures
+    a view the workers never see.
     """
     assert contracted_graph.lean, "stage 9 must advertise the lean contract"
     blob = pickle.dumps(contracted_graph)
-    # A reported measurement, not a gate. `-s` surfaces the number; it is also the
-    # figure recorded in the story close-out. Sanity-bound only: non-trivial and far
-    # below the graph.pkl scale (166 MB @ r20) the handoff flagged for the full graph.
+    # A reported measurement, not a gate: `-s` surfaces the number. Bounded only for
+    # sanity — non-trivial, and far below the ~166 MB `graph.pkl` scale a full r20
+    # graph reaches.
     print(f"\ncontracted_graph pickle size: {len(blob):,} bytes")
     assert len(blob) > 0
 

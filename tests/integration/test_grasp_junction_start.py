@@ -2,7 +2,7 @@
 # Reason: same networkx-boundary pattern as test_grasp_construction.py;
 # `reportImplicitRelativeImport` — `from exhaustive_oracle import ...` is the shape
 # that resolves under pytest's prepend import mode (see test_solver_on_toy_graph.py).
-"""Start-at-junction constraint: GRASP ↔ oracle one feasible set + FR29 (Story 10.1, FR31).
+"""Start-at-junction constraint: GRASP ↔ oracle one feasible set + FR29 (FR31).
 
 With `--start-at-junction` set, GRASP seeds construction and the exhaustive oracle
 start their walks only at road/trail junction nodes (`is_road_trail_junction`), so
@@ -85,22 +85,16 @@ def _edge_id_sets(sols: list) -> list[tuple[tuple[int, int, int], ...]]:  # noqa
     return [tuple((e.node_u, e.node_v, e.key) for e in s.edges) for s in sols]
 
 
-# ---------------------------------------------------------------------------
 # Fixture (4 nodes): only node 1 is a road/trail junction.
-# ---------------------------------------------------------------------------
-#
-#   0 --super 0→1--> 1 --super 1→2--> 2        3 --road 3→1--> 1
-#
-# super 0→1: len 400, d+ 200 (avg 0.5)   } the two climbs of one trail
+# # 0 --super 0→1--> 1 --super 1→2--> 2        3 --road 3→1--> 1
+# # super 0→1: len 400, d+ 200 (avg 0.5)   } the two climbs of one trail
 # super 1→2: len 400, d+ 200 (avg 0.5)   }
 # road  3→1: len 300, d+ 0   (avg 0.0)   minor-road connector (sac=None)
-#
-# Junction nodes: only node 1 (incident to trail super-edges AND the road).
+# # Junction nodes: only node 1 (incident to trail super-edges AND the road).
 # Nodes 0 and 2 are trail-only; node 3 is road-only — none are junctions.
-#
-# Flag OFF: the best route is [0→1, 1→2] (objective 400), starting at node 0.
+# # Flag OFF: the best route is [0→1, 1→2] (objective 400), starting at node 0.
 # Flag ON : seeds restricted to node 1 → only [1→2] (objective 200) is reachable;
-#           the higher-objective [0→1, 1→2] is excluded because node 0 isn't a junction.
+# the higher-objective [0→1, 1→2] is excluded because node 0 isn't a junction.
 
 
 def _build_one_junction_fixture() -> ContractedGraph:

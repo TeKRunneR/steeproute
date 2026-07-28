@@ -1,7 +1,7 @@
-"""Unit tests for `app.models.AreaSpec`'s shape rules (App Story 5.1).
+"""Unit tests for `app.models.AreaSpec`'s shape rules.
 
-`AreaSpec` is the App's wire/persisted search area. Since CLI Epic 15 it mirrors
-that CLI's flag surface: `radius_km` (centered-square shorthand) XOR
+`AreaSpec` is the App's wire/persisted search area. It mirrors the CLI's flag
+surface: `radius_km` (centered-square shorthand) XOR
 `width_km` + `height_km` (full box dimensions), with `angle_deg` rotating either.
 These tests pin the exactly-one-of rule at the model level — the API boundary
 turns a violation into a 422 (`tests/integration/test_app_api.py`), and
@@ -108,7 +108,7 @@ def test_dimensions_km_reports_effective_full_box_size() -> None:
 
 
 def test_legacy_record_area_still_loads() -> None:
-    # A `job.json` written before Story 5.1 carries center + radius_km only.
+    # A `job.json` predating the rotated-area fields carries center + radius_km only.
     area = AreaSpec.model_validate({"center": [45.26, 5.788], "radius_km": 2.0})
     assert area.radius_km == 2.0
     assert area.angle_deg == 0.0

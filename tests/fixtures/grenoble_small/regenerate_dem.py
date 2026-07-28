@@ -38,7 +38,7 @@ from rasterio.transform import from_bounds
 # fixture's 2 km bbox half-side by 100 m on each side so that trail edges
 # whose `osmnx` simplification produces vertices right on (or just past) the
 # fetch bbox are still inside the DEM — `sample_elevation` is strict-bounds-
-# fail-fast by design (AC #3), so we need real coverage, not a tight clip.
+# fail-fast by design, so we need real coverage, not a tight clip.
 CENTER_LAT: float = 45.260
 CENTER_LON: float = 5.788
 HALF_SIDE_M: float = 2000.0 + 100.0  # 2 km OSM bbox + 100 m padding ring

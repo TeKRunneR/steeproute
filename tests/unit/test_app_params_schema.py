@@ -1,5 +1,5 @@
 """Unit tests for `cli_adapter.params_schema` — the query form-schema seam
-(App Story 2.1).
+.
 
 Pins the introspection contract: excluded fields never leak into the form,
 the quality-demo overrides (AGENTS.md) land, and every other field keeps the
@@ -39,7 +39,7 @@ def test_excluded_fields_are_absent() -> None:
 
 
 def test_no_area_flag_leaks_onto_the_form() -> None:
-    """Story 15.3: the map owns area selection, so no area flag may become a field.
+    """The map owns area selection, so no area flag may become a form field.
 
     Stronger than the name-by-name list above: it re-derives the area flags from
     the CLI's own option surface, so a *future* area flag added to `cli/query.py`
@@ -58,12 +58,12 @@ def test_no_area_flag_leaks_onto_the_form() -> None:
     assert not area_field_names & _schema_by_name().keys()
 
 
-def test_quality_demo_values_now_match_plain_cli_defaults() -> None:
-    # As of 2026-07-28 (spec-cli-defaults-and-setup-radius-cap.md) the plain
-    # query CLI's own defaults were bumped to match these quality-demo
-    # numbers, so `_QUALITY_DEFAULTS` no longer needs to override them — these
-    # values now come straight from `cli.query`'s click options, same as any
-    # other unmentioned field. The values themselves are unchanged.
+def test_quality_demo_values_match_plain_cli_defaults() -> None:
+    # These four are quality-demo numbers the App wants, and they are also the plain
+    # query CLI's own click defaults — so `_QUALITY_DEFAULTS` deliberately does NOT
+    # list them, and the form picks them up off `param.default` like any other field.
+    # If a CLI default moves away from one of these, this test is where the App's
+    # intent and the CLI's default stop agreeing.
     fields = _schema_by_name()
     assert fields["iter_budget"].default == 1_000_000
     assert fields["stagnation_iters"].default == 200_000
@@ -74,8 +74,8 @@ def test_quality_demo_values_now_match_plain_cli_defaults() -> None:
 
 
 def test_quality_demo_defaults_still_override_cli_defaults() -> None:
-    # Steep-route-tool defaults corrected in Story app-4-2: the CLI ships these
-    # off/false (an opt-in flag with a real meaning when absent), but this
+    # Steep-route-tool defaults: the CLI ships these off/false (opt-in flags with a
+    # real meaning when absent), but this
     # tool's whole point is steep routes, so the App defaults the descent cap
     # on (0.4) and start-at-junction on. The one genuine, intentional
     # divergence left between the App's and the plain CLI's defaults.
@@ -105,7 +105,7 @@ def test_field_types_match_click_option_kinds() -> None:
 
 
 def test_schema_field_carries_no_grouping_metadata() -> None:
-    # The form is flat (Story app-4-2): SchemaField exposes no basic/advanced
+    # The form is flat: SchemaField exposes no basic/advanced
     # grouping, so it stays a pure introspection of the CLI's click options.
     assert not hasattr(_schema_by_name()["theta"], "group")
 

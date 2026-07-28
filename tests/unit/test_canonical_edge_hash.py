@@ -1,4 +1,4 @@
-"""Unit tests for the canonical edge-sequence hash (Story 8.1 AC #6 / Architecture §Cat 11d).
+"""Unit tests for the canonical edge-sequence hash (Architecture §Cat 11d).
 
 The hash is the regression harness's mutation detector: it must be (a) stable across
 runs so a committed golden stays comparable, and (b) sensitive to any change in the
@@ -70,14 +70,12 @@ def test_hash_is_direction_sensitive() -> None:
     assert canonical_edge_sequence_hash([(1, 2, 0)]) != canonical_edge_sequence_hash([(2, 1, 0)])
 
 
-# --- Fixture area argv (Story 15.3) ---------------------------------------
-
-
+# Fixture area argv.
 def test_square_fixtures_emit_the_pre_rotation_argv() -> None:
     """The harness learning a second area spelling must not move an existing golden.
 
     Every square fixture's area fragment has to stay exactly `--radius <value>` —
-    the argv Stories 8.1/8.2 baked their goldens with.
+    the argv the committed goldens were baked with.
     """
     for fixture in FIXTURES:
         if fixture.width_km is None:
@@ -109,9 +107,7 @@ def test_every_fixture_has_a_distinct_golden_path() -> None:
     assert len(set(paths)) == len(paths)
 
 
-# --- Committed goldens agree with their fixture definitions ----------------
-
-
+# Committed goldens agree with their fixture definitions.
 @pytest.mark.parametrize("fixture", _ALL_FIXTURES, ids=lambda f: f"{f.name}-{f.tier}")
 def test_committed_golden_metadata_matches_its_fixture(fixture: Fixture) -> None:
     """A committed golden's non-route metadata must still describe its fixture.
@@ -120,8 +116,7 @@ def test_committed_golden_metadata_matches_its_fixture(fixture: Fixture) -> None
     solver run — so unlike `test_pinned_regressions.py` this is cheap enough to stay
     in the default suite for *every* tier, including the `slow`-gated realistic one.
 
-    That gap is why this test exists. On 2026-07-28
-    (`spec-cli-defaults-and-setup-radius-cap.md`) `"--workers": "1"` was added to
+    That gap is why this test exists. On 2026-07-28 `"--workers": "1"` was added to
     `_PINNED_PARAMS`, which `_REALISTIC_PARAMS` spreads — so `params_hash` moved for
     both tiers, but only the fast + flag-on goldens were rebaked. The five stale
     `*.realistic.json` goldens then failed on `params_hash` alone, and nothing

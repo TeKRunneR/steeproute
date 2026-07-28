@@ -1,6 +1,6 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
 # Reason: same osmnx/networkx boundary as tests/integration/test_pipeline_end_to_end.py.
-"""Integration test for `pipeline.climbs.detect_climbs` (stage 8, Story 3.2).
+"""Integration test for `pipeline.climbs.detect_climbs` (stage 8).
 
 Runs `detect_climbs` against the post-stage-7 output of `run_setup_stages`
 on the committed Grenoble Le Sappey fixture (16 km² of dense alpine hiking
@@ -8,9 +8,8 @@ terrain — 468 nodes, 1208 edges; see `test_pipeline_end_to_end.py`).
 
 The baselines below are **regression snapshots**, not independently-derived
 topology bounds. They were recorded by running the current `detect_climbs`
-against the committed fixture once during Story 3.2 dev (then re-recorded
-after the post-review node-monotonicity fix, and again after Story 9.1's
-maximality fix rooted climbs at their true steep bottoms). Sanity-check against topology:
+against the committed fixture, and re-recorded whenever a deliberate detection
+change moved them. Sanity-check against topology:
 the Le Sappey bbox spans Chamechaude's south flank, Col de Porte approaches,
 and the La Pinéa ridge — a handful of major ascents plus dozens of local
 hill sections, broadly consistent with the recorded climb count. But the
@@ -18,8 +17,7 @@ test's actual contract is "the algorithm continues to produce these numbers
 on this fixture" — i.e. a regression-pin — not "this many climbs exist on
 this terrain." Treat the ±10 % drift band as absorbing routine fixture
 regeneration noise (same `_DRIFT_TOLERANCE` convention as
-`test_pipeline_end_to_end.py`), not as a topology-verification window. AC #3
-of Story 3.2 asked for the latter; the implementation delivers the former.
+`test_pipeline_end_to_end.py`), not as a topology-verification window. definition is the former (a running-average floor), not the latter.
 """
 
 from __future__ import annotations
@@ -53,9 +51,9 @@ _MIN_CLIMB_GROUND_LENGTH_M = 300.0
 # are not independently topology-derived — see module docstring. The ±10 %
 # drift band absorbs OSM / DEM regeneration noise, not algorithm changes; an
 # algorithm change that shifts these is intentional and requires re-recording
-# the baselines. Story 9.1's maximality fix (climbs now rooted at their true
-# steep bottoms via backward extension) re-rooted several chains, dropping the
-# count from 50 → 45 and total D+ from 8065.5 → 7731.1 m.
+# the baselines. They were last re-recorded when backward extension started
+# rooting climbs at their true steep bottoms, which re-rooted several chains and
+# moved the count 50 → 45 and total D+ 8065.5 → 7731.1 m.
 _BASELINE_CLIMB_COUNT = 45
 _BASELINE_TOTAL_D_PLUS_M = 7731.1
 _DRIFT_TOLERANCE = 0.10
@@ -80,7 +78,7 @@ def prepared_graph() -> nx.MultiDiGraph:
 
     Mirrors `tests/integration/test_pipeline_end_to_end.py`: patches `osm_load` to
     read the committed `.graphml`. `run_setup_stages` caches the raw post-stage-5
-    elevation; `operationalize_graph` (Story 6.3) applies the query-side stages 6-7
+    elevation; `operationalize_graph` applies the query-side stages 6-7
     (smooth → deadband → naive-sum metrics) at the production defaults, mirroring
     what `cli/query.py` feeds to `detect_climbs`.
     """
@@ -143,7 +141,7 @@ def test_every_climb_meets_floor_constraints(prepared_graph: nx.MultiDiGraph) ->
 
 
 def test_detect_climbs_does_not_mutate_real_fixture(prepared_graph: nx.MultiDiGraph) -> None:
-    """AC #4: real-fixture purity check — node + edge counts unchanged."""
+    """Real-fixture purity check — node + edge counts unchanged."""
     nodes_before = prepared_graph.number_of_nodes()
     edges_before = prepared_graph.number_of_edges()
     _ = detect_climbs(
@@ -156,7 +154,7 @@ def test_detect_climbs_does_not_mutate_real_fixture(prepared_graph: nx.MultiDiGr
 
 
 def test_climbs_are_edge_disjoint_on_real_fixture(prepared_graph: nx.MultiDiGraph) -> None:
-    """AC #4: real-fixture edge-disjointness — Story 3.3's back-mapping injectivity."""
+    """Real-fixture edge-disjointness — stage 9's back-mapping injectivity depends on it."""
     climbs = detect_climbs(
         prepared_graph,
         min_climb_slope=_MIN_CLIMB_SLOPE,
@@ -171,7 +169,7 @@ def test_climbs_are_edge_disjoint_on_real_fixture(prepared_graph: nx.MultiDiGrap
 
 
 def test_aggregate_identity_holds_on_real_fixture(prepared_graph: nx.MultiDiGraph) -> None:
-    """AC #1: per-climb aggregate equals the sum of underlying edge metrics.
+    """Per-climb aggregate equals the sum of underlying edge metrics.
 
     Cross-check on the real fixture catches ULP-level reassociation drift
     that hand-built single-climb tests can't surface (incremental

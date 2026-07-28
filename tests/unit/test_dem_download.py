@@ -76,7 +76,7 @@ def _make_fake_urlopen(call_log: list[tuple[int, int]]) -> Any:
 
     Records `(width, height)` per call under a lock so tests can assert the tiling
     decomposition and total request count even when `_fetch_mosaic` fetches tiles
-    across a `ThreadPoolExecutor` (Story 14.3). The fill value is not meaningful
+    across a `ThreadPoolExecutor`. The fill value is not meaningful
     here — tests that verify mosaic placement use `_make_positional_fake_urlopen`,
     whose per-tile value is derived from the tile's grid position (order-independent),
     not from a shared call counter.
@@ -116,8 +116,7 @@ def _make_positional_fake_urlopen(
     the NW tile is 0 and the SE tile is N-1 — keeping placement assertions crisp.
 
     - `delay_by_value`: sleep proportionally so the NW tile (value 0) returns *last*,
-      forcing completion order to reverse submission order (exercises AC #1's
-      order-independence for real, not just by construction).
+      forcing completion order to reverse submission order (exercises order-independence for real, not just by construction).
     - `fail_on_value`: raise `URLError` for the tile with this value (mid-batch
       failure path — the worker exception must surface as `DataSourceUnavailableError`).
     """
@@ -206,7 +205,7 @@ def test_multi_tile_mosaic_places_tiles_north_up(
 def test_multi_tile_mosaic_byte_identical_under_out_of_order_completion(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC #1: completion order must not change the assembled mosaic.
+    """Completion order must not change the assembled mosaic.
 
     `delay_by_value` makes the NW tile (submitted first) return *last*, so the
     parallel workers complete in reverse submission order. The mosaic must still be
@@ -238,7 +237,7 @@ def test_multi_tile_mosaic_byte_identical_under_out_of_order_completion(
 def test_multi_tile_fetch_emits_tile_progress_lines(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Story 11.1 (FR33): the tile loop reports `tile i/N` through the stage seam."""
+    """FR33: the tile loop reports `tile i/N` through the stage seam."""
     monkeypatch.setattr(dem_download, "_MAX_TILE_PX", 16)
     calls: list[tuple[int, int]] = []
     monkeypatch.setattr(dem_download, "urlopen", _make_fake_urlopen(calls))
@@ -349,7 +348,7 @@ def test_right_size_xml_error_document_rejected(
 def test_mid_batch_tile_failure_maps_to_data_source_unavailable(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC #2: one failing tile among many surfaces as `DataSourceUnavailableError`.
+    """One failing tile among many surfaces as `DataSourceUnavailableError`.
 
     Under the parallel fetch the worker's exception propagates through
     `future.result()` unchanged — it must not leak as a raw `URLError` or a
@@ -476,7 +475,7 @@ def test_fetch_workers_override_yields_identical_mosaic(
 ) -> None:
     """`fetch_workers` (`--dem-fetch-workers`) overrides `DEFAULT_DEM_FETCH_WORKERS`.
 
-    Story 14.3 scope revision: DEM-fetch concurrency is user-tunable. The mosaic
+    DEM-fetch concurrency is user-tunable, so the mosaic
     must stay byte-identical regardless of the worker count (1, the module
     default, or an oversized value) — concurrency only changes wall-clock, never
     the assembled output.
@@ -565,7 +564,7 @@ def test_padded_bbox_covers_the_true_rotated_envelope() -> None:
 
 
 def test_padded_bbox_is_unchanged_for_a_square() -> None:
-    """Backward-compat: the square derivation still matches the pre-Epic-15 formula."""
+    """The square derivation matches the plain half-side-plus-padding formula."""
     lat, lon = _AREA.center
     half_side_m = _AREA.radius_km * 1000.0 + dem_download._PADDING_M
     half_lat_deg = half_side_m / dem_download._M_PER_DEG_LAT

@@ -1,13 +1,13 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
 # Reason: same networkx boundary noise as the pipeline modules under test.
-"""Unit tests for pipeline.climbs.detect_climbs (stage 8, Story 3.2).
+"""Unit tests for pipeline.climbs.detect_climbs (stage 8).
 
 Synthetic graphs only — every test hand-builds a MultiDiGraph carrying the
 stage-7 contract (`length_m`, `d_plus_m`, `d_minus_m`, `avg_gradient`,
 `sac_scale`). Real-fixture coverage lives in
 `tests/integration/test_climb_detection_fixture.py`.
 
-The four AC #2 scenarios drive most tests; AC #4 purity + edge-disjointness
+The four scenarios drive most tests; purity + edge-disjointness
 add the final two cases.
 """
 
@@ -72,7 +72,7 @@ def _steep_chain(node_ids: list[int]) -> nx.MultiDiGraph:
 
 
 def test_maximal_climb_is_independent_of_node_id_labeling() -> None:
-    """Story 9.1 (review finding #7): maximal climb is labeling-independent.
+    """A maximal climb is node-labeling-independent.
 
     The same 3-edge steep chain (each slope 0.50) under two node labelings must
     yield the same maximal climb, and its steep bottom edge must never be
@@ -119,14 +119,14 @@ def test_maximal_climb_is_independent_of_node_id_labeling() -> None:
 
 
 def test_flat_road_never_seeds_a_climb() -> None:
-    """Story 6.2: ~flat minor roads never form a climb on their own.
+    """~Flat minor roads never form a climb on their own.
 
     Climb detection is gradient-driven — a seed must clear `min_climb_slope`
     per-edge (`_qualifies_as_seed`) — so an admitted road (~flat, sac_scale=None)
     can never start a climb and a road-only sub-network yields no climbs. Roads
     therefore participate purely as connectors. (Absorption of a flat tail into a
     *steep* climb via the running-average extension is pre-existing,
-    highway-agnostic behaviour and is out of scope for this story.)
+    highway-agnostic behaviour, so it is not asserted here.)
     """
     g: nx.MultiDiGraph = nx.MultiDiGraph()
     for i in range(4):
@@ -161,7 +161,7 @@ def test_qualifying_uphill_chain_returns_single_climb() -> None:
     assert math.isclose(climb.length_m, 500.0, abs_tol=1e-9)
     assert math.isclose(climb.d_plus_m, 125.0, abs_tol=1e-9)
     assert math.isclose(climb.avg_slope, 0.25, abs_tol=1e-9)
-    # AC #1 aggregate identity
+    # aggregate identity
     assert math.isclose(climb.length_m, sum(e.length_m for e in climb.edges), abs_tol=1e-9)
     assert math.isclose(climb.d_plus_m, sum(e.d_plus_m for e in climb.edges), abs_tol=1e-9)
     assert math.isclose(climb.avg_slope, climb.d_plus_m / climb.length_m, abs_tol=1e-9)
@@ -214,7 +214,7 @@ def test_graph_with_no_qualifying_edges_returns_empty_list() -> None:
 
 
 def test_detect_climbs_does_not_mutate_input_graph() -> None:
-    """AC #4: purity check — node/edge counts and every edge-data dict preserved.
+    """Purity check — node/edge counts and every edge-data dict preserved.
 
     Iterates every edge (not just one sample) so a bug that mutates the dict
     of any single edge would be caught — e.g. an implementation marking
@@ -241,7 +241,7 @@ def test_detect_climbs_does_not_mutate_input_graph() -> None:
 
 
 def test_climbs_are_edge_disjoint_across_parallel_chains() -> None:
-    """AC #4: each edge appears in at most one climb."""
+    """Each edge appears in at most one climb."""
     # Two independent uphill chains: 0→1→2 (400 m, 100 D+) and 10→11→12 (400 m, 100 D+).
     g: nx.MultiDiGraph = nx.MultiDiGraph()
     for u, v in [(0, 1), (1, 2), (10, 11), (11, 12)]:
@@ -310,8 +310,8 @@ def test_sac_scale_none_propagates_through_edge_projection() -> None:
 
 def test_branching_picks_steepest_qualifying_continuation() -> None:
     # From node 1, two outgoing edges:
-    #   (1, 2, 0): 100 m / +20 → slope 0.20 (just qualifying)
-    #   (1, 3, 0): 100 m / +40 → slope 0.40 (steeper)
+    # (1, 2, 0): 100 m / +20 → slope 0.20 (just qualifying)
+    # (1, 3, 0): 100 m / +40 → slope 0.40 (steeper)
     # Seed (0,1,0): 100 m / +30 → slope 0.30.
     # Greedy-steepest should pick (1,3,0). Then no outgoing from node 3 → close.
     # 200 m total, but min=180 m here (lowered just for this test).

@@ -2,22 +2,21 @@
 # Reason: Starlette's TestClient re-exports httpx, whose response accessors
 # (.get/.status_code/.headers/.text/.json()) surface as Unknown — a stub boundary,
 # same per-file relaxation pattern used for the networkx boundary in conftest.py.
-"""Integration tests for the web App API (App Stories 1.2 + 1.3 + 1.5 + 1.6).
+"""Integration tests for the web App API.
 
-Story 1.2 surface: the FastAPI factory, the home page + global header markup, and
+App-shell surface: the FastAPI factory, the home page + global header markup, and
 the static mounts (frontend dir + reused CLI Leaflet assets).
 
-Story 1.3 surface: the job lifecycle over the real store + single-worker queue,
+Job-lifecycle surface: over the real store + single-worker queue,
 driven through `TestClient` as a context manager (which runs the `lifespan`, and
 with it the worker). The worker spawns a fake CLI script instead of the real
 `steeproute-setup` via an injected `build_argv`, and writes to a tmp store root —
 so no real build/network runs.
 
-Story 1.5 surface: the hard-cancel Stop path + run-watch page/JS served.
+Stop surface: the hard-cancel path + run-watch page/JS served.
 
-Story 1.6 surface: `GET /regions` over a crafted cache root (real `write_entry`,
-no build) and the map-home markup + `map-home.js` served. `DELETE /jobs/{id}`
-arrives with Story 3.2.
+Regions surface: `GET /regions` over a crafted cache root (real `write_entry`, no
+build) and the map-home markup + `map-home.js` served.
 """
 
 from __future__ import annotations
@@ -40,7 +39,7 @@ from steeproute.cache import Manifest, area_bbox_wgs84, write_entry
 from steeproute.models import Area
 
 # Fake CLI: emit a stdout line, then exit with the code encoded in argv.
-#   argv: <exit_code>
+# argv: <exit_code>
 _FAKE_CLI = textwrap.dedent(
     """
     import sys
@@ -49,7 +48,7 @@ _FAKE_CLI = textwrap.dedent(
     """
 ).strip()
 
-# Fake CLI that runs until killed — for the Stop path (Story 1.5). Prints a line
+# Fake CLI that runs until killed — for the Stop path. Prints a line
 # so the job is observably alive, then blocks so it stays `running` until the
 # worker's `stop()` kills it.
 _FAKE_CLI_SLEEP = textwrap.dedent(
@@ -145,7 +144,7 @@ def test_home_page_renders_global_header() -> None:
     assert "steeproute" in body
     assert 'href="/"' in body
     assert ">Runs<" in body
-    # The live-job-indicator slot is present but empty (wired to SSE in Story 1.5).
+    # The live-job-indicator slot is present but empty until SSE fills it.
     assert 'id="live-indicator"' in body
 
 
@@ -167,7 +166,7 @@ def test_vendored_leaflet_assets_served_no_cdn() -> None:
     assert "cdn" not in _client().get("/").text.lower()
 
 
-# --- Story 1.3: job lifecycle ------------------------------------------------
+# Job lifecycle.
 
 
 def test_post_job_returns_201_queued(tmp_path: pathlib.Path) -> None:
@@ -228,7 +227,7 @@ def test_bad_area_rejected_422(tmp_path: pathlib.Path) -> None:
         assert client.post("/jobs", json=body).status_code == 422
 
 
-# --- Story 4.3: area_label reverse-geocode -----------------------------------
+# `area_label` reverse-geocode.
 
 
 def _labelled_client(tmp_path: pathlib.Path, geocode: GeocodeFn) -> TestClient:
@@ -279,7 +278,7 @@ def test_area_label_none_when_labelling_disabled(tmp_path: pathlib.Path) -> None
         assert body.json()["area_label"] is None
 
 
-# --- Story 1.5: hard-cancel Stop ---------------------------------------------
+# Hard-cancel Stop.
 
 
 def test_stop_running_job_marks_stopped(tmp_path: pathlib.Path) -> None:
@@ -323,7 +322,7 @@ def test_stop_unknown_job_returns_404(tmp_path: pathlib.Path) -> None:
         assert "detail" in resp.json()
 
 
-# --- Story 3.2: cancel a queued job (DELETE) ---------------------------------
+# Cancel a queued job (DELETE).
 
 
 def test_delete_queued_job_returns_204_and_removes_it(tmp_path: pathlib.Path) -> None:
@@ -376,7 +375,7 @@ def test_delete_unknown_job_returns_404(tmp_path: pathlib.Path) -> None:
 def test_cancelled_job_is_skipped_and_queue_keeps_serving(tmp_path: pathlib.Path) -> None:
     # The cancelled (tombstoned) id lingers in the in-memory queue; the worker
     # must pop it, skip it (no store record), and keep serving the next job — one
-    # cancelled job never stalls the queue (AC #1).
+    # cancelled job never stalls the queue.
     with _sleeper_client(tmp_path) as client:
         running = client.post("/jobs", json=_setup_body()).json()["id"]
         cancelled = client.post("/jobs", json=_setup_body()).json()["id"]
@@ -392,7 +391,7 @@ def test_cancelled_job_is_skipped_and_queue_keeps_serving(tmp_path: pathlib.Path
         client.post(f"/jobs/{nxt}/stop")
 
 
-# --- Story 1.5: run-watch page + frontend modules served ---------------------
+# Run-watch page + frontend modules served.
 
 
 def test_run_watch_page_served_as_html() -> None:
@@ -416,7 +415,7 @@ def test_frontend_js_modules_served_from_static_mount() -> None:
     assert "/jobs/" in client.get("/static/js/api.js").text
 
 
-# --- Story 1.6: GET /regions + map home --------------------------------------
+# `GET /regions` + map home.
 
 
 def _seed_cache_entry(cache_root: pathlib.Path, cache_key_hash: str, area: Area) -> None:
@@ -487,7 +486,7 @@ def test_regions_resolve_rejects_nonpositive_radius(tmp_path: pathlib.Path) -> N
         assert resp.status_code == 422  # Query(gt=0)
 
 
-# --- Story 2.1: query jobs + config-form schema ------------------------------
+# Query jobs + config-form schema.
 
 
 def _query_body(**params: object) -> dict[str, object]:
@@ -500,9 +499,9 @@ def _query_body(**params: object) -> dict[str, object]:
 
 def test_query_job_accepted_and_runs_to_done(tmp_path: pathlib.Path) -> None:
     # The fake build_argv ignores kind/params entirely (same fixture the setup
-    # lifecycle tests use), so this exercises: the API no longer 422s `query`,
-    # the worker's per-job result_dir assignment, and the new
-    # `QueryProgressParser` (no longer a `NotImplementedError`) on real stdout.
+    # lifecycle tests use), so what this exercises is: the API accepts `query`, the
+    # worker assigns a per-job result_dir, and `QueryProgressParser` classifies real
+    # stdout.
     with _lifecycle_client(tmp_path, exit_code=0) as client:
         resp = client.post("/jobs", json=_query_body())
         assert resp.status_code == 201
@@ -561,12 +560,12 @@ def test_query_params_schema_endpoint(tmp_path: pathlib.Path) -> None:
         ):
             assert excluded not in fields
         # Quality-demo overrides are what the form actually prefills, including
-        # the steep-route-tool defaults corrected in Story app-4-2.
+        # the App's steep-route-tool default overrides.
         assert fields["iter_budget"]["default"] == 1_000_000
         assert fields["difficulty_cap"]["default"] == "T4"
         assert fields["max_descent_slope"]["default"] == 0.4
         assert fields["start_at_junction"]["default"] is True
-        # The form is flat (Story app-4-2): no basic/advanced grouping on the wire.
+        # The form is flat: no basic/advanced grouping on the wire.
         assert "group" not in fields["theta"]
 
 
@@ -577,11 +576,11 @@ def test_home_page_renders_map_and_actions() -> None:
     assert 'id="build-btn"' in body
     assert 'id="configure-btn"' in body
     assert "map-home.js" in body
-    # Selection-mode control (Story 4.1): the three modes are always present.
+    # Selection-mode control: the three modes are always present.
     assert 'id="mode-control"' in body
     for value in ("area-pick", "move-selection", "select-region"):
         assert f'value="{value}"' in body
-    # Rotated-rectangle picker (Story app-5-2): the readout names the *shape*
+    # Rotated-rectangle picker: the readout names the *shape*
     # (a rotated box has no radius), and a box can be reset back to a square.
     assert 'id="sel-shape"' in body
     assert 'id="reset-square-btn"' in body
@@ -600,7 +599,7 @@ def test_frontend_assets_served_no_cache() -> None:
     assert "cache-control" not in client.get("/vendor/leaflet-1.9.4.min.js").headers
 
 
-# --- Story 2.3: result view (view the resulting routes) ----------------------
+# Result view (view the resulting routes).
 
 
 def _seed_job(
@@ -728,7 +727,7 @@ def test_result_view_page_and_js_served() -> None:
     assert client.get("/static/js/result.js").status_code == 200
 
 
-# --- Story 3.1: run library list ---------------------------------------------
+# Run-library list.
 
 # Fake query CLI: emit a minimal run summary (with total_objective), exit 0 — so
 # the worker's done-query path captures result_objective from the stdout tail.
@@ -758,7 +757,7 @@ def _query_summary_client(tmp_path: pathlib.Path) -> TestClient:
 
 def test_query_done_captures_result_objective(tmp_path: pathlib.Path) -> None:
     # A done query records its summary total_objective so the run-library card
-    # can show the cost without re-parsing route JSON (App Story 3.1).
+    # can show the cost without re-parsing route JSON.
     with _query_summary_client(tmp_path) as client:
         resp = client.post("/jobs", json=_query_body())
         assert resp.status_code == 201
@@ -805,7 +804,7 @@ def test_runs_bare_path_distinct_from_run_watch() -> None:
     assert 'id="job-identity"' in client.get("/runs/some-id").text
 
 
-# --- Story 3.3: restart recovery (boot reconciliation via the lifespan) -------
+# Restart recovery (boot reconciliation via the lifespan).
 
 # Fake CLI that records its run order — for the boot queue-rebuild test. argv:
 # <order_file> <job_id>. Appends its id then exits 0, so the order file shows the
@@ -872,7 +871,7 @@ def test_boot_recovers_interrupted_and_rebuilds_queue(tmp_path: pathlib.Path) ->
     assert order_file.read_text(encoding="utf-8").split() == ["02-queued", "03-queued"]
 
 
-# --- Story 5.1: rotated-rectangle areas end to end ---------------------------
+# Rotated-rectangle areas end to end.
 
 _ROTATED_WIRE_AREA: dict[str, object] = {
     "center": [45.19, 5.72],
@@ -915,7 +914,7 @@ def test_rotated_query_job_accepted(tmp_path: pathlib.Path) -> None:
 
 
 def test_square_area_job_unchanged(tmp_path: pathlib.Path) -> None:
-    # AC #3 regression guard on the wire: the pre-5.1 body still works and the
+    # Regression guard on the wire: the pre-5.1 body still works and the
     # square spelling survives the round trip (new fields default to unset/0).
     with _lifecycle_client(tmp_path, exit_code=0) as client:
         body = client.post("/jobs", json=_setup_body()).json()

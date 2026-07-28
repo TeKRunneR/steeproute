@@ -1,4 +1,4 @@
-"""README ↔ gallery reference gate (Story 8.4 AC #4).
+"""README ↔ gallery reference gate.
 
 The `## Gallery` section of `README.md` surfaces the top route (`route-1.html`)
 of each region committed under `docs/examples/`. When the gallery is regenerated

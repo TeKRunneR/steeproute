@@ -2,7 +2,7 @@
 # Reason: same osmnx/networkx boundary as the pipeline modules; pytest-benchmark
 # ships no type information; `reportImplicitRelativeImport` — `from conftest
 # import ...` is the shape that resolves under pytest's prepend import mode.
-"""Query-orchestration wall-clock baselines (Stories 16.1, 16.3).
+"""Query-orchestration wall-clock baselines.
 
 The seams the ownership pass targets that had no benchmark coverage:
 
@@ -80,9 +80,9 @@ def test_query_filter_trails_consuming(
 def test_cache_load_prepared_entry(benchmark: BenchmarkFixture) -> None:
     """The `load-prepared-area` stage: index walk + entry deserialization.
 
-    Guardrail for Story 16.3 — the read must not get *slower* when it stops
-    reconstructing geometry. The headline is the r20 stage line (a 1.5 km fixture
-    entry is ~1.4 MB against r20's ~166 MB), per AGENTS.md §Scale target.
+    A guardrail, not the headline: the read must not get *slower* now that it no
+    longer reconstructs geometry. The real number is the r20 stage line — a 1.5 km
+    fixture entry is ~1.4 MB against r20's ~166 MB — per AGENTS.md §Scale target.
     """
     prepared = benchmark(
         check_coverage, E2E_CACHE_ROOT, Area(center=BENCH_CENTER, radius_km=BENCH_RADIUS_KM)
@@ -95,11 +95,13 @@ def test_cache_geometry_reconstruction(
 ) -> None:
     """The bulk `LineString` rebuild + reattach that the schema-v2 read paid per load.
 
-    Isolated on purpose: it is the work Story 16.3 removed, so it stays measurable
-    after the removal and the pair (this vs `test_cache_load_prepared_entry`) shows
-    the share of a load it accounted for. The ragged arrays are built in `setup`,
+    Isolated on purpose: the payload schema no longer stores geometry, so nothing in
+    production does this work any more. Benchmarking it here keeps it measurable, and
+    the pair (this vs `test_cache_load_prepared_entry`) shows what share of a load it
+    accounted for. The ragged arrays are built in `setup`,
     outside the measured region — v2 read them straight out of the pickle, so
-    building them here would measure work the old path never did.
+    building them here would fold array construction into a number that is meant to
+            be the rebuild alone.
     """
 
     def _fresh_inputs() -> tuple[
@@ -139,12 +141,11 @@ def test_validate_route_set(
 ) -> None:
     """Validate a real N-route solver result — the per-route full-graph-rescan seam.
 
-    Guardrail, not the headline: `grenoble_small` is a 1.5 km area, so its
-    contracted graph is small enough that the per-route rescans this story hoisted
-    barely register. The win is visible only at scale — see the r20 `validate-render`
-    stage line in the story's close-out — and per AGENTS.md §Scale target a
-    component benchmark must not be extrapolated to it. This pins that validation
-    does not get *slower*.
+    Guardrail, not the headline: `grenoble_small` is a 1.5 km area, so its contracted
+    graph is small enough that the hoisted per-route graph rescans barely register.
+    The win is visible only at r20 scale, and per AGENTS.md §Scale target a component
+    benchmark must not be extrapolated there. All this pins is that validation does
+    not get *slower*.
     """
     result = benchmark(validate, solved_route_set, contracted_graph, BENCH_PARAMS)
     # A collapsed result would make the metric meaningless (one route pays one

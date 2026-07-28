@@ -59,7 +59,7 @@ def test_compute_cache_key_changes_when_area_moves_beyond_canonical_precision() 
 
 
 def test_compute_cache_key_square_via_extents_matches_radius_shorthand() -> None:
-    """Story 15.2: a square is one shape, not two — however it was spelled.
+    """A square is one shape, not two — however it was spelled.
 
     `Area(radius_km=2)` and the same square expressed as equal extents at angle 0
     describe the identical box, so they must share a cache entry. Guards against
@@ -77,14 +77,14 @@ def test_compute_cache_key_square_via_extents_matches_radius_shorthand() -> None
 
 
 def test_compute_cache_key_changes_with_rotation_angle() -> None:
-    """AC #3: two areas differing only in bearing are different prepared areas."""
+    """Two areas differing only in bearing are different prepared areas."""
     box = Area(center=(45.0716, 6.1079), radius_km=0.0, half_width_km=8.0, half_height_km=3.0)
     rotated = dataclasses.replace(box, angle_deg=35.0)
     assert _key(area=box) != _key(area=rotated)
 
 
 def test_compute_cache_key_changes_with_each_extent() -> None:
-    """AC #3: width and height are independent key components."""
+    """Width and height are independent key components."""
     box = Area(
         center=(45.0716, 6.1079),
         radius_km=0.0,
@@ -177,13 +177,13 @@ def test_compute_pipeline_content_hash_ignores_solver_changes(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A `solver/` edit must NOT shift the content hash (Story 14.4 cache-safety).
+    """A `solver/` edit must NOT shift the content hash.
 
     `--workers` is plumbed entirely through `solver/` + `cli/`, neither of which is
     in `_PIPELINE_CONTENT_GLOBS` (`pipeline/**` + `models.py`). This pins the claim
     that adding `solver/parallel.py` — and any future solver-layer change — leaves
     every prepared cache valid (no invalidation, no golden rebake), the reason the
-    story deliberately kept `workers` out of `SolverParams`/`models.py`.
+    `workers` is deliberately kept out of `SolverParams`/`models.py`.
     """
     fake_pkg = tmp_path / "steeproute"
     fake_pkg.mkdir()
@@ -226,8 +226,8 @@ def test_manifest_to_dict_emits_full_schema_with_nested_area_shape() -> None:
     d = manifest.to_dict()
 
     assert d["schema_version"] == 3
-    # A square keeps the pre-Epic-15 `area` block verbatim — no extents/angle
-    # noise on the overwhelmingly common shape.
+    # A square emits the `center_radius` block verbatim — no extents/angle noise on
+    # the overwhelmingly common shape, and no key movement for existing entries.
     assert d["area"] == {
         "mode": "center_radius",
         "center": [45.0716, 6.1079],
@@ -244,7 +244,7 @@ def test_manifest_to_dict_emits_full_schema_with_nested_area_shape() -> None:
 
 
 def test_manifest_to_dict_emits_extents_and_angle_for_a_rotated_area() -> None:
-    """AC #4: the rotated `area` block carries the full geometry, and no inert radius."""
+    """The rotated `area` block carries the full geometry, and no inert radius."""
     manifest = _build_manifest(
         area=Area(
             center=(45.0716, 6.1079),
@@ -267,7 +267,7 @@ def test_manifest_to_dict_emits_extents_and_angle_for_a_rotated_area() -> None:
 
 
 def test_manifest_round_trips_a_rotated_area() -> None:
-    """AC #4: the rotated geometry survives a write→read cycle intact."""
+    """The rotated geometry survives a write→read cycle intact."""
     area = Area(
         center=(45.0716, 6.1079),
         radius_km=0.0,
