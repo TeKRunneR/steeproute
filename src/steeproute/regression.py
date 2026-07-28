@@ -78,11 +78,11 @@ class Fixture:
     to (near-)zero routes being baked into a fresh golden by `update-regression`,
     turning a real regression into a green no-op gate.
 
-    **Area spelling (Story 15.3).** `radius_km` is the centered-square shorthand and
-    stays the default, so every pre-Epic-15 fixture emits byte-identical argv. A
+    **Area spelling.** `radius_km` is the centered-square shorthand and the default,
+    so a square fixture emits exactly the `--radius` argv it always has. A
     rotated-rectangle fixture sets `width_km`/`height_km` (full box dimensions, as
-    the CLI takes them) and `angle_deg` instead; the area is *not* part of
-    `params_hash`, so adding one cannot perturb an existing golden.
+    the CLI takes them) and `angle_deg` instead. The area is *not* part of
+    `params_hash`, so adding a fixture cannot perturb an existing golden.
     """
 
     name: str
@@ -92,9 +92,9 @@ class Fixture:
     seed: int
     pinned_params: dict[str, str] = field(default_factory=dict)
     min_routes: int = 1
-    # Rotated-rectangle spelling (Story 15.3). Left `None` → the `radius_km`
-    # square shorthand; set together → `--width W --height H`. `angle_deg` is
-    # emitted only when non-zero, so a square fixture's argv is unchanged.
+    # Rotated-rectangle spelling. Left `None` → the `radius_km` square shorthand;
+    # set together → `--width W --height H`. `angle_deg` is emitted only when
+    # non-zero, so a square fixture's argv carries no `--angle` at all.
     width_km: float | None = None
     height_km: float | None = None
     angle_deg: float = 0.0
@@ -109,7 +109,7 @@ class Fixture:
 # value is the string `"true"`/`"false"`; `run_fixture` renders `"true"` as the bare
 # flag and `"false"` as nothing. Membership here is keyed by flag *name*, not by the
 # value string, so a value-taking param whose value happens to be `"true"` still
-# renders as a `--flag value` pair (Story 10.1 review #5).
+# renders as a `--flag value` pair.
 _BOOLEAN_FLAGS: frozenset[str] = frozenset({"--start-at-junction"})
 
 
@@ -165,13 +165,13 @@ FIXTURES: tuple[Fixture, ...] = (
         seed=42,
         pinned_params=dict(_PINNED_PARAMS),
     ),
-    # Story 15.3: the rotated-rectangle golden. It queries a **rotated prepared
-    # entry** (second entry in the same `grenoble_small` cache root, see that
-    # fixture's `regenerate_cache.py`), not the square one — the query area selects
-    # a cache entry but never clips the search, so a rotated query over the square
-    # entry would just reproduce `grenoble_small`'s routes and pin nothing. The
-    # behaviour Epic 15 adds is setup-side truncation to the rotated ring, and this
-    # is what notices if that ring ever silently changes shape.
+    # The rotated-rectangle golden. It must query the **rotated prepared entry**
+    # (the second entry in the same `grenoble_small` cache root, see that fixture's
+    # `regenerate_cache.py`), not the square one: a query area selects a cache entry
+    # but never clips the search, so a rotated query over the square entry would
+    # just reproduce `grenoble_small`'s routes and pin nothing. What this golden
+    # actually pins is setup-side truncation to the rotated ring — it notices if
+    # that ring ever silently changes shape.
     Fixture(
         name="grenoble_small_rotated",
         cache_dir=_FIXTURES_ROOT / "grenoble_small" / "cache",
@@ -185,7 +185,7 @@ FIXTURES: tuple[Fixture, ...] = (
         seed=42,
         pinned_params=dict(_PINNED_PARAMS),
     ),
-    # The three Story 8.2 cutouts: distinct Grenoble-massif terrain (Belledonne,
+    # Three distinct Grenoble-massif cutouts (Belledonne,
     # Vercors, Chartreuse). Each cache was prepared by real `steeproute-setup` at a
     # 2.0 km seed radius; the regression query runs at 1.5 km so it is strictly
     # contained in the prepared bbox (FR24 — `check_coverage` uses strict containment).
@@ -242,7 +242,7 @@ FLAG_ON_FIXTURES: tuple[Fixture, ...] = (
         seed=42,
         pinned_params={**_PINNED_PARAMS, "--start-at-junction": "true"},
     ),
-    # Story 10.2 (FR32): `--max-descent-slope` pinned on. A value-taking float, so
+    # FR32: `--max-descent-slope` pinned on. A value-taking float, so
     # `run_fixture` renders it as a `--flag value` pair — no `_BOOLEAN_FLAGS` entry
     # needed (unlike the bare `--start-at-junction`). The cap is low enough to bite
     # on this terrain (it changes the route set vs the flag-off goldens) while still
@@ -310,8 +310,8 @@ def golden_path(fixture: Fixture) -> pathlib.Path:
     """`tests/e2e/goldens/<fixture_name>[.<tier>].json` (the fast tier carries no suffix).
 
     The tier suffix keeps the fast and realistic goldens for one fixture from
-    colliding; fast stays un-suffixed so existing Story 8.1/8.2 goldens keep their
-    committed paths.
+    colliding. Fast is the un-suffixed one — renaming it would orphan every
+    committed fast golden.
     """
     suffix = "" if fixture.tier == "fast" else f".{fixture.tier}"
     return GOLDENS_DIR / f"{fixture.name}{suffix}.json"
@@ -334,9 +334,9 @@ def write_golden(fixture: Fixture, golden: Golden) -> None:
 def area_args(fixture: Fixture) -> list[str]:
     """The `--radius` or `--width/--height[/--angle]` fragment for `fixture`'s area.
 
-    A square fixture emits exactly `["--radius", str(radius_km)]` — the
-    pre-Story-15.3 argv, byte for byte, so no committed golden can shift because
-    the harness learned a second spelling.
+    A square fixture emits exactly `["--radius", str(radius_km)]` and nothing
+    else — not an equivalent `--width/--height` pair — because a committed golden
+    pins the argv that produced it.
     """
     if fixture.width_km is None and fixture.height_km is None:
         return ["--radius", str(fixture.radius_km)]
@@ -353,8 +353,8 @@ def area_args(fixture: Fixture) -> list[str]:
 def run_fixture(fixture: Fixture) -> list[Sidecar]:
     """Run `steeproute` against `fixture`'s cache at its pinned params; return route sidecars.
 
-    Invokes the real query CLI in-process against the committed cache (no patching of
-    the solver or output layers — Story 8.1 AC) into a throwaway output dir, then reads
+    Invokes the real query CLI in-process against the committed cache — deliberately
+    with no patching of the solver or output layers — into a throwaway output dir, then reads
     the `route-*.json` sidecars back. Exit 0 (all routes valid) and exit 1 (some route
     failed validation) are both acceptable — a regression golden pins whatever the run
     deterministically produces; any other exit code is a harness error.

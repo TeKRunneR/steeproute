@@ -4,10 +4,10 @@
 # the `pipeline/` modules use.
 """steeproute-setup data-preparation CLI: parses flags, runs stages 1-5 (or cache-hit), persists.
 
-Wires Epic 2 pieces end-to-end (Story 2.8):
+The whole flow:
 
     parse flags
-      → resolve cache root + point osmnx's HTTP cache under it (Story 11.1, T2)
+      → resolve cache root + point osmnx's HTTP cache under it
         + resolve `dem_version` (--dem-version or the default IGN-layer tag)
       → compute_cache_key(area, untagged_policy, dem_version, pipeline_content_hash)
       → read_entry(cache_root, cache_key)
@@ -17,10 +17,9 @@ Wires Epic 2 pieces end-to-end (Story 2.8):
                                           → Manifest → write_entry
       → print summary on stdout (always, even with --quiet, per Architecture §Cat 8)
 
-Every cache-miss stage runs inside the `StageProgress` seam (Story 11.1, FR33):
-stage-start / stage-elapsed lines on stdout (suppressed by `--quiet`), `tile i/N`
-within the DEM fetch, and a machine-readable per-stage `timings` dict for the
-profiling story (11.2).
+Every cache-miss stage runs inside the `StageProgress` seam (FR33): stage-start /
+stage-elapsed lines on stdout (suppressed by `--quiet`), `tile i/N` within the DEM
+fetch, and a machine-readable per-stage `timings` dict for profiling attribution.
 
 The DEM raster is fetched automatically for the area from the IGN Géoplateforme
 WMS (`pipeline.dem_download.resolve_dem`) — there is no `--dem-path` flag. Only
@@ -135,11 +134,9 @@ def cli(
     # Area resolution + numeric checks first (pure arithmetic, no I/O) so a
     # malformed area — no size, both spellings, a `--width` with no `--height`,
     # a non-finite/non-positive dimension — is rejected before any cache or
-    # network work. No upper size ceiling (this class of ceiling was already
-    # removed query-side 2026-07-27, `spec-remove-area-cap.md`; the setup-side
-    # `_SETUP_MAX_RADIUS_KM` ceiling followed the same pattern 2026-07-28,
-    # `spec-cli-defaults-and-setup-radius-cap.md`): a large
-    # `--radius`/`--width`/`--height` is not rejected on size grounds.
+    # network work. There is deliberately **no upper size ceiling** on either CLI:
+    # a large `--radius`/`--width`/`--height` is slow, not invalid, and the user
+    # who asks for it gets it.
     area = resolve_area(
         center=center, radius_km=radius, width_km=width, height_km=height, angle_deg=angle
     )
@@ -173,8 +170,8 @@ def cli(
             # OSM-age warning on cache-hit (Architecture §Cat 4f). Fires before
             # the summary so a stale-cache user sees the suggestion to re-prepare
             # right next to the "cache-hit" line, not buried beneath it. Helper
-            # lives in `cli/_shared.py` (Story 2.10) so `cli/query.py` shares
-            # the same boundary semantics.
+            # lives in `cli/_shared.py` so `cli/query.py` shares the same
+            # boundary semantics.
             emit_osm_age_warning(
                 manifest=prepared.manifest,
                 threshold_days=osm_age_warn_days,
@@ -195,10 +192,10 @@ def cli(
             )
 
     if not cache_hit:
-        # Stage-timing seam (Story 11.1, FR33): every stage announces itself and
-        # reports elapsed time on stdout; `--quiet` installs no sink so the seam
-        # only times. `progress.timings` keeps the machine-readable per-stage
-        # breakdown for profiling attribution (Story 11.2).
+        # Stage-timing seam (FR33): every stage announces itself and reports
+        # elapsed time on stdout; `--quiet` installs no sink so the seam only
+        # times. `progress.timings` keeps the machine-readable per-stage breakdown
+        # for profiling attribution.
         progress = StageProgress(on_line=None if quiet else print)
         # Report the Overpass fetch outcome inside the `osm-load` stage window —
         # installed here rather than in the pipeline so the stage name stays the
@@ -235,11 +232,11 @@ def cli(
             created_at=now,
         )
         with progress.stage("cache-write"):
-            # `consume=True` (Story 16.2): this graph is ours — built by
+            # `consume=True`: this graph is ours — built by
             # `build_graph_geometry`/`attach_elevation` above — and nothing reads it
             # after this call (the summary below prints only cache metadata), so
             # let the payload build pop `geometry` off it instead of copying the
-            # whole graph first (~5.4 s of the r20 cache-write stage).
+            # whole graph first (~5.4 s of the r20 cache-write stage, 2026-07-24).
             entry_dir = write_entry(cache_root, manifest, graph, consume=True)
 
     elapsed_s = time.perf_counter() - start
@@ -272,9 +269,9 @@ def _resolve_package_version() -> str:
 def _configure_osmnx_cache(cache_root: pathlib.Path) -> None:
     """Point osmnx's Overpass HTTP cache at a persistent dir under the cache root.
 
-    Story 11.1 (T2): osmnx 2.x ships `settings.use_cache = True` but
-    `settings.cache_folder = "./cache"` — CWD-relative, so responses were cached
-    into stray `cache/` folders wherever setup happened to run. Rooting it under
+    osmnx 2.x ships `settings.use_cache = True` but
+    `settings.cache_folder = "./cache"` — CWD-relative, so responses land in stray
+    `cache/` folders wherever setup happens to run. Rooting it under
     `resolve_cache_root(...)` makes the cache genuinely persistent and
     `--cache-dir`-aware. `use_cache` is (re)asserted on rather than trusted, so
     a future osmnx default flip can't silently disable it.

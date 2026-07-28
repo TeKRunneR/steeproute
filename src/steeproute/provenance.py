@@ -1,7 +1,7 @@
 """Git commit-hash provenance and ISO 8601 UTC timestamp helpers.
 
-`get_commit_short` is called at every cache write (Story 2.7) and report render
-(Epic 3 §FR19). It must never raise — returning the `"unknown"` sentinel when
+`get_commit_short` is called at every cache write and every report render
+(FR19). It must never raise — returning the `"unknown"` sentinel when
 git is unavailable keeps the codebase usable when installed from a wheel without
 source. `iso8601_utc_now` is the single source of truth for the `Z`-suffixed
 timestamp shape used in manifests and reports (Architecture §Serialization).
@@ -40,12 +40,12 @@ def _get_commit_short_at(cwd: pathlib.Path) -> str:
     `core.fileMode=false` is passed inline so a stale-execute-bit difference
     on Windows checkouts doesn't spuriously flip the dirty flag.
 
-    `--untracked-files=no` excludes untracked-only changes from the dirty
-    signal (deferred-work D1 from Story 2.6): a typical `bmad-dev-story` run
-    leaves story / planning artifacts in the working tree, and that should not
-    flip the report-visible commit string to `-dirty` when no tracked file was
-    modified. Architecture's "dirty if working tree modified" is interpreted
-    as "tracked files modified" — same convention `git describe --dirty` uses.
+    `--untracked-files=no` excludes untracked-only changes from the dirty signal:
+    a planning/agent run routinely leaves untracked artifacts in the working tree,
+    and that should not flip the report-visible commit string to `-dirty` when no
+    tracked file was modified. Architecture's "dirty if working tree modified" is
+    interpreted as "tracked files modified" — the same convention
+    `git describe --dirty` uses.
     """
     try:
         commit = subprocess.run(

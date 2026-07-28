@@ -73,7 +73,7 @@ def render(
     names are overwritten in place (idempotent re-runs).
 
     Args:
-        validated_set: validator output (Story 3.9) — routes + set-level Jaccard
+        validated_set: validator output — routes + set-level Jaccard
             violations. Drives both the per-route reports and the banner logic.
         base_graph: the post-stage-7 operational `MultiDiGraph` carrying the
             `vertices_resampled` edge attribute used for map + profile geometry.
@@ -332,8 +332,8 @@ def _profile_series(
     """Cumulative ground distance (m) and elevation (m) along the route.
 
     Distance accumulates great-circle hops between consecutive vertices. The
-    elevation is the single canonical profile (smoothed + deadbanded query-side,
-    Story 6.3); the template colors each segment by a multi-vertex baseline slope
+    elevation is the single canonical profile (smoothed + deadbanded query-side by
+    `operationalize_graph`); the template colors each segment by a baseline slope
     over it. Because this is the same profile the metrics summed, the curve's
     cumulative D+/D- reaches the box totals at the final vertex (box == curve).
     """

@@ -20,7 +20,7 @@ _verbose: bool = False
 
 
 def set_verbose(value: bool) -> None:
-    """Set the verbose flag consulted by run_entry_point. Story 1.5 wires --verbose to this."""
+    """Set the verbose flag consulted by run_entry_point. Both CLIs call this from `--verbose`."""
     global _verbose
     _verbose = value
 
@@ -115,16 +115,17 @@ def resolve_area(
     height_km: float | None,
     angle_deg: float,
 ) -> Area:
-    """Build the search `Area` from the shared CLI flag surface (FR1/FR23, Story 15.3).
+    """Build the search `Area` from the shared CLI flag surface (FR1/FR23).
 
     One resolver for both `steeproute` and `steeproute-setup`, so the two CLIs
     cannot drift on what an area *is* or on how a bad one is reported. Two
     mutually exclusive spellings:
 
     - `--radius R` — the centered-square shorthand. Constructs
-      `Area(center=..., radius_km=R)` **literally** (not equal explicit extents),
-      which is what keeps the cache key, the `graph_from_point` fetch, the manifest
-      `area` block, and every square-path message byte-identical to pre-Epic-15.
+      `Area(center=..., radius_km=R)` **literally**, never as equal explicit
+      extents: the literal form is what the cache key, the `graph_from_point`
+      fetch, the manifest `area` block, and every square-path message are built
+      around, and equal extents would take the rotated code path in all four.
     - `--width W --height H` — a rectangle. These are **full box dimensions**
       (users think in box size); `Area` stores half-extents, so they are halved
       here. `radius_km` is passed as an inert `0.0`.
@@ -263,20 +264,20 @@ def validate_solver_options(
     does: `click.FLOAT` parses `"nan"`/`"inf"`, and `nan` then slips past every
     downstream comparison (IEEE-754), silently yielding zero/garbage climbs.
 
-    `progress_interval` doesn't reach the solver — it gates `progress.throttle`
-    (Story 7.1) — but it is validated here alongside its siblings: a `nan`/`inf`
+    `progress_interval` doesn't reach the solver — it gates `progress.throttle` —
+    but it is validated here alongside its siblings: a `nan`/`inf`
     interval makes `now >= next_fire` perpetually false (progress silently never
     fires), and a non-positive interval forwards every iteration (stdout flood).
     Both are §Cat 10 garbage-in, so they map to `BadCLIArgError → exit 2`.
 
-    `time_budget` and `stagnation_iters` drive the §Cat 5e termination checks
-    (Story 7.2): a non-finite/non-positive `--time-budget` would stop the solve
+    `time_budget` and `stagnation_iters` drive the §Cat 5e termination checks:
+    a non-finite/non-positive `--time-budget` would stop the solve
     on iteration 1 (empty top-N), and a negative `--stagnation-iters` is
     nonsensical (`0` legitimately disables the check). `--stagnation-iters` may
     be `None` here (unset); the query CLI then resolves it to the solver's
     default window.
 
-    `workers` (Story 14.4) never enters `SolverParams` — it is CLI-layer
+    `workers` never enters `SolverParams` — it is CLI-layer
     orchestration only (so it can't invalidate the content-hashed cache) — but is
     validated here with its solver-flag siblings: `< 1` is rejected because both
     `ProcessPoolExecutor` and the per-worker budget split require `>= 1`.
@@ -338,7 +339,7 @@ def validate_solver_options(
     # `0` disables the stagnation check (§Cat 5e); negative is nonsensical.
     if stagnation_iters is not None and stagnation_iters < 0:
         raise BadCLIArgError(f"--stagnation-iters {stagnation_iters} must be >= 0.")
-    # Parallel GRASP restarts (Story 14.4). `1` = today's single-process path; `>= 1`
+    # Parallel GRASP restarts. `1` selects the single-process path; `>= 1` is
     # required so `ProcessPoolExecutor` / the per-worker budget split never see `0`.
     # Purely CLI-layer — never enters `SolverParams`, so no cache invalidation.
     if workers < 1:
@@ -389,8 +390,8 @@ center_option = click.option(
     help="Search-area center as 'LAT,LON' decimal degrees (e.g. '45.0716,6.1079').",
 )
 
-# `--radius` is no longer click-`required`: it is one of two mutually exclusive
-# spellings (Story 15.3), and click cannot express exactly-one-of. `resolve_area`
+# `--radius` is deliberately not click-`required`: it is one of two mutually
+# exclusive spellings, and click cannot express exactly-one-of. `resolve_area`
 # owns the whole combination rule so both CLIs report it identically, and so the
 # "no area at all" case still fails as a `BadCLIArgError → exit 2` rather than
 # click's own multi-line Usage/Error block.
@@ -761,10 +762,8 @@ def emit_osm_age_warning(
 ) -> None:
     """Emit a `logging.warning(...)` if the manifest's OSM extract is stale (Architecture §Cat 4f).
 
-    Lifted from `cli/setup.py` (Story 2.9) to `cli/_shared.py` (Story 2.10) so
-    `cli/query.py`'s cache-hit path can reuse the same boundary semantics
-    without re-implementing them. The warning is non-blocking: callers proceed
-    normally after this returns.
+    Shared by both CLIs' cache-hit paths so the staleness boundary is defined once.
+    The warning is non-blocking: callers proceed normally after this returns.
 
     **Boundary semantics are strict:** the helper fires iff `age_days > threshold_days`.
     Equality does NOT warn — an entry whose `osm_extract_date` is exactly `threshold_days`

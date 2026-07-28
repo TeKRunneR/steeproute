@@ -1,16 +1,16 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
 # Reason: networkx MultiDiGraph operations surface as Unknown; same external-boundary
 # pattern as pipeline/__init__.py, pipeline/osm.py, pipeline/smoothing.py, etc.
-"""Cache I/O: key hashing + manifest schema (Story 2.6); atomic write + read + index (Story 2.7); coverage check (Story 2.10).
+"""Cache I/O: key hashing, manifest schema, atomic write/read/index, coverage check.
 
 `compute_cache_key` is the single source of truth for which inputs invalidate a cached graph
 (Architecture §Cat 4b). `Manifest` is the wire schema written last as the atomic commit signal
-(§Cat 4d). `write_entry` / `read_entry` / `rebuild_index` (Story 2.7) implement the `.tmp/`
+(§Cat 4d). `write_entry` / `read_entry` / `rebuild_index` implement the `.tmp/`
 → `os.replace()` atomic pattern that guarantees a Ctrl-C mid-write cannot surface a partial
-entry. `check_coverage` (Story 2.10) is the FR24 query-side surface — strict `shapely.contains`
+entry. `check_coverage` is the FR24 query-side surface — strict `shapely.contains`
 against `index.json` entries, preferring the smallest true footprint; it opportunistically rebuilds the
-index when a prior `write_entry` was interrupted between manifest commit and index rebuild
-(closes Story 2.7 D1). The package is the sole reader/writer of the cache directory
+index when a prior `write_entry` was interrupted between manifest commit and index rebuild.
+This module is the sole reader/writer of the cache directory
 (§Boundaries — Cache boundary), so all serialization concerns live here too. All JSON writes
 route through the single `write_json_atomic` helper per Architecture §Key anti-patterns.
 """
@@ -52,11 +52,12 @@ _AREA_LAT_LON_DECIMALS: int = 6
 _AREA_RADIUS_KM_DECIMALS: int = 3
 _AREA_ANGLE_DEG_DECIMALS: int = 3
 
-# Area modes (Architecture §Cat 4b). `center_radius` is the v1 centered-square
-# shorthand and stays the wire shape for every square area — its `area` block is
-# byte-identical to pre-Epic-15, so square cache keys never moved.
-# `center_extents_angle` (Story 15.2) carries the generalized rotated rectangle.
-# A future named-region mode would dispatch the same way.
+# Area modes (Architecture §Cat 4b). `center_radius` is the centered-square
+# shorthand and must stay the wire shape for every square area: a square that
+# serialized as `center_extents_angle` instead would hash to a different key and
+# orphan every already-prepared square entry. `center_extents_angle` carries the
+# generalized rotated rectangle. A future named-region mode would dispatch the same
+# way.
 _AREA_MODE_LITERAL: str = "center_radius"
 _AREA_MODE_ROTATED: str = "center_extents_angle"
 
@@ -78,7 +79,7 @@ _AREAS_SUBDIR: str = "areas"
 # Auto-downloaded DEM rasters live alongside the `areas/` entries but in their
 # own subtree so a `dem/` listing stays separable from prepared cache entries.
 _DEM_SUBDIR: str = "dem"
-# osmnx's Overpass HTTP-response cache (Story 11.1, T2). osmnx 2.x defaults its
+# osmnx's Overpass HTTP-response cache. osmnx 2.x defaults its
 # `settings.cache_folder` to a CWD-relative `./cache`; `cli/setup.py` repoints it
 # here so responses persist under the same `--cache-dir`-aware root as everything
 # else instead of littering whatever directory setup happened to run from.
@@ -100,20 +101,20 @@ _INDEX_FILENAME: str = "index.json"
 _TMP_DIR_SUFFIX: str = ".tmp"
 _OLD_DIR_SUFFIX: str = ".old"
 
-# `manifest.json` and `index.json` versions advance independently. Manifest v1
-# was the initial released schema (raw pickled graph); v2 switched `graph.pkl`
-# to the ragged-array payload (Story 13.2); v3 generalized the `area` block to
-# the rotated rectangle (Story 15.2). Bumping is a coordinated change across both
-# CLIs per Architecture §Versioned-contract-surfaces; older entries re-prepare
-# once via the existing recovery paths (no compat shim). The `graph.pkl` payload
-# carries its own version below and moves independently of this one — Story 16.3's
-# v2 → v3 payload change left the manifest at 3, since `cache.py` is deliberately
-# excluded from the pipeline content hash and a format change must not shift keys.
+# Three version numbers move independently here; keeping them separate is the
+# point, so don't unify them. `manifest.json`'s version tracks the manifest schema
+# (v1 raw pickled graph → v2 ragged-array `graph.pkl` → v3 generalized `area`
+# block). Bumping it is a coordinated change across both CLIs per Architecture
+# §Versioned-contract-surfaces; older entries re-prepare once via the existing
+# recovery paths, with no compat shim. The `graph.pkl` payload carries its own
+# version (below) so a payload-format change does not have to move the manifest —
+# `cache.py` is deliberately outside the pipeline content hash, and a storage-format
+# change must not shift cache keys.
 #
-# `index.json` deliberately stays at v1 across the v3 manifest bump: it is
-# *derived* state (`rebuild_index` regenerates it from the manifests), a rotated
-# row is additive, and every pre-Story-15.2 row is a square that `_area_from_wire`
-# still reads correctly. Bumping it would only force a rebuild-and-rewrite.
+# `index.json` deliberately stays at v1 across manifest bumps: it is *derived* state
+# (`rebuild_index` regenerates it from the manifests), a rotated row is additive to
+# it, and a square row is read correctly by `_area_from_wire` whatever the manifest
+# version. Bumping it would only force a rebuild-and-rewrite for nothing.
 _MANIFEST_SCHEMA_VERSION: int = 3
 _INDEX_SCHEMA_VERSION: int = 1
 
@@ -121,14 +122,15 @@ _INDEX_SCHEMA_VERSION: int = 1
 # hand-assembled or half-converted entry (a current manifest over an old-format
 # pickle) surfaces as `CacheCorruptedError` instead of leaking a raw graph.
 # Tracks the *graph payload* format only, independently of the manifest version:
-# v2 (Story 13.2) carried the graph plus ragged geometry coordinate arrays; v3
-# (Story 16.3) drops post-stage-5 geometry altogether, since no query-side
-# consumer reads it and `vertices_resampled` carries the same vertices.
+# v2 carried the graph plus ragged geometry coordinate arrays; v3 drops
+# post-stage-5 geometry altogether, since no query-side consumer reads it and
+# `vertices_resampled` carries the same vertices.
 #
-# v2 entries stay **readable**: their geometry arrays are simply ignored, which
-# is exactly what a v3 read does with geometry it does not have. That keeps every
-# already-prepared cache (and the committed fixtures, converted or not) queryable
-# instead of forcing a re-prepare for a format change the query cannot observe.
+# v2 entries stay **readable** (see `_GRAPH_PAYLOAD_LEGACY_VERSIONS`): their
+# geometry arrays are simply ignored, which is exactly what a v3 read does with
+# geometry it does not have. That keeps every already-prepared cache — and the
+# committed fixtures, converted or not — queryable, instead of forcing a
+# re-prepare for a format change the query cannot observe.
 _GRAPH_PAYLOAD_MARKER: str = "steeproute_graph_payload"
 _GRAPH_PAYLOAD_VERSION: int = 3
 _GRAPH_PAYLOAD_LEGACY_VERSIONS: frozenset[int] = frozenset({2})
@@ -161,8 +163,8 @@ def compute_cache_key(
     Args:
         area: search area (`center`, `radius_km`) — canonicalized internally.
         untagged_policy: `"include"` or `"exclude"` — comes from `--untagged-trails`.
-        dem_version: DEM release tag — comes from `--dem-version` or derived
-            metadata (derivation lives in Story 2.8; this layer trusts the caller).
+        dem_version: DEM release tag — comes from `--dem-version` or from the
+            DEM downloader's default tag. This layer trusts the caller.
         pipeline_content_hash: full SHA256 of pipeline source bytes, typically
             from `compute_pipeline_content_hash()`.
 
@@ -189,10 +191,10 @@ def _area_dict(area: Area, *, rounded: bool) -> dict[str, object]:
       float-print noise.
     - `rounded=False` (`_area_wire_dict`) records what was actually prepared.
 
-    A square emits the v1 `center_radius` block **byte-for-byte** (so existing
-    square cache keys and manifests are unchanged); any other rectangle emits
-    `center_extents_angle`, so two areas differing only in bearing or in one
-    extent land on different keys.
+    A square must emit the `center_radius` block (that is what keeps square cache
+    keys and manifests stable across the addition of rotated areas); any other
+    rectangle emits `center_extents_angle`, so two areas differing only in bearing
+    or in one extent land on different keys.
 
     The square branch reads the *effective* half-extent, not `radius_km` — a
     square spelled as equal explicit extents carries an inert `radius_km=0.0`,
@@ -243,9 +245,9 @@ def _area_from_wire(payload: object) -> Area | None:
     (finiteness, positivity) are the caller's, because the two callers
     deliberately differ in strictness there.
 
-    A missing `mode` is read as `center_radius`: `index.json` is derived state
-    whose pre-Story-15.2 rows are all squares, so an un-rebuilt index stays
-    readable instead of forcing a spurious rebuild.
+    A missing `mode` is read as `center_radius`, because `index.json` is derived
+    state that predates the mode field and whose modeless rows are all squares. That
+    keeps an un-rebuilt index readable instead of forcing a spurious rebuild.
     """
     if not isinstance(payload, dict):
         return None
@@ -322,10 +324,10 @@ def compute_pipeline_content_hash() -> str:
 class Manifest:
     """Cache-entry metadata schema per Architecture §Cat 4.
 
-    `manifest.json` is the atomic commit signal — a cache entry directory
-    without a valid `manifest.json` is ignored by readers (Story 2.7 wires the
-    write order). `to_dict()` produces the on-disk wire shape; `from_dict()`
-    is its inverse, used by `read_entry` to rehydrate manifests from disk.
+    `manifest.json` is the atomic commit signal — a cache entry directory without a
+    valid `manifest.json` is ignored by readers, which is why `write_entry` writes
+    it last. `to_dict()` produces the on-disk wire shape; `from_dict()` is its
+    inverse, used by `read_entry` to rehydrate manifests from disk.
 
     `schema_version` carries a default so future schemas can be detected at
     read time without breaking existing entries.
@@ -447,10 +449,9 @@ class Manifest:
 class PreparedData:
     """A cache entry rehydrated from disk: the setup-pipeline graph + its manifest.
 
-    Returned by `read_entry` (Story 2.7) and `check_coverage` (Story 2.10). The
-    bundle keeps the typed metadata next to the graph so callers (Story 2.9's
-    OSM-age warning, Epic 3's report metadata block) don't have to re-open the
-    manifest file.
+    Returned by `read_entry` and `check_coverage`. The bundle keeps the typed
+    metadata next to the graph so callers — the setup CLI's OSM-age warning, the
+    query CLI's report metadata block — don't have to re-open the manifest file.
     """
 
     graph: nx.MultiDiGraph
@@ -460,9 +461,9 @@ class PreparedData:
 def resolve_cache_root(override: pathlib.Path | None = None) -> pathlib.Path:
     """Return the cache root path, defaulting to platformdirs' user cache dir.
 
-    Story 2.8 wires `--cache-dir` into this helper. Callers must not interpret
-    the returned path themselves — pass it to `write_entry` / `read_entry` /
-    `rebuild_index` which apply the `steeproute/areas/...` layout consistently.
+    `--cache-dir` arrives here as `override`. Callers must not interpret the
+    returned path themselves — pass it to `write_entry` / `read_entry` /
+    `rebuild_index`, which apply the `steeproute/areas/...` layout consistently.
 
     Args:
         override: explicit cache-root path (e.g. from `--cache-dir`); when
@@ -505,8 +506,8 @@ def osmnx_cache_dir_for(cache_root: pathlib.Path) -> pathlib.Path:
     Single source of truth for the `<cache-root>/steeproute/osmnx/` layout —
     parallels `entry_dir_for` / `dem_cache_path_for` so `cli/setup.py` never
     reconstructs the layout by hand. See `_OSMNX_SUBDIR` for why osmnx's
-    CWD-relative default is repointed here (Story 11.1, T2). Does not create
-    the directory — osmnx does that itself on first cache write.
+    CWD-relative default is repointed here. Does not create the directory — osmnx
+    does that itself on first cache write.
     """
     return cache_root / _CACHE_SUBDIR / _OSMNX_SUBDIR
 
@@ -559,12 +560,10 @@ def _graph_to_payload(graph: nx.MultiDiGraph, *, consume: bool = False) -> dict[
     `tests/unit/test_dem.py::test_fixture_pipeline_vertices_resampled_matches_geometry_coords`
     — so nothing is lost by dropping it: stages 6-7 and `output.render` read
     `vertices_resampled`, while contraction, the solver and the validator read
-    metrics and tags. Storing it cost ~47 MB of a ~166 MB r20 entry plus the
-    per-load `LineString` rebuild, so schema v3 (Story 16.3) stops writing it.
-
-    What survives from Story 13.2 is its structural decision — keep geometry out
-    of the pickled networkx skeleton — not its ragged coordinate arrays, which
-    existed only to rebuild geometry cheaply on read. Nothing rebuilds it now.
+    metrics and tags. Storing it cost ~47 MB of a ~166 MB r20 entry plus a
+    per-load `LineString` rebuild, so v3 does not write it. Don't add it back: the
+    only way to need it is a new post-stage-5 consumer that reads `geometry`
+    instead of `vertices_resampled`, which would be the thing to fix.
 
     Pure by default — operates on `graph.copy()` (fresh attribute dicts, shared
     values), so the caller's graph keeps its `geometry` attributes.
@@ -573,20 +572,19 @@ def _graph_to_payload(graph: nx.MultiDiGraph, *, consume: bool = False) -> dict[
         graph: the post-stage-5 graph to serialize.
         consume: when True, pop `geometry` straight off `graph` instead of copying
             it first, saving one full-graph `copy()` (~5.4 s of the r20 cache-write
-            stage's 7.7 s — Story 16.2). Architecture §Cat 3 3a-bis: `consume`
-            rather than `inplace` because the caller forfeits content — its edges
-            lose `geometry`. Only safe when the caller owns `graph` and is done
-            with it; the sole such caller is `cli/setup.py` via
-            `write_entry(consume=True)`. Payload content is identical either way.
+            stage's 7.7 s, 2026-07-24). Architecture §Cat 3 3a-bis: `consume` rather
+            than `inplace` because the caller forfeits content — its edges lose
+            `geometry`. Only safe when the caller owns `graph` and is done with it.
+            Payload content is identical either way.
 
     Raises:
-        ValueError: an edge is missing `geometry` or it is not a LineString.
-            Retained under v3 even though the value is now discarded rather than
-            serialized: it is the post-stage-5 pipeline contract, and a graph
-            reaching `write_entry` without it did not come from the pipeline.
-            Raised before any further edge is touched, so a `consume=True`
-            failure leaves the caller's graph partially stripped — acceptable
-            because the contract violation is unrecoverable for that caller anyway.
+        ValueError: an edge is missing `geometry` or it is not a LineString. Checked
+            even though the value is then discarded rather than serialized: it is
+            the post-stage-5 pipeline contract, and a graph reaching `write_entry`
+            without it did not come from the pipeline. Raised before any further
+            edge is touched, so a `consume=True` failure leaves the caller's graph
+            partially stripped — acceptable because the contract violation is
+            unrecoverable for that caller anyway.
     """
     stripped = graph if consume else graph.copy()
     for u, v, key, data in stripped.edges(keys=True, data=True):
@@ -607,9 +605,9 @@ def _graph_from_payload(payload: object, cache_key: str) -> nx.MultiDiGraph:
 
     Reconstructs geometry from **neither** live payload version: v3 does not carry
     it, and a legacy v2 entry's ragged coordinate arrays are ignored rather than
-    rebuilt (Story 16.3 — no post-stage-5 consumer reads the attribute, so the
-    ~0.9 s r20 rebuild bought nothing). The returned graph is therefore identical
-    across both versions for every consumer that runs.
+    rebuilt — no post-stage-5 consumer reads the attribute, so the ~0.9 s r20
+    rebuild buys nothing. The returned graph is therefore identical across both
+    versions for every consumer that runs.
 
     Accepting v2 keeps already-prepared caches queryable across the format change
     — the query cannot observe the difference — so no re-prepare is forced. It is
@@ -668,7 +666,7 @@ def write_entry(
     `adj` / `succ` / `edges` view objects in the graph's `__dict__`, and
     `MultiDiGraph.copy()` materializes a different subset of them than a
     caller-owned graph does, so those incidental views ride along in the pickle.
-    Compare what `read_entry` returns instead (Story 16.2; Architecture §Cat 4c).
+    Compare what `read_entry` returns instead (Architecture §Cat 4c).
 
     Returns the final entry directory path.
     """
@@ -742,7 +740,7 @@ def _gc_superseded_entries(cache_root: pathlib.Path, current: Manifest) -> None:
     user choice — it's derived purely from pipeline source bytes. So a sibling
     that matches `current` on `(area, untagged_policy, dem_version)` but lives
     under a different key necessarily differs only in its pipeline hash: it was
-    built by pipeline code that no longer exists. Left in place it would (a)
+    built by a different revision of the pipeline. Left in place it would (a)
     accumulate on disk indefinitely (nothing else collects it) and (b) tie with
     `current` on footprint in `_select_smallest_containing`, where the
     lexicographic-`cache_key_hash` tiebreak is effectively a coin flip — so a
@@ -798,9 +796,9 @@ def read_entry(cache_root: pathlib.Path, cache_key: str) -> PreparedData:
             raises — including the v1 pickled-graph format, which re-prepares
             once per Architecture §Cat 4b invalidation semantics).
 
-    The returned graph carries no per-edge `geometry`: schema v3 does not store
-    it and a legacy v2 entry's arrays are ignored (Story 16.3). Every consumer
-    reads `vertices_resampled` and the metric/tag attributes instead.
+    The returned graph carries no per-edge `geometry`: schema v3 does not store it
+    and a legacy v2 entry's arrays are ignored. Every consumer reads
+    `vertices_resampled` and the metric/tag attributes instead.
     """
     entry_dir = _areas_dir(cache_root) / cache_key
     manifest_path = entry_dir / _MANIFEST_FILENAME
@@ -892,8 +890,7 @@ def rebuild_index(cache_root: pathlib.Path) -> None:
                 # concern — one bad entry must not block the rebuild for all
                 # the others. The next `read_entry` against the bad key will
                 # surface the error with full context. A `--verbose` user gets
-                # a stderr warning here so the silent swallow is observable
-                # (deferred-work D2 from Story 2.7).
+                # a stderr warning here so the silent swallow is observable.
                 _logger.warning(
                     "cache.rebuild_index: skipping corrupt manifest at %s: %s",
                     manifest_path,
@@ -926,8 +923,8 @@ def _bounds_geojson(area: Area) -> dict[str, object]:
     derived from the shared `_area_to_polygon` so the on-disk sidecar and the
     in-memory coverage geometry can't silently diverge. For a square it matches
     the `bbox`-mode semantics `osmnx.graph_from_point(..., dist_type="bbox")`
-    consumes upstream (`radius_km` is a square half-side in WGS84 degrees, not a
-    disk radius) and is byte-identical to pre-Epic-15.
+    consumes upstream — `radius_km` is a square half-side in WGS84 degrees, not a
+    disk radius.
 
     `properties` mirrors the manifest's `area` block (same modes, same fields) so
     a diagnostic reader sees one vocabulary — except that coordinates here use
@@ -936,8 +933,8 @@ def _bounds_geojson(area: Area) -> dict[str, object]:
     separate convention.
     """
     poly = _area_to_polygon(area)
-    # `Polygon.exterior.coords` includes the closing duplicate vertex, matching
-    # the prior hand-built ring's shape exactly.
+    # `Polygon.exterior.coords` includes the closing duplicate vertex, so the ring
+    # is already GeoJSON-closed and needs no explicit repeat of the first point.
     ring = [[float(x), float(y)] for x, y in poly.exterior.coords]
     lat, lon = area.center
     properties = _area_wire_dict(area)
@@ -947,9 +944,6 @@ def _bounds_geojson(area: Area) -> dict[str, object]:
         "geometry": {"type": "Polygon", "coordinates": [ring]},
         "properties": properties,
     }
-
-
-# --- Coverage check (Story 2.10) ---------------------------------------------
 
 
 # WGS84 km→deg approximation used by both `_bounds_geojson` and the coverage
@@ -997,10 +991,12 @@ def _area_to_polygon(area: Area) -> shapely.Polygon:
     grade, flat-earth is sub-percent at range scale (Architecture §"Rotated-
     rectangle search areas").
 
-    The `angle_deg == 0` branch is a byte-identical fast path: for a square it
-    reproduces the pre-Epic-15 ring exactly (same vertex order and float ops),
-    so existing coverage geometry and the `bounds.geojson` sidecar are unchanged
-    (Story 15.1 backward-compat guarantee).
+    The `angle_deg == 0` branch is not just a speed shortcut: it must keep the exact
+    vertex order and float operations of the axis-aligned ring, because every
+    already-written `bounds.geojson` sidecar and every coverage decision for a
+    square area was computed that way. Routing squares through the rotation math
+    below (where `cos 0` / `sin 0` are exact but the multiply-add order differs)
+    would perturb them.
 
     The 5-point ring closes the polygon (first vertex repeated last). Empty /
     degenerate extents (≤0) would produce a zero-area or self-intersecting
@@ -1012,8 +1008,7 @@ def _area_to_polygon(area: Area) -> shapely.Polygon:
     half_width_km, half_height_km = area.half_extents_km
     deg_per_km_lon = _deg_per_km_lon(lat)
     if area.angle_deg == 0.0:
-        # Axis-aligned fast path — byte-identical to the pre-Epic-15 square ring
-        # when the extents are equal (see the backward-compat guarantee above).
+        # Axis-aligned path — its float operations are load-bearing, see above.
         dlon = half_width_km * deg_per_km_lon
         dlat = half_height_km * _DEG_PER_KM_LAT
         return shapely.Polygon(
@@ -1049,8 +1044,8 @@ def _area_to_polygon(area: Area) -> shapely.Polygon:
 def area_polygon(area: Area) -> shapely.Polygon:
     """Public name for `area`'s WGS84 (lon, lat) ring — see `_area_to_polygon`.
 
-    Exists so consumers outside this module (setup stage 1's `graph_from_polygon`
-    fetch, Story 15.2) derive the ring from the **one** shared helper rather than
+    Exists so consumers outside this module — setup stage 1's `graph_from_polygon`
+    fetch — derive the ring from the **one** shared helper rather than
     re-implementing the km-frame math and skewing away from coverage geometry and
     the `bounds.geojson` sidecar.
     """
@@ -1066,8 +1061,8 @@ def area_bbox_wgs84(area: Area) -> tuple[float, float, float, float]:
     rectangle the envelope is strictly larger than the box, so a consumer must
     not treat it as "the area" (e.g. containment tests belong against
     `_area_to_polygon(area)`, which is orientation-aware, not against this
-    envelope). Callers that shortcut through this as if it were the region are
-    the Epic 15 envelope-leak audit targets (Stories 15.2/15.3).
+    envelope). A caller that shortcuts through this as if it were the region leaks
+    off-axis terrain into whatever it is doing.
 
     Uses the same km→deg conversion as `check_coverage` / `_bounds_geojson`
     (via `_area_to_polygon`), so a consumer that renders the envelope matches
@@ -1082,9 +1077,9 @@ def area_bbox_wgs84(area: Area) -> tuple[float, float, float, float]:
 class _IndexedEntry:
     """One row from `index.json`, internal to `cache.py` containment logic.
 
-    Architecture §Cat 4 frames `index.json` as a coverage-lookup convenience
-    file with two fields per entry (`cache_key_hash`, `area`); promoting this
-    to a top-level dataclass would be over-engineering for v1 with one reader.
+    Architecture §Cat 4 frames `index.json` as a coverage-lookup convenience file
+    with two fields per entry (`cache_key_hash`, `area`). Deliberately private:
+    with one reader, promoting it to a public shape would only invite others.
     """
 
     cache_key_hash: str
@@ -1098,8 +1093,9 @@ def _read_indexed_entries(index_path: pathlib.Path) -> list[_IndexedEntry] | Non
     or structurally malformed in any way — the caller's contract is then to
     invoke `rebuild_index` and retry. A `[]` return means the file parses
     cleanly but lists zero entries; the caller still cross-checks the on-disk
-    `areas/` against this in case an interrupted `write_entry` left a stale
-    empty index (Story 2.7 D1).
+    `areas/` against this, because a `write_entry` interrupted between its manifest
+    commit and its index rebuild leaves exactly that state — a stale empty index
+    over a real entry.
     """
     if not index_path.is_file():
         return None
@@ -1126,9 +1122,9 @@ def _read_indexed_entries(index_path: pathlib.Path) -> list[_IndexedEntry] | Non
         # valid row can still carry geometry that makes `_area_to_polygon` emit
         # NaN coordinates and shapely raise a raw `GEOSException` — breaking the
         # FR24 exit-2 contract. Reject such rows here so the caller rebuilds.
-        # The guard is on the *effective* extents, not `radius_km`: a rotated row
-        # legitimately carries `radius_km=0.0`, and the old scalar check would
-        # have discarded every rotated entry in the cache.
+        # The guard is on the *effective* extents, never `radius_km`: a rotated row
+        # legitimately carries `radius_km=0.0`, so a scalar `radius_km > 0` check
+        # here would discard every rotated entry in the cache.
         if area is None or not _has_usable_geometry(area):
             return None
         parsed.append(_IndexedEntry(cache_key_hash=cache_key_hash, area=area))
@@ -1154,8 +1150,8 @@ def _has_usable_geometry(area: Area) -> bool:
 def _is_entry_dir(path: pathlib.Path) -> bool:
     """True iff `path` looks like a real cache entry directory (not a staging artifact).
 
-    Filters out `<hash>.tmp/` (in-flight writes) and `<hash>.old/` (rollback
-    shuffle from Story 2.7's atomic-write pattern). A Ctrl-C in the narrow
+    Filters out `<hash>.tmp/` (in-flight writes) and `<hash>.old/` (the
+    atomic-write rollback shuffle). A Ctrl-C in the narrow
     window between `os.replace(entry_dir, backup_dir)` and the manifest
     commit can leave a `<hash>.old/` with the previous entry's full manifest
     on disk — without this suffix filter both `_areas_has_valid_entries` and
@@ -1173,7 +1169,7 @@ def _areas_has_valid_entries(cache_root: pathlib.Path) -> bool:
 
     Used to detect the "interrupted write" case where a `write_entry` landed
     the entry's `manifest.json` but didn't reach `rebuild_index` before
-    Ctrl-C, leaving the index out-of-date (Story 2.7 D1). `.tmp/` and `.old/`
+    Ctrl-C, leaving the index out-of-date. `.tmp/` and `.old/`
     directories are skipped via `_is_entry_dir` — they're not committed
     entries even when a stale manifest happens to live inside them. We don't
     validate manifest contents here; `rebuild_index` does that next, and an
@@ -1192,10 +1188,10 @@ def area_km2(area: Area) -> float:
     """True footprint of `area` in km² — the shape-agnostic "how big is this entry" measure.
 
     `2·half_width × 2·half_height`, independent of bearing (rotation preserves
-    area). Replaces `radius_km` as the size ordering: a rotated area's
-    `radius_km` is an inert `0.0`, so ranking on it collapsed every rotated
-    entry to "size 0". Monotone in `radius_km` for squares, so square-only
-    caches order exactly as before.
+    area). This, never `radius_km`, is the size ordering: a rotated area's
+    `radius_km` is an inert `0.0`, so ranking on it collapses every rotated entry
+    to "size 0". It is monotone in `radius_km` for squares, so a square-only cache
+    orders the same either way.
 
     Public because callers outside this module also need "how big is this
     area" — the *true* rectangle area, not a `π·r²` disk proxy.
@@ -1296,18 +1292,18 @@ def _format_number(value: float) -> str:
 def format_area_flags(area: Area) -> str:
     """Render `area`'s size as the CLI flag fragment that would reproduce it.
 
-    A square emits `--radius R` — byte-identical to pre-Epic-15, which is what
-    keeps the suggested-command assertions across the unit/integration/e2e tiers
-    unchanged. Any other rectangle emits its **full** dimensions plus the bearing
-    (users think in width/height, not half-extents).
+    A square emits `--radius R`; any other rectangle emits its **full** dimensions
+    plus the bearing, because users think in width/height, not half-extents.
 
-    The spellings are the real Click option names (Story 15.3,
-    `cli/_shared.py` §Area), so the emitted fragment is copy-pasteable. Public
-    because coverage-miss messages reuse it, keeping one source for
-    "which flags describe this shape". A rotated *square* spelled
-    `--radius R --angle A` renders as `--width 2R --height 2R --angle A`: an
-    equivalent command (same polygon, same cache key), because an area read back
-    from the cache no longer records which spelling produced it.
+    The spellings are the real Click option names (`cli/_shared.py` §Area), so the
+    emitted fragment is copy-pasteable. Public because coverage-miss messages reuse
+    it, keeping one source for "which flags describe this shape".
+
+    A rotated *square* spelled `--radius R --angle A` renders as
+    `--width 2R --height 2R --angle A`. That is an equivalent command — same
+    polygon, same cache key — not the original one: an `Area` does not record which
+    spelling produced it, so exact round-tripping of the user's flags is not
+    something this can offer.
     """
     half_width_km, half_height_km = area.half_extents_km
     if area.is_square:
@@ -1322,9 +1318,9 @@ def format_area_flags(area: Area) -> str:
 def _format_area_geometry(area: Area) -> str:
     """Render `area`'s size for human-facing prose (not a copy-pasteable command).
 
-    Square: `radius 2 km` (the pre-Epic-15 wording). Otherwise: the full box
-    dimensions and bearing, e.g. `16x6 km box at 35°` — never a scalar "radius"
-    claim about a shape that has no radius.
+    Square: `radius 2 km`. Otherwise: the full box dimensions and bearing, e.g.
+    `16x6 km box at 35°` — never a scalar "radius" claim about a shape that has no
+    radius.
     """
     half_width_km, half_height_km = area.half_extents_km
     if area.is_square:
@@ -1336,7 +1332,7 @@ def _format_area_geometry(area: Area) -> str:
 
 
 def _no_prepared_cache_message(query_area: Area) -> str:
-    """AC #3: empty-cache error message echoing the query's center and size.
+    """Empty-cache error message echoing the query's center and size.
 
     Lead phrase distinguishes the empty-cache case from `_partial_coverage_message`'s
     "No prepared cache covers this area." so users can triage at a glance.
@@ -1353,7 +1349,7 @@ def _partial_coverage_message(
     query_area: Area,
     nearest: _IndexedEntry,
 ) -> str:
-    """AC #4: partial-coverage error naming the nearest prepared area.
+    """Partial-coverage error naming the nearest prepared area.
 
     Suggests the largest `--radius` value that would fit strictly inside the
     nearest entry while keeping the original query center, OR — if the query
@@ -1420,10 +1416,10 @@ def check_coverage(cache_root: pathlib.Path, query_area: Area) -> PreparedData:
 
     1. Read `index.json`. If missing / unparseable / schema-incompatible, OR if
        it parses as empty while `areas/` actually contains valid entries (the
-       Story 2.7 D1 interrupted-write window), opportunistically `rebuild_index`
-       and re-read.
+       interrupted-write window between manifest commit and index rebuild),
+       opportunistically `rebuild_index` and re-read.
     2. If the index lists zero entries, raise `CacheNotFoundError` with the
-       empty-cache actionable message (AC #3).
+       empty-cache actionable message.
     3. For each indexed entry, build its polygon via `_area_to_polygon` and
        test strict `shapely.contains` against the query polygon (also built
        via `_area_to_polygon` so query and entry share one geometry source).
@@ -1433,7 +1429,7 @@ def check_coverage(cache_root: pathlib.Path, query_area: Area) -> PreparedData:
        tiebreak by `cache_key_hash` for determinism).
     4. If no entry strictly contains the query, raise `CacheNotFoundError`
        with the partial-coverage message naming the nearest prepared area
-       and an actionable smaller-radius or center-relocation hint (AC #4).
+       and an actionable smaller-radius or center-relocation hint.
     5. Otherwise, return `read_entry(cache_root, chosen.cache_key_hash)` — any
        `CacheCorruptedError` from the chosen entry's graph propagates unchanged
        (existing exit-2 contract).
@@ -1463,8 +1459,8 @@ def check_coverage(cache_root: pathlib.Path, query_area: Area) -> PreparedData:
             )
         indexed = rebuilt or []
     elif not indexed and _areas_has_valid_entries(cache_root):
-        # Empty index but on-disk entries exist (Story 2.7 D1: interrupted
-        # write between manifest commit and final `rebuild_index`).
+        # Empty index but on-disk entries exist: a `write_entry` interrupted
+        # between its manifest commit and its final `rebuild_index`.
         rebuild_index(cache_root)
         rebuilt = _read_indexed_entries(index_path)
         if rebuilt is None:
@@ -1527,7 +1523,7 @@ def list_prepared_areas(cache_root: pathlib.Path) -> list[CoverageEntry]:
         rebuild_index(cache_root)
         indexed = _read_indexed_entries(index_path) or []
     elif not indexed and _areas_has_valid_entries(cache_root):
-        # Empty index but committed entries on disk (Story 2.7 D1 window).
+        # Empty index but committed entries on disk — the interrupted-write window.
         rebuild_index(cache_root)
         indexed = _read_indexed_entries(index_path) or []
     return [CoverageEntry(cache_key_hash=e.cache_key_hash, area=e.area) for e in indexed]

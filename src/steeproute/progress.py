@@ -4,15 +4,15 @@ Architecture §Cat 8 splits the output streams: progress lines and the final run
 summary go to **stdout** via plain `print(...)`; `logging` is reserved for
 diagnostics and warnings on **stderr**. Two consumers share this module:
 
-- **Query side (Story 7.1, FR13):** the solver (`solver/grasp.py`) emits a
+- **Query side (FR13):** the solver (`solver/grasp.py`) emits a
   `ProgressEvent` once per iteration through an injected callback; the CLI
   installs a rendering callback wrapped by `throttle(...)` so a long run prints
   at most one line per `--progress-interval` seconds.
-- **Setup side (Story 11.1, FR33):** `StageProgress` is the stage-timing seam —
+- **Setup side (FR33):** `StageProgress` is the stage-timing seam —
   `cli/setup.py` creates one (rendering through `print`, or silent under
   `--quiet`) and threads it through the setup orchestrator so every pipeline
   stage announces itself, reports elapsed time, and records machine-readable
-  per-stage timings for profiling attribution (Story 11.2).
+  per-stage timings for profiling attribution.
 
 Tests inject a collecting callback (and a fake clock) instead. Both mechanisms
 are pure side-effects on the loops they observe: they read a monotonic
@@ -76,8 +76,9 @@ def estimate_remaining(iteration: int, iter_budget: int, elapsed_s: float) -> fl
     yet — e.g. a sub-resolution first iteration or an injected fake clock at t=0),
     matching `ProgressEvent.estimated_remaining_s`'s nullable contract. Clamped at
     `0.0` so the final iteration reports `0.0`, never a negative estimate. This is a
-    deliberately crude "rough ETA" (FR13); it ignores the time-budget cap (Story 7.2)
-    and assumes a roughly uniform per-iteration cost.
+    deliberately crude "rough ETA" (FR13): it ignores the `--time-budget` and
+    `--stagnation-iters` termination conditions, either of which can end the solve
+    far earlier, and assumes a roughly uniform per-iteration cost.
     """
     if iteration <= 0 or elapsed_s <= 0.0:
         return None
@@ -87,13 +88,13 @@ def estimate_remaining(iteration: int, iter_budget: int, elapsed_s: float) -> fl
 
 @dataclass
 class StageProgress:
-    """Stage-timing seam for the setup pipeline (Story 11.1, FR33 / T1).
+    """Stage-timing seam for the setup pipeline (FR33).
 
     One object serves both FR33 goals: a `with progress.stage(name):` block
     emits a stage-start line and a stage-complete line with elapsed time through
     `on_line`, and records the elapsed seconds into `timings` (stage name →
-    seconds, insertion-ordered) for machine-readable profiling attribution
-    (Story 11.2 reads it instead of re-instrumenting).
+    seconds, insertion-ordered) for machine-readable profiling attribution, so a
+    profiling pass reads `timings` instead of re-instrumenting the pipeline.
 
     - `on_line`: rendering sink for formatted lines. `cli/setup.py` installs
       `print` (stdout, §Cat 8), or `None` under `--quiet` — with `None` the seam

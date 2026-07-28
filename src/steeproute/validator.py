@@ -29,45 +29,42 @@ a *solver* bug, not a validator one):
   detection threshold applied upstream in stage 8 — not a validator concern.
 - **Difficulty cap** rejects an edge iff `max_sac_rank(sac_scale)` is a known
   rank above the parsed cap; `None` (untagged / unrecognized SAC) passes — same
-  policy as the solver and the Story 3.5 oracle.
-- **Edge-reuse limit** is the **undirected base-segment** once-only rule (FR5,
-  Story 5.2): a non-exempt physical trail segment may appear at most once per
-  route, regardless of direction. It keys on the `base_segment_id` tags Story
-  5.1 wrote at contraction — a climb super-edge and the reverse-direction
-  connectors of the same trail share an id — so ascending a climb and descending
-  its reverse is a violation (the out-and-back). Exemption is per-id: an id is
-  exempt iff every edge carrying it is `reusable` (a short connector
-  `length_m < l_connector`), so repeated exempt short connectors are **not**
-  flagged. The non-exempt id set and per-edge blocking ids are single-sourced
-  with the solver and oracle through `solver.reuse`, so a GRASP-admitted route
-  validates by construction. This realizes the originally-intended `--l-connector`
-  semantics (a reuse-exemption threshold, per the §Cat 6 table and PRD FR5),
-  replacing the earlier directed edge-simple re-check.
+  policy as the solver and the exhaustive oracle.
+- **Edge-reuse limit** is the **undirected base-segment** once-only rule (FR5): a
+  non-exempt physical trail segment may appear at most once per route, regardless
+  of direction. It keys on the `base_segment_id` tags contraction writes — a climb
+  super-edge and the reverse-direction connectors of the same trail share an id —
+  so ascending a climb and descending its reverse is a violation (the
+  out-and-back). Exemption is per-id: an id is exempt iff every edge carrying it is
+  `reusable` (a short connector `length_m < l_connector`), so repeated exempt short
+  connectors are **not** flagged. Note this is a reuse-exemption rule, *not* a
+  directed edge-simple check: `--l-connector` is a reuse threshold per the §Cat 6
+  table and PRD FR5. The non-exempt id set and per-edge blocking ids are
+  single-sourced with the solver and oracle through `solver.reuse`, so a
+  GRASP-admitted route validates by construction.
 - **Graph membership** is a sanity check that every route edge exists in the
   operational contracted graph.
-- **Start-at-junction** (FR31, Story 10.1) is checked only when
+- **Start-at-junction** (FR31) is checked only when
   `params.start_at_junction` is set: the route's start endpoint
   (`edges[0].node_u`) must be a road/trail junction node (via the shared
   `pipeline.graph.is_junction_node` predicate). This *is* the enforcement of
   FR31 — the GRASP/oracle seed-pool restriction is only an efficiency prune — so
   the check holds independent of how the route was built; a failure flags the
-  route via the FR27 banner / FR28 exit-code path. Off by default → no effect on
-  default-parameter output.
-- **Max-descent-slope** (FR32, Story 10.2) is checked only when
+  route via the FR27 banner / FR28 exit-code path.
+- **Max-descent-slope** (FR32) is checked only when
   `params.max_descent_slope` is set: a *descending* traversal (net elevation loss
   in that direction) of an edge whose `max_windowed_descent_grad` exceeds the cap
   is flagged, via the shared `solver.descent.descends_over_cap` predicate. Uphill
   traversal is unconstrained, so the same segment stays eligible as a climb. This
   *is* the enforcement of FR32 — the GRASP/oracle prune is only an efficiency
-  layer — so it holds independent of how the route was built. Off by default → no
-  effect on default-parameter output.
+  layer — so it holds independent of how the route was built.
 
 Jaccard identity is single-sourced from `solver/distinctness.py` (routes are
 wrapped as transient `Solution`s and fed to `jaccard_distance`) so set-level
 distinctness uses byte-identical semantics to `TopNTracker`'s admission:
 two routes overlap iff their Jaccard *similarity* exceeds `j_max`
 (equivalently `jaccard_distance < 1 - j_max`). Like the reuse rule, the Jaccard
-identity is the **undirected** `base_segment_id` (Story 6.1, sourced via
+identity is the **undirected** `base_segment_id` (sourced via
 `solver.reuse.base_segment_id_map`), so two routes walking the same trail in
 opposite directions count as overlapping — FR11 distinctness aligned with FR5
 undirected reuse.
@@ -108,9 +105,9 @@ class _GraphContext:
     """Graph-wide invariants every route check needs, derived once per call.
 
     All three are functions of the contracted graph alone — not of any route — so
-    deriving them per route meant N identical full-graph scans for an N-route set
-    (Story 16.1). Private and deliberately *not* in `models.py`: it is derived
-    state internal to validation, not stage data crossing a module boundary, and
+    deriving them per route would mean N identical full-graph scans for an
+    N-route set. Private and deliberately *not* in `models.py`: it is derived state
+    internal to validation, not stage data crossing a module boundary, and
     `models.py` is content-hashed into every prepared cache key.
 
     `non_exempt` is the set of base-segment ids subject to the once-only reuse
@@ -158,14 +155,13 @@ def validate_set(
     set the tracker admitted yields no violations here.
 
     When `graph` is supplied, Jaccard keys on the **undirected** `base_segment_id`
-    identity (Story 6.1, single-sourced via `solver.reuse.base_segment_id_map`),
-    matching `TopNTracker`'s admission so a GRASP-admitted set validates by
-    construction. With `graph=None` it falls back to the directed
-    `(node_u, node_v, key)` identity (pre-6.1 behaviour).
+    identity (single-sourced via `solver.reuse.base_segment_id_map`), matching
+    `TopNTracker`'s admission so a GRASP-admitted set validates by construction.
+    With `graph=None` it falls back to the directed `(node_u, node_v, key)`
+    identity, which is only correct for a caller that has no graph to key against.
 
     `context` is an internal fast path: `validate` passes the map it already built
-    so the whole-graph scan is not repeated. Public callers omit it and get
-    today's behaviour.
+    so the whole-graph scan is not repeated. Public callers omit it.
     """
     if context is not None:
         segment_map = context.segment_map
@@ -207,10 +203,10 @@ def validate(
     them), so this only fires on an upstream bug — fail loud at the boundary,
     consistent with `TopNTracker`'s non-finite-objective guard.
     """
-    # One `_GraphContext` for the whole set (Story 16.1): the reuse invariants are
-    # functions of the graph, not of any route, so an N-route set derived them N
-    # times — ten identical ~327k-edge scans at r20. `metrics` is likewise built
-    # here and handed to the per-route check, which used to recompute it for the
+    # One `_GraphContext` for the whole set: the reuse invariants are functions of
+    # the graph, not of any route, so deriving them per route is N identical
+    # ~327k-edge scans at r20 for an N-route set. `metrics` is likewise built once
+    # here and handed to the per-route check rather than recomputed there for the
     # slope-floor test. Both are pure hoists: same values, same verdicts.
     context = _GraphContext.of(graph)
     routes: list[Route] = []
@@ -275,7 +271,7 @@ def _validate_edges(
             )
         )
 
-    # Start-at-junction (FR31, Story 10.1): only when `--start-at-junction` is
+    # Start-at-junction (FR31): only when `--start-at-junction` is
     # active. This is the *enforcement* of the constraint — the GRASP seed-pool
     # restriction is only an efficiency prune. The route's start endpoint is
     # `edges[0].node_u`; it must be a road/trail junction node, checked through
@@ -337,15 +333,14 @@ def _validate_edges(
                 )
             )
 
-        # Direction-aware descent cap (FR32, Story 10.2): only when
+        # Direction-aware descent cap (FR32): only when
         # `--max-descent-slope` is active. This *is* the enforcement of the cap —
         # the GRASP/oracle RCL prune is only an efficiency layer — so the check
         # holds independent of how the route was built. A descending traversal
         # (net loss in this direction) of a segment whose windowed grade exceeds
         # the cap is flagged via the shared `solver.descent` predicate (the same
         # one the solver/oracle prune on, so a GRASP-admitted route passes).
-        # Uphill traversal is never flagged → the segment stays climbable. Off by
-        # default → no effect on default-parameter output.
+        # Uphill traversal is never flagged → the segment stays climbable.
         edge_data = nx_graph.get_edge_data(edge.node_u, edge.node_v, edge.key)
         if descends_over_cap(edge_data, params.max_descent_slope):
             # `descends_over_cap` returns False when the cap is unset, so reaching
@@ -364,7 +359,7 @@ def _validate_edges(
             )
 
     # Edge-reuse limit: each non-exempt base trail segment may appear at most
-    # once, regardless of direction (FR5, Story 5.2). Counts are tallied over the
+    # once, regardless of direction (FR5). Counts are tallied over the
     # non-exempt base-segment ids each route edge occupies — single-sourced with
     # the solver/oracle via `solver.reuse`, so a GRASP-admitted route never trips
     # this. Exempt short connectors carry no non-exempt id, so repeating one (in

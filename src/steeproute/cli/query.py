@@ -4,29 +4,27 @@
 # Same external-boundary pattern as `cli/setup.py` and `pipeline/`.
 """steeproute query CLI entry point: FR24 coverage check → stages 8-9 → GRASP → validate → render.
 
-Story 2.10 wired the cache-hit path through `cache.check_coverage`, which
-resolves the user's `--center` / `--radius` against `index.json` and either
-returns the smallest-radius `PreparedData` strictly containing the query area
-or raises `CacheNotFoundError` (mapped to exit 2 by `run_entry_point`).
+The run resolves the user's area against the prepared cache
+(`cache.check_coverage`, which returns the smallest `PreparedData` strictly
+containing the query area or raises `CacheNotFoundError` → exit 2), then runs the
+query-side pipeline: elevation reshaping and metrics (stages 6-7) → trail-filter
+redux at the user's difficulty cap → climb detection (stage 8) →
+contracted-graph construction (stage 9) → GRASP → runtime validation →
+HTML/JSON rendering.
 
-Story 3.11 wires the full Journey-1 happy path on top of that: climb detection
-(stage 8) → contracted-graph construction (stage 9) → GRASP → runtime validation
-→ HTML/JSON rendering. The process exit code is validation-driven (§Cat 6c):
-`0` when every route passes, `1` when any route fails validation or any
-set-level pairwise distinctness violation exists. Outputs are always written to
-disk *before* the exit code is computed, so disk state is correct regardless of
-exit code (FR28). Story 7.1 wires the progress UI: a throttled `ProgressEvent`
-renderer is installed on the solver (suppressed by `--quiet`). Story 7.3 adds
-Ctrl-C interrupt handling (best-so-far flush → exit 130); Story 7.5 prints the
-end-of-run summary to stdout (FR22).
+**Exit code is validation-driven** (§Cat 6c): `0` when every route passes, `1`
+when any route fails validation or any set-level pairwise distinctness violation
+exists, `130` on Ctrl-C (after flushing the solver's best-so-far). Outputs are
+always written to disk *before* the exit code is computed, so disk state is
+correct regardless of exit code (FR28). The end-of-run summary always prints to
+stdout, even under `--quiet` (FR22, §Cat 8).
 
-The non-solver query phases run inside the same `StageProgress` seam the setup
-CLI uses (Story 11.1 mechanism): cache load, elevation reshaping (stages 6-7),
-trail-filter redux, climb detection/contraction, and validate+render each
-announce start and elapsed time on stdout, so on large areas — where these
-phases dominate wall-clock (Epic 13) — the run is never silent outside the
-solve. `--quiet` installs no sink, suppressing stage lines like it does
-progress lines (§Cat 8: summary always prints).
+Every phase — solver and non-solver alike — runs inside the same `StageProgress`
+seam the setup CLI uses, announcing start and elapsed time on stdout, because on
+large areas the non-solver phases are a substantial share of wall-clock and the
+run would otherwise look hung outside the solve. The solver additionally gets a
+throttled `ProgressEvent` renderer. `--quiet` installs no sink, suppressing both
+stage lines and progress lines.
 """
 
 from __future__ import annotations
@@ -102,10 +100,10 @@ from steeproute.validator import validate
 
 # Concrete fallback when `--iter-budget` is unset: the iteration ceiling that
 # bounds a solve once neither `--time-budget` nor `--stagnation-iters` has fired
-# first (§Cat 5e). Matches the user's real manual-run/demo/gallery params
-# (AGENTS.md §Solver / GRASP) rather than a fast-iteration smoke-test value —
-# large enough for quality output on a real Grenoble query, bounded by
-# NFR1's 10-minute design target via `--time-budget` (600s default).
+# first (§Cat 5e). Sized to the real manual-run/demo/gallery params (AGENTS.md
+# §Solver / GRASP) — large enough for quality output on a real Grenoble query,
+# with NFR1's 10-minute design target enforced by `--time-budget` (600 s default)
+# rather than by this number.
 DEFAULT_ITER_BUDGET: int = 1_000_000
 
 
@@ -177,9 +175,9 @@ def cli(
 ) -> int:
     configure_cli_logging(verbose=verbose)
 
-    # Whole-invocation wall-clock start (Story 7.5, FR22): spans the coverage
-    # check, stages 8-9, the solve, validation, and render — the elapsed reported
-    # in the end-of-run summary. `perf_counter` (monotonic) mirrors `cli/setup.py`.
+    # Whole-invocation wall-clock start (FR22): spans the coverage check, stages
+    # 8-9, the solve, validation, and render — the elapsed reported in the
+    # end-of-run summary. `perf_counter` (monotonic) mirrors `cli/setup.py`.
     start = time.perf_counter()
 
     # Area resolution (FR1/FR23): `resolve_area` rejects a malformed shape (no
@@ -216,11 +214,11 @@ def cli(
 
     cache_root = resolve_cache_root(cache_dir)
 
-    # Stage-timing seam for the non-solver query phases (Story 11.1 mechanism,
-    # reused query-side): on large areas these phases dominate wall-clock
-    # (Epic 13), so each announces itself and its elapsed time on stdout. Same
+    # Stage-timing seam for the non-solver query phases, the same mechanism the
+    # setup CLI uses: on large areas these phases are a substantial share of
+    # wall-clock, so each announces itself and its elapsed time on stdout. Same
     # `--quiet` contract as the setup CLI — no sink, timing-only no-op. The
-    # solver's own iteration progress (Story 7.1) is separate and untouched.
+    # solver's own iteration progress is a separate channel.
     stage_progress = StageProgress(on_line=None if quiet else print)
 
     # FR24 coverage check. Raises `CacheNotFoundError` (→ exit 2 via
@@ -240,9 +238,8 @@ def cli(
         now=datetime.datetime.now(datetime.UTC),
     )
 
-    # Cache-hit cue on stdout (kept from Story 2.10; the end-of-run summary that
-    # Story 7.5 adds is a separate block). Single space between tokens for
-    # downstream tooling that splits on whitespace.
+    # Cache-hit cue on stdout — a separate line from the end-of-run summary block.
+    # Single space between tokens for downstream tooling that splits on whitespace.
     print(f"steeproute: cache-hit cache_key_hash: {prepared.manifest.cache_key_hash}")
 
     # --- Journey 1 happy path: stages 8-9 → GRASP → validate → render --------
@@ -258,13 +255,13 @@ def cli(
         n=n,
         untagged_policy=untagged_trails,
         seed=seed,
-        # Resolve the `None` flag default to a concrete iteration ceiling; with
-        # `--time-budget` and `--stagnation-iters` now live (§Cat 5e), whichever
-        # of the three trips first ends the solve.
+        # Resolve the `None` flag default to a concrete iteration ceiling. All
+        # three of iter-budget / time-budget / stagnation are live (§Cat 5e);
+        # whichever trips first ends the solve.
         iter_budget=iter_budget if iter_budget is not None else DEFAULT_ITER_BUDGET,
         time_budget=time_budget,
-        # `None` (flag unset) → the solver's provisional default window; pass `0`
-        # explicitly to disable stagnation termination (§Cat 5e).
+        # `None` (flag unset) → the solver's default window; pass `0` explicitly
+        # to disable stagnation termination (§Cat 5e).
         stagnation_iters=(
             stagnation_iters
             if stagnation_iters is not None
@@ -273,7 +270,7 @@ def cli(
     )
     provenance = _build_provenance(prepared.manifest)
 
-    # Query-side stages 6-7 (Story 6.3): reshape the cached raw-elevation graph
+    # Query-side stages 6-7: reshape the cached raw-elevation graph
     # into the operational graph (graph-Laplacian smoothing → deadband → naive-sum
     # metrics) ONCE over the whole graph. The same reshaped graph feeds both the
     # metric/solver path and `output.render`, so the metric box, the solver
@@ -291,32 +288,34 @@ def cli(
             consume=True,
         )
 
-    # SAC cap-aware contraction (Story 6.1, FR4/FR10): drop above-cap edges
-    # *before* climb detection so a single over-cap pitch can no longer weld
-    # itself into an otherwise-usable climb (the max-rank SAC aggregation in
-    # `contract_climbs` would otherwise reject the whole climb at the RCL). The
+    # SAC cap-aware contraction (FR4/FR10): drop above-cap edges *before* climb
+    # detection, so a single over-cap pitch cannot weld itself into an
+    # otherwise-usable climb — `contract_climbs`' max-rank SAC aggregation would
+    # then reject the whole climb at the RCL. The
     # query-side cap keeps the prepared cache difficulty-independent (setup pins
     # T6; the cache key omits `difficulty_cap`), so `--difficulty-cap` stays a
     # fast query knob. `filter_trails` re-applies the trail-highway + untagged
     # filters too — idempotent on the already-setup-filtered graph.
     #
-    # `consume=True` (Story 16.1): the redux rejects only a small minority of an
+    # `consume=True`: the redux rejects only a small minority of an
     # already-setup-filtered graph, so removing those edges from the graph we
-    # already own beats rebuilding it to keep the rest (~4.6 s → ~0.3 s at r20).
-    # `routable_graph` IS `operational_graph` from here on — one object under two
-    # names — so `output.render` reads the *filtered* graph. That is safe, and
-    # this is the invariant to preserve (not the old "strictly a superset"
-    # claim): every base edge a rendered route expands to came from the filtered
+    # already own beats rebuilding it to keep the rest (~0.3 s against ~4.6 s at
+    # r20, 2026-07-24).
+    #
+    # Consequence to keep in mind: `routable_graph` IS `operational_graph` from
+    # here on — one object under two names — so `output.render` reads the
+    # *filtered* graph, not a superset of it. The invariant that makes that safe
+    # is: every base edge a rendered route expands to came from the filtered
     # graph, because contraction was built from it and `output.render` resolves
     # only route edges and their `super_edge_to_base` base edges. So no route —
-    # including an FR28 failed one — can name an edge the filter removed, and
-    # the rendered curve still matches the metric box.
+    # including an FR28 failed one — can name an edge the filter removed, and the
+    # rendered curve still matches the metric box.
     with stage_progress.stage("trail-filter", note="difficulty-cap redux"):
         routable_graph = filter_trails(
             operational_graph, untagged_trails, difficulty_cap, consume=True
         )
 
-    # Progress UI (Story 7.1, FR13): install a throttled stdout renderer unless
+    # Progress UI (FR13): install a throttled stdout renderer unless
     # `--quiet`. The throttle is a pure reporting side-effect — `seed` threads
     # straight into the RNG, so `--seed` produces byte-identical edge-sets (FR29)
     # regardless of whether progress fires. An unseeded run passes `None` seed →
@@ -364,7 +363,7 @@ def cli(
             )
         return validated_set, degradation
 
-    # Interrupt handling (Story 7.3, FR14 / NFR3 / §Cat 5b): Ctrl-C anywhere in the
+    # Interrupt handling (FR14 / NFR3 / §Cat 5b): Ctrl-C anywhere in the
     # detect → contract → solve region flushes the solver's best-so-far top-N to
     # disk and exits 130. The solver is built lazily inside the try, and both it
     # and `contracted` start `None`, so an interrupt during stages 8-9 (before the
@@ -390,10 +389,10 @@ def cli(
                 annotate_junctions=params.start_at_junction,
             )
         if workers == 1:
-            # Single-process path — byte-identical to pre-14.4 (FR29/NFR4). The
-            # parallel machinery below is never entered at the default `--workers 1`,
-            # so goldens and Story 7.3's live-best-so-far interrupt flush are
-            # preserved bit-for-bit.
+            # Single-process path. The parallel machinery below is never entered at
+            # the default `--workers 1`, which is what keeps the regression goldens
+            # and the live-best-so-far interrupt flush exact (FR29/NFR4) — the
+            # parallel path can offer neither.
             solver = GraspSolver(
                 contracted, params, np.random.default_rng(seed), progress_callback=progress_callback
             )
@@ -401,7 +400,7 @@ def cli(
             status = solver.convergence_status
             convergence_iteration = solver.convergence_iteration
         else:
-            # Parallel GRASP restarts (Story 14.4): fan across `workers` processes
+            # Parallel GRASP restarts: fan across `workers` processes
             # with island-model elite migration every `--merge-interval` iterations,
             # merging into one top-N. Deterministic per `(seed, workers,
             # merge_interval)`, but differs from `--workers 1` by design (independent
@@ -444,7 +443,8 @@ def cli(
         # N>1 Ctrl-C (§Cat 5b): render the top-N salvaged from workers that had
         # already returned, tagged `interrupted`, and exit 130. In-flight workers'
         # partial best-so-far can't be recovered across the process boundary — a
-        # documented degradation from the single-process flush below.
+        # documented degradation from the single-process flush below, which does
+        # salvage it.
         ctx = click.get_current_context()
         partial = interrupt.partial
         if contracted is None or not partial.solutions:
@@ -464,7 +464,7 @@ def cli(
         # Flush the partial best-so-far through the same validate → render path as a
         # normal run, tagged `interrupted` (§Cat 5e) with the iteration the last
         # improvement landed on. Set the status on the solver too, so a later reader
-        # of `solver.convergence_status` (e.g. Story 7.5's run summary) agrees with
+        # of `solver.convergence_status` (the run summary below) agrees with
         # the rendered report. A single Ctrl-C writes the partial set before exiting
         # (FR28); a rare second Ctrl-C during render can truncate the set, but the
         # per-file atomic writes keep every emitted file and the cache valid (NFR3).
@@ -481,7 +481,7 @@ def cli(
         solutions, status, contracted, convergence_iteration
     )
 
-    # End-of-run summary on stdout (Story 7.5, FR22): printed after render on the
+    # End-of-run summary on stdout (FR22): printed after render on the
     # normal path, before the exit-code call, so it always appears regardless of the
     # validation outcome. Always stdout — `--quiet` only gates intermediate progress
     # (§Cat 8). It absorbs the graceful-degradation explanation (FR12) into its
@@ -514,8 +514,8 @@ def _render_progress(event: ProgressEvent) -> None:
 
     Progress goes through `print()` to stdout — never `logging` (which §Cat 8
     binds to stderr for diagnostics/warnings). The `progress:` prefix is a stable
-    sentinel: the run summary (Story 7.5) uses its own delimiter, so downstream
-    tooling and the e2e quiet test can distinguish progress lines unambiguously.
+    sentinel: the run summary uses its own delimiter, so downstream tooling and
+    the e2e quiet test can distinguish progress lines unambiguously.
     `eta=?` marks an as-yet-unmeasurable ETA (`estimated_remaining_s is None`).
     """
     eta = f"{event.estimated_remaining_s:.0f}s" if event.estimated_remaining_s is not None else "?"
@@ -526,7 +526,7 @@ def _render_progress(event: ProgressEvent) -> None:
 
 
 def _render_parallel_progress(event: ParallelProgress) -> None:
-    """Aggregated live progress for the parallel solve (Story 14.4, §Cat 8).
+    """Aggregated live progress for the parallel solve (Architecture §Cat 8).
 
     Emitted from the parent on the `--progress-interval` cadence, folding the latest
     per-worker snapshots into one line. `best_worker_objective` is the *leading
@@ -615,7 +615,7 @@ def _run_summary(
     wall_clock_s: float,
     degradation: str | None,
 ) -> str:
-    """Build the end-of-run summary block (Story 7.5, FR22) for stdout.
+    """Build the end-of-run summary block (FR22) for stdout.
 
     A pure formatter so the block is testable without capturing stdout; the caller
     does the single `print`. Labels are stable (tests regex-match them) and the
@@ -625,9 +625,9 @@ def _run_summary(
     code does (§Cat 6c). The `degradation:` line is included only for a degraded
     set (`routes_returned < N`); its value is the explanation already embedded in
     each report, passed in — never recomputed. `seed=none` marks an unseeded run.
-    `workers` is the CLI-layer parallel-restart count (Story 14.4), reported
-    alongside the params it orchestrates; it is not a `SolverParams` field, so it is
-    passed in separately. `iter_budget` shown is always the user's *total* (workers
+    `workers` is the CLI-layer parallel-restart count, reported alongside the
+    params it orchestrates; it is not a `SolverParams` field, so it is passed in
+    separately. `iter_budget` shown is always the user's *total* (workers
     each ran a `total // workers` share — an implementation detail, not reported).
     `total_objective` is the summed objective of the returned top-N — the same
     quantity the progress line tracks — so a parallel run's final merged result can
