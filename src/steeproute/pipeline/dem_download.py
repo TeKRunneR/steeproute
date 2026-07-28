@@ -98,10 +98,10 @@ _WMS_VERSION: str = "1.3.0"
 _BIL_FORMAT: str = "image/x-bil;bits=32"
 _BIL_DTYPE: str = "<f4"  # little-endian float32
 _USER_AGENT: str = "steeproute/0.1 (DEM auto-download)"
-# Per-request WMS socket timeout. Kept modest because transient failures are now
-# retried (`_TILE_MAX_ATTEMPTS`), so a single heroic wait is no longer needed;
-# 3 attempts × 30 s + backoff bounds a dead tile at ~100 s instead of minutes.
-# Override with `STEEPROUTE_DEM_HTTP_TIMEOUT_S` for unusually slow links.
+# Per-request WMS socket timeout. Deliberately modest rather than generous:
+# transient failures are retried (`_TILE_MAX_ATTEMPTS`), so 3 attempts × 30 s +
+# backoff bounds a dead tile at ~100 s, where one long timeout would stall for
+# minutes. Override with `STEEPROUTE_DEM_HTTP_TIMEOUT_S` for unusually slow links.
 _HTTP_TIMEOUT_S: int = _env_int("STEEPROUTE_DEM_HTTP_TIMEOUT_S", 30)
 
 # Stable cache-key tag for the IGN RGE ALTI HIGHRES dataset, recorded as the
@@ -114,9 +114,10 @@ DEFAULT_DEM_VERSION: str = "ign-rgealti-highres"
 # Target ground resolution in meters/pixel. RGE ALTI HIGHRES is 5 m native.
 _TARGET_RES_M: float = 5.0
 
-# Padding ring (m) for the area→bbox convenience (`_padded_bbox`), retained for
-# the offline/live DEM tests that fetch a raster for a nominal area. The
-# production setup path no longer sizes the DEM this way — see `graph_dem_bounds`.
+# Padding ring (m) for the area→bbox convenience (`_padded_bbox`), used by the
+# offline/live DEM tests that fetch a raster for a nominal area. The production
+# setup path sizes the DEM from the real geometry instead — see `graph_dem_bounds`
+# for why a padding over the nominal radius is not safe.
 _PADDING_M: float = 100.0
 
 # Safety margin (m) added around the *actual graph geometry* envelope when sizing
@@ -136,10 +137,10 @@ _MAX_TILE_PX: int = 2048
 # Default concurrent DEM tile fetches. Tile download is network-wait-bound (the
 # GIL is released during `urlopen`), so plain threads give the full speedup with
 # no process/pickle cost — this is I/O, not the CPU-bound GRASP parallelism.
-# Story 14.3 validated IGN Géoplateforme's behavior under this concurrency at r20
-# with no 429s/errors, so 4 is the default; `--dem-fetch-workers` (Story 14.3
-# scope revision) lets a user raise or lower it without a code change if IGN's
-# tolerance differs from what was observed (Architecture §Cat 3).
+# 4 is the default because IGN Géoplateforme served an r20 tile grid at that
+# concurrency with no 429s or errors (2026-07-08); `--dem-fetch-workers` lets a user
+# raise or lower it without a code change if IGN's tolerance differs from what was
+# observed (Architecture §Cat 3).
 DEFAULT_DEM_FETCH_WORKERS: int = 4
 
 # Per-tile transient-failure retry policy. A tile fetch that fails with a transient
@@ -203,8 +204,8 @@ def resolve_dem(
             `--dem-version` (e.g. after an IGN dataset bump) re-downloads rather than
             relabelling stale bytes — keeping the manifest's `dem_version` honest.
         force_refresh: re-download even when a cached raster exists.
-        progress: optional stage seam (Story 11.1, FR33) — the tile-fetch loop
-            reports `tile i/N` through it. `None` (the default) is silent.
+        progress: optional stage seam (FR33) — the tile-fetch loop reports
+            `tile i/N` through it. `None` (the default) is silent.
         fetch_workers: max concurrent tile fetches (`--dem-fetch-workers`).
             `None` (the default) uses `DEFAULT_DEM_FETCH_WORKERS`.
 
@@ -280,22 +281,21 @@ def graph_dem_bounds(
 def _padded_bbox(area: Area) -> tuple[float, float, float, float]:  # pyright: ignore[reportUnusedFunction]
     """Return `(west, south, east, north)` in WGS84 degrees covering area + padding.
 
-    Retained as the canonical area→bbox derivation for the offline/live DEM tests
+    The canonical area→bbox derivation for the offline/live DEM tests
     (`test_dem_download` / `test_dem_live`) that fetch a raster for a nominal area.
-    The production setup path sizes the DEM from `graph_dem_bounds` instead — which
-    reads the *post-truncation* graph geometry, so a rotated area's DEM already
-    shrinks to the box's real footprint with no change needed here.
+    The production setup path sizes the DEM from `graph_dem_bounds` instead — that
+    reads the *post-truncation* graph geometry, so a rotated area's DEM shrinks to
+    the box's real footprint without this function's help.
 
-    Sizes off the effective half-extents, not `radius_km` (Story 15.2 envelope
-    audit): a rotated area's `radius_km` is an inert `0.0`, which would have made
-    this return a padding-only box. For a rotated box the two axes get *different*
-    half-extents — the true axis-aligned envelope is
-    `hw·|cos θ| + hh·|sin θ|` east/west and `hw·|sin θ| + hh·|cos θ|`
-    north/south (the per-axis maxima of `cache._area_to_polygon`'s rotated
-    corners). `max(hw, hh)` would **not** do: at hw=8, hh=3, θ=10° the real
-    east/west half-extent is ~8.40 km, so a uniform 8 km would clip the box the
-    DEM is supposed to cover. At `θ=0` both reduce to their own half-extent, so a
-    square is byte-identical to the pre-Epic-15 derivation.
+    Sizes off the effective half-extents, never `radius_km`: a rotated area's
+    `radius_km` is an inert `0.0` and would make this return a padding-only box.
+    For a rotated box the two axes get *different* half-extents — the true
+    axis-aligned envelope is `hw·|cos θ| + hh·|sin θ|` east/west and
+    `hw·|sin θ| + hh·|cos θ|` north/south (the per-axis maxima of
+    `cache.area_polygon`'s rotated corners). `max(hw, hh)` will **not** do: at
+    hw=8, hh=3, θ=10° the real east/west half-extent is ~8.40 km, so a uniform 8 km
+    clips the box the DEM is supposed to cover. At `θ=0` both reduce to their own
+    half-extent.
     """
     lat, lon = area.center
     half_width_km, half_height_km = area.half_extents_km
@@ -336,9 +336,10 @@ def _dem_cache_key(
 ) -> str:
     """Stable 16-hex key over the bbox, grid, layer, format, and DEM version.
 
-    Includes the layer + format so a future source/format change never reuses a
-    raster fetched under the old one, and `dem_version` so a changed `--dem-version`
-    forces a fresh download instead of reusing the previously cached raster.
+    The layer + format are part of the key so a source/format change can never
+    reuse a raster fetched under different ones, and `dem_version` is part of it so
+    changing `--dem-version` forces a fresh download rather than relabelling
+    already-cached bytes.
     """
     parts = (
         f"{round(west, _BBOX_DECIMALS)}",
@@ -435,7 +436,7 @@ def _fetch_mosaic(
     `DEFAULT_DEM_FETCH_WORKERS` when `None`); each worker returns its raw BIL bytes
     and the parent thread validates the byte count, reshapes, and writes into the
     tile's disjoint `arr[y0:y1, x0:x1]` slice. Because every tile covers a distinct
-    slice and each sub-bbox is computed identically to the old sequential path, the
+    slice and each sub-bbox is derived from the tile's grid position alone, the
     assembled mosaic is byte-identical regardless of the order workers complete in
     and regardless of `max_workers`. Row 0 of the returned array is the north edge
     (WMS GetMap origin), matching rasterio's top-left raster origin so the later

@@ -4,12 +4,17 @@ the GRASP solver, the validator, and the output renderer.
 All cross-boundary structured data uses `@dataclass(frozen=True, slots=True)`
 per Architecture §"Python code conventions". The architecture-pinned shapes
 (`Route`, `RouteValidation`, `ConstraintViolation`, `PairwiseViolation`,
-`ValidatedRouteSet`) match §Cat 6b verbatim; `SolverParams` mirrors the §Cat 9
-report-metadata field list 1:1; `Edge` / `Climb` / `ContractedGraph` /
-`Solution` / `RouteMetrics` / `ProvenanceInfo` are designed in Story 3.1.
+`ValidatedRouteSet`) match §Cat 6b verbatim, and `SolverParams` mirrors the
+§Cat 9 report-metadata field list 1:1 — changing either shape means changing
+the architecture doc with it.
 
-`Area` and `PipelineConfig` live here too (Epic 2) because the same shapes
-feed both setup-side ingestion and query-side cache coverage.
+`Area` and `PipelineConfig` live here too, rather than in `pipeline/`, because
+the same shapes feed both setup-side ingestion and the query-side cache
+coverage check.
+
+This module's raw bytes are part of the prepared-cache key
+(`cache._PIPELINE_CONTENT_GLOBS`), so any edit here — comments included —
+re-keys subsequent setup runs.
 """
 
 import pathlib
@@ -26,40 +31,36 @@ ConvergenceStatus = Literal["converged", "budget-exhausted", "interrupted"]
 
 @dataclass(frozen=True, slots=True)
 class Area:
-    """Geographic search area as a (optionally rotated) rectangle (Epic 15).
+    """Geographic search area as an optionally-rotated rectangle.
 
     `center` is `(lat, lon)` in WGS84 decimal degrees. The rectangle is defined
     by two half-extents (half-width east–west, half-height north–south, both in
-    km) and a `angle_deg` bearing that rotates the box in a local `cos(lat)` km
-    frame. A **centered square** — the pre-Epic-15 shape and still the common
-    case — is the `angle_deg == 0`, equal-extents special case; an
-    **axis-aligned rectangle** is `angle_deg == 0` with unequal extents.
+    km) and an `angle_deg` bearing that rotates the box in a local `cos(lat)` km
+    frame. A **centered square** — the common case — is the `angle_deg == 0`,
+    equal-extents special case; an **axis-aligned rectangle** is `angle_deg == 0`
+    with unequal extents.
 
-    `radius_km` is the **square shorthand / bbox half-side** kept for backward
-    compatibility: constructing `Area(center=..., radius_km=r)` describes a
-    `2r`-side axis-aligned square, exactly as v1 did (Stage 1 still fetches such
-    an area with `osmnx.graph_from_point(..., dist_type="bbox")`). It is named
-    `radius_km` (not `bbox_half_side_km`) to match the cache manifest field and
-    the `--radius` CLI flag 1:1 — the geometric meaning is square half-side, not
-    a disk radius. When `half_width_km` / `half_height_km` are left `None`, they
-    resolve to `radius_km` (see `half_extents_km`), so every existing
-    `area.radius_km` reader and every square construction site is unchanged.
+    `radius_km` is the **square shorthand / bbox half-side**:
+    `Area(center=..., radius_km=r)` describes a `2r`-side axis-aligned square,
+    which stage 1 fetches with `osmnx.graph_from_point(..., dist_type="bbox")`.
+    It is named `radius_km` (not `bbox_half_side_km`) to match the cache manifest
+    field and the `--radius` CLI flag 1:1 — the geometric meaning is square
+    half-side, **not** a disk radius. When `half_width_km` / `half_height_km` are
+    `None` they resolve to `radius_km` (see `half_extents_km`), so `radius_km`
+    readers work for square areas without branching.
 
     A rotated / non-square rectangle sets `half_width_km`, `half_height_km`, and
-    `angle_deg` explicitly (done at the CLI boundary in Story 15.3); for such an
-    area `radius_km` is not meaningful and downstream squareness-assuming readers
-    are generalized in Stories 15.2/15.3.
-
-    Lives here (not pipeline/) because the same shape feeds setup-side
-    ingestion (Epic 2) and query-side cache coverage check (Epic 3).
+    `angle_deg` explicitly (done at the CLI boundary); for such an area
+    `radius_km` is meaningless, so read geometry through `half_extents_km` and
+    `angle_deg`, never off `radius_km`.
     """
 
     center: tuple[float, float]
-    # Required (no default) so an area can't be constructed with no size at all —
-    # the v1 guard. For the square shorthand it's the half-side; a rotated /
-    # non-square rectangle passes `radius_km=0.0` (inert — the extents drive the
-    # geometry) plus explicit extents. Value-range validation (>0, finite) stays
-    # at the CLI/`osm._validate_area` boundary, not here (this is a data carrier).
+    # Required (no default) so an area can't be constructed with no size at all.
+    # For the square shorthand it's the half-side; a rotated / non-square
+    # rectangle passes `radius_km=0.0` (inert — the extents drive the geometry)
+    # plus explicit extents. Value-range validation (>0, finite) stays at the
+    # CLI/`osm._validate_area` boundary, not here (this is a data carrier).
     radius_km: float
     half_width_km: float | None = None
     half_height_km: float | None = None
@@ -81,7 +82,7 @@ class Area:
 
     @property
     def is_square(self) -> bool:
-        """`True` iff this is a centered, axis-aligned square (v1-equivalent shape)."""
+        """`True` iff this is a centered, axis-aligned square."""
         half_width, half_height = self.half_extents_km
         return self.angle_deg == 0.0 and half_width == half_height
 
@@ -108,11 +109,11 @@ class PipelineConfig:
 class Edge:
     """Query-side projection of the MultiDiGraph edge-attribute contract (Architecture §Cat 3c).
 
-    The solver, validator, and renderer all pass `Edge` values around (consumed
-    by Stories 3.2-3.10). Geometry and resampled vertices stay graph-side; this
-    type carries the lean metric tuple every consumer actually reads. SAC scale
-    is `str | None` because the untagged-trails policy admits edges without a
-    SAC tag (`PipelineConfig.untagged_policy="include"`).
+    The solver, validator, and renderer all pass `Edge` values around. Geometry
+    and resampled vertices stay graph-side; this type carries the lean metric
+    tuple every consumer actually reads. SAC scale is `str | None` because the
+    untagged-trails policy admits edges without a SAC tag
+    (`PipelineConfig.untagged_policy="include"`).
 
     `key` disambiguates parallel edges between the same node pair, matching
     networkx's `MultiDiGraph` convention. The `(node_u, node_v, key)` tuple is
@@ -152,9 +153,9 @@ def route_avg_gradient(edges: Iterable[Edge]) -> float:
 class Climb:
     """A contiguous edge-sequence meeting the slope-floor + min-length criteria.
 
-    Output of pipeline stage 8 (Story 3.2's `detect_climbs`). Each climb
-    becomes a super-edge in the contracted graph (Story 3.3). `edges` is a
-    tuple (not a list) so the climb is structurally immutable.
+    Output of pipeline stage 8 (`pipeline.climbs.detect_climbs`). Each climb
+    becomes a super-edge in the contracted graph at stage 9. `edges` is a tuple
+    (not a list) so the climb is structurally immutable.
     """
 
     edges: tuple[Edge, ...]
@@ -171,13 +172,12 @@ shapely geometry — that no contracted-graph consumer reads: the solver, climb
 detection, contraction and the validator are geometry-blind (Architecture
 §Cat 5), and `output.render` resolves geometry off the *operational* graph via
 `super_edge_to_base`. Dropping them shrinks the r20 contracted graph from
-~204 MB to ~72 MB.
+~204 MB to ~72 MB (2026-07-08).
 
-Lives here rather than in `solver/parallel.py` (its original home) because it is
-now part of the `ContractedGraph` contract that stage 9 produces and
-`solver_graph_view` enforces for graphs built elsewhere — `pipeline/` must not
-import from `solver/`. Re-exported from `solver.parallel` for its existing
-callers.
+Homed in this module — the lowest layer — rather than beside its main consumer
+`solver.parallel.solver_graph_view`, because it is part of the
+`ContractedGraph` lean contract that pipeline stage 9 must satisfy, and
+`pipeline/` must not import from `solver/`. `solver.parallel` re-exports it.
 """
 
 
@@ -194,7 +194,7 @@ class ContractedGraph:
     On top of the base edge-attribute contract (`length_m`, `d_plus_m`,
     `d_minus_m`, `avg_gradient`, `sac_scale`, and — on connectors only —
     `highway`/`osm_way_id`), every edge in `graph` carries two reuse-tagging
-    attributes set at contraction (Story 5.1, FR5):
+    attributes set at contraction (FR5):
 
     - `base_segment_id`: `frozenset[tuple[int, int, int]]` of undirected
       base-segment identities (canonical sorted node-pair + key, so a segment
@@ -206,25 +206,22 @@ class ContractedGraph:
       reuse rule and bidirectional); `False` for long connectors and every
       super-edge.
 
-    The undirected once-only reuse rule (solver/oracle/validator, Story 5.2)
-    keys on `base_segment_id` and skips `reusable` edges.
+    The undirected once-only reuse rule (`solver/reuse.py`, shared by solver,
+    oracle, and validator) keys on `base_segment_id` and skips `reusable` edges.
 
-    `super_edge_to_base` is the super-edge → base-`Edge`-sequence back-mapping
-    (Story 3.3 AC: "back-mapping round-trips"). The key is the
-    `(node_u, node_v, key)` tuple of a super-edge in `graph`; the value is the
-    ordered `Edge` sequence the super-edge contracts. Used by the validator
-    (Story 3.9) to expand a solver `Solution` back to base edges for
-    constraint checks.
+    `super_edge_to_base` is the super-edge → base-`Edge`-sequence back-mapping.
+    The key is the `(node_u, node_v, key)` tuple of a super-edge in `graph`; the
+    value is the ordered `Edge` sequence the super-edge contracts. The validator
+    uses it to expand a solver `Solution` back to base edges for constraint
+    checks, so the mapping must round-trip.
 
-    `lean` advertises that no edge carries `solver.parallel.HEAVY_EDGE_ATTRS`
-    (`geometry` / `vertices_resampled`) — the rendering-only payloads no
-    contracted-graph consumer reads (Story 16.1). `contract_climbs` produces a
-    lean graph, so `run_parallel_grasp` serializes it straight to its workers
-    instead of rebuilding a stripped copy. It defaults to `False` so a graph
-    hand-built by a test or an external caller is treated as possibly-heavy and
-    still routed through `solver_graph_view` — the conservative direction, since
-    a false `False` costs one rebuild while a false `True` would ship the heavy
-    payload to every worker.
+    `lean` advertises that no edge carries `HEAVY_EDGE_ATTRS` (see above).
+    `contract_climbs` produces a lean graph, so `run_parallel_grasp` serializes it
+    straight to its workers instead of rebuilding a stripped copy. It defaults to
+    `False` so a graph hand-built by a test or an external caller is treated as
+    possibly-heavy and still routed through `solver_graph_view` — the conservative
+    direction, since a wrong `False` costs one rebuild while a wrong `True` would
+    ship the heavy payload to every worker.
     """
 
     graph: Any  # networkx.MultiDiGraph — partial type stubs (Architecture §"Type hints and data" boundary).
@@ -234,12 +231,12 @@ class ContractedGraph:
 
 @dataclass(frozen=True, slots=True)
 class SolverParams:
-    """The 14 parameters every query records in its HTML/JSON metadata block (Architecture §Cat 9).
+    """The parameters every query records in its HTML/JSON metadata block (Architecture §Cat 9).
 
     Field names match the CLI flag names verbatim so they double as the
     JSON-sidecar field names (`snake_case` per Architecture §"Serialization
-    conventions"). The metadata block in `output.py` (Story 3.10) iterates the
-    fields directly; reordering or renaming requires touching both surfaces.
+    conventions"). The metadata block in `output.py` iterates the fields
+    directly, so renaming or reordering a field changes the report surface too.
 
     - `theta`: route-level average-slope floor (dimensionless gradient, e.g.
       0.20 for 20%) — the minimum `(D+ + D−)/length` a returned route as a whole
@@ -269,14 +266,11 @@ class SolverParams:
       seeds construction and the exhaustive oracle starts walks only at
       road/trail junction nodes (`is_road_trail_junction`, tagged at stage 9),
       and the validator flags any route whose start endpoint isn't a junction.
-      Default off → byte-identical default output. Defaulted last so existing
-      positional constructions stay valid.
     - `max_descent_slope`: opt-in FR32 cap (default `None` = off). When set, GRASP
       construction, the exhaustive oracle, and the validator reject any
       *descending* traversal of an edge whose `max_windowed_descent_grad` exceeds
       this; uphill traversal is unconstrained, so the same segment stays eligible
-      as a climb. Default off → byte-identical default output. Defaulted last so
-      existing positional constructions stay valid.
+      as a climb.
     """
 
     theta: float
@@ -299,10 +293,10 @@ class SolverParams:
 class Solution:
     """Internal solver output (Architecture §"Boundaries"): an ordered edge-sequence + its objective.
 
-    The GRASP solver (Story 3.6) emits `list[Solution]`; the validator
-    (Story 3.9) converts them to `Route` instances. Producers must supply
-    `edges` in route-traversal order — consumers must not reorder (FR29
-    byte-identical reproducibility depends on it).
+    The GRASP solver emits `list[Solution]`; the validator converts them to
+    `Route` instances. Producers must supply `edges` in route-traversal order —
+    consumers must not reorder (FR29 byte-identical reproducibility depends on
+    it).
 
     `objective` is the scored value the solver ranked this candidate on
     (typically D+ + D- per Architecture §"Stagnation definition").
@@ -316,9 +310,9 @@ class Solution:
 class RouteMetrics:
     """Aggregate metrics computed from a `Route`'s underlying edges.
 
-    Produced by the route builder at the validator boundary (Story 3.9);
-    consumers (output renderer Story 3.10) read these directly rather than
-    re-summing edge metrics. `avg_gradient` is the whole-route
+    Produced by the route builder at the validator boundary; the output renderer
+    reads these directly rather than re-summing edge metrics. `avg_gradient` is
+    the whole-route
     `(d_plus_m + d_minus_m) / length_m` (FR3 route-level metric) if
     `length_m > 0`, else 0.0 — single-sourced via `route_avg_gradient`.
     """
@@ -334,8 +328,8 @@ class ConstraintViolation:
     """One per-route constraint failure surfaced by the validator (Architecture §Cat 6b).
 
     `numeric` carries observed-vs-required values for the validation banner
-    (e.g. `{"observed": 0.18, "required": 0.20}`). The renderer (Story 3.10)
-    formats `constraint_id` + `detail` + `numeric` into the per-route banner.
+    (e.g. `{"observed": 0.18, "required": 0.20}`). The renderer formats
+    `constraint_id` + `detail` + `numeric` into the per-route banner.
     """
 
     constraint_id: str
@@ -347,10 +341,9 @@ class ConstraintViolation:
 class RouteValidation:
     """Per-route validation result (Architecture §Cat 6b).
 
-    `passed=True` iff `violations` is empty. The renderer (Story 3.10) shows
-    the banner when `passed=False` OR a `PairwiseViolation` in the wrapping
-    `ValidatedRouteSet` references this route (Architecture §Cat 6b banner
-    logic).
+    `passed=True` iff `violations` is empty. The renderer shows the banner when
+    `passed=False` OR a `PairwiseViolation` in the wrapping `ValidatedRouteSet`
+    references this route (Architecture §Cat 6b banner logic).
     """
 
     passed: bool
@@ -361,9 +354,9 @@ class RouteValidation:
 class Route:
     """A solver-produced route presented to the user (Architecture §Cat 6b).
 
-    Routes are produced once by the validator (Story 3.9) from a solver
-    `Solution` + the contracted graph + the active `SolverParams`; the
-    renderer (Story 3.10) writes one HTML + one JSON per `Route`.
+    Routes are produced once by the validator from a solver `Solution` + the
+    contracted graph + the active `SolverParams`; the renderer writes one HTML +
+    one JSON per `Route`.
     """
 
     edges: list[Edge]
@@ -390,10 +383,10 @@ class PairwiseViolation:
 class ValidatedRouteSet:
     """The validator's full output: per-route results + set-level violations (Architecture §Cat 6b).
 
-    Consumed by `output.py::render` (Story 3.10) and by `cli/query.py`'s
-    exit-code computation (Architecture §Cat 6c). Ordering of
-    `set_violations` matters for FR29 byte-identical reproducibility;
-    producer is responsible (validator Story 3.9).
+    Consumed by `output.py::render` and by `cli/query.py`'s exit-code computation
+    (Architecture §Cat 6c). `set_violations` ordering matters for FR29
+    byte-identical reproducibility, and the validator that produces it owns that
+    ordering.
     """
 
     routes: list[Route]
@@ -411,9 +404,8 @@ class ProvenanceInfo:
     manifest values from the cache hit that fed this query (Architecture
     §Cat 4b + §Cat 9).
 
-    Built by `provenance.py` (existing module, populated across Stories 2.6
-    setup-side and 3.10 query-side) at run start; passed through the solver
-    + validator unchanged into `output.render(...)`.
+    Built by `provenance.py` at run start; passed through the solver + validator
+    unchanged into `output.render(...)`.
     """
 
     steeproute_version: str

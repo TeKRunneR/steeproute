@@ -1,7 +1,7 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
 # Reason: networkx MultiDiGraph operations surface as Unknown; same external-boundary
 # pattern as the other pipeline modules.
-"""Primitives shared across the vectorized / de-churned pipeline stages (Story 14.2).
+"""Primitives shared across the vectorized pipeline stages.
 
 These live in one module rather than being reimplemented per stage so a fix to a
 non-trivial primitive (the graph-rebuild idiom, the per-edge monotone-offset
@@ -24,11 +24,11 @@ def flat_coordinates(
     """Gather `geoms`' coordinates into ONE flat `(V, 2)` array + per-geometry offsets.
 
     Returns `(coords, offs)` where geometry `i`'s vertices are `coords[offs[i]:offs[i+1]]`
-    and `offs` has length `len(geoms) + 1`. One `shapely.get_coordinates` call for the
-    whole batch replaces per-geometry `np.asarray(geom.coords)` + `np.concatenate`
-    (measured 3.77 s → 1.51 s over an r20 graph's 2.86 M coordinates, bit-identical
-    values — Story 16.2). Callers keep their own geometry-type validation so their
-    error messages stay module-specific.
+    and `offs` has length `len(geoms) + 1`. One `shapely.get_coordinates` call for
+    the whole batch, rather than per-geometry `np.asarray(geom.coords)` +
+    `np.concatenate`: same values bit-for-bit, 1.51 s against 3.77 s over an r20
+    graph's 2.86 M coordinates (2026-07-24). Callers keep their own geometry-type
+    validation so their error messages stay module-specific.
 
     z is dropped (shapely's 2D default), matching the `coords[:, 0]` / `coords[:, 1]`
     slicing every caller applies.
@@ -47,11 +47,12 @@ def empty_like(
 ) -> nx.MultiDiGraph:
     """A new empty `MultiDiGraph` carrying `graph`'s graph-level attrs + its nodes.
 
-    The build-from-kept-edges primitive for the de-churned stages: callers add
-    only the surviving edges. Node order and node attributes are preserved (minus
-    any in `exclude_nodes`); edges are added by the caller in the source graph's
-    iteration order, so the rebuilt graph is content- and order-identical to the
-    old copy-then-remove result.
+    The build-from-kept-edges primitive: a stage that drops most edges adds only
+    the survivors here instead of copying the whole graph and deleting from it.
+    Node order and node attributes are preserved (minus any in `exclude_nodes`);
+    callers must add edges in the source graph's iteration order, which is what
+    makes the rebuilt graph content- and order-identical to a copy-then-remove
+    result.
     """
     out: nx.MultiDiGraph = nx.MultiDiGraph()
     out.graph.update(graph.graph)
@@ -79,9 +80,11 @@ def per_edge_searchsorted(
     its own edge. Returns the raw `np.searchsorted` indices into `cum`; callers
     apply their own boundary clamp (the two current callers want different ones).
 
-    Deriving the offset from the max of *both* `cum` and `local_targets` is the
-    single safety invariant — it must dominate every value that can appear inside
-    one edge's block — so callers no longer hand-derive a per-site margin.
+    The safety invariant: the offset must dominate every value that can appear
+    inside one edge's block, which is why it is derived from the max of *both*
+    `cum` and `local_targets`. Deriving it from `cum` alone lets an out-of-range
+    target leak into the next edge's block. Callers must not hand-derive their own
+    margin.
     """
     cmax = float(cum.max(initial=0.0))
     tmax = float(local_targets.max(initial=0.0))

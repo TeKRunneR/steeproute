@@ -39,7 +39,7 @@ import shapely
 # path — they are imported lazily inside `sample_elevation` so importing this
 # module stays cheap. `pipeline/__init__` imports it, so consumers of any pipeline
 # submodule (including spawned solver workers) would otherwise pay for them at
-# import time (Story 14.4 follow-up; see the matching NOTE in `pipeline/osm.py`).
+# import time. Same reason as the matching NOTE in `pipeline/osm.py`.
 from steeproute.errors import DataSourceUnavailableError, DEMCoverageError
 from steeproute.pipeline._common import flat_coordinates
 
@@ -68,13 +68,12 @@ def sample_elevation(
             header; nodata is honoured if defined.
         inplace: when True, attach `vertices_resampled` to `graph` itself instead
             of copying it first, saving one full-graph `copy()` (~5.4 s on an r20
-            graph — Story 16.2). Architecture §Cat 3 3a-bis: `inplace` rather than
+            graph, 2026-07-24). Architecture §Cat 3 3a-bis: `inplace` rather than
             `consume` because the stage only *adds* an attribute — nothing the
-            caller had before is forfeited, so the returned graph is the same
-            content either way. Only safe when the caller owns `graph`; the sole
-            such caller is `pipeline.attach_elevation`. Every coverage check runs
-            before the first write, so a `DEMCoverageError` leaves `graph`
-            un-annotated.
+            caller had before is forfeited, so the returned graph has the same
+            content either way. Only safe when the caller owns `graph`. Every
+            coverage check runs before the first write, so a `DEMCoverageError`
+            leaves `graph` un-annotated.
 
     Returns:
         A new MultiDiGraph; the input is never mutated — unless `inplace=True`,
@@ -110,7 +109,7 @@ def sample_elevation(
         # represent "DEM opened fine but the data is wrong shape for this area",
         # categorically distinct from "DEM source unreachable" per Cat 10. The
         # `is_file()` check in `cli/setup.py` catches the common typo case earlier;
-        # this wrap covers what slips past it (deferred-work DEF2 from Story 2.8).
+        # this wrap covers what slips past it.
         raise DataSourceUnavailableError(
             "DEM source unreachable.",
             detail=f"rasterio.open({dem_path}) failed: {exc!r}",
@@ -126,8 +125,7 @@ def sample_elevation(
         # Sanity-check the raster transform before iterating vertices: a malformed
         # DEM with negative pixel width or a flipped N/S origin would otherwise
         # surface as a wall of per-vertex out-of-bounds errors, hiding the
-        # underlying "this DEM is upside-down" diagnosis. Routed in via
-        # deferred-work D2 from Story 2.3.
+        # underlying "this DEM is upside-down" diagnosis.
         if bounds.right <= bounds.left or bounds.top <= bounds.bottom:
             raise DEMCoverageError(
                 f"DEM at {dem_path} has inverted or zero-width bounds "
@@ -153,22 +151,22 @@ def sample_elevation(
             always_xy=True,
         )
 
-        # --- Vectorized sampling (Story 14.1) --------------------------------
-        # Formerly a per-edge `transformer.transform` + per-point `dataset.sample`
-        # loop (~65 µs/point over millions of points — the biggest setup CPU
-        # stage). Reformulated as flat-array numpy work: gather every edge's
-        # coords once, project the whole graph in one `pyproj` call, resolve
-        # pixel indices with rasterio's own `rowcol` (guaranteeing the same
-        # nearest-pixel selection `dataset.sample` used), and read them by fancy
-        # index off a single band read. The per-vertex bounds/nodata guards
-        # become vectorized masks that still fail fast on the first offending
-        # edge with the identical message shape. Output is bit-identical to the
-        # old path (proven over the grenoble_small fixture in tests/unit/test_dem.py).
-        # Story 16.2: the per-edge `np.asarray(geom.coords)` + `np.concatenate`
-        # gather became one bulk `shapely.get_coordinates` call (`flat_coordinates`),
-        # measured 3.77 s → 1.51 s over r20's 2.86 M coordinates with bit-identical
-        # values. The type-check loop stays here so the message keeps its
-        # `pipeline.dem:` prefix.
+        # Sampling is whole-graph flat-array numpy work: gather every edge's coords
+        # once (`flat_coordinates`), project the whole graph in one `pyproj` call,
+        # resolve pixel indices with rasterio's own `rowcol`, and read them by fancy
+        # index off a single band read. The per-vertex bounds/nodata guards are
+        # vectorized masks that still fail fast on the first offending edge.
+        #
+        # Two shapes to not go back to, both measured on the r20 graph's 2.86 M
+        # coordinates (2026-07-24): a per-edge `transformer.transform` + per-point
+        # `dataset.sample` loop runs ~65 µs/point, which made this the single
+        # largest setup CPU stage; and a per-edge `np.asarray(geom.coords)` +
+        # `np.concatenate` gather costs 3.77 s against 1.51 s for the one bulk
+        # `shapely.get_coordinates` call. Both produce bit-identical values, so
+        # neither is a correctness trade — just slower.
+        #
+        # The geometry type-check stays a Python loop here so its message keeps the
+        # `pipeline.dem:` prefix and names the offending edge.
         edge_refs: list[tuple[object, object, object, dict[str, object]]] = []
         geoms: list[shapely.LineString] = []
         for u, v, k, data in out.edges(data=True, keys=True):
@@ -182,7 +180,8 @@ def sample_elevation(
             edge_refs.append((u, v, k, data))
 
         if not edge_refs:
-            # Empty graph: nothing to sample (defensive — matches the old no-op).
+            # Empty graph: nothing to sample. The vectorized path below would
+            # otherwise index into empty arrays.
             return out
 
         flat, offset_arr = flat_coordinates(geoms)
@@ -197,7 +196,7 @@ def sample_elevation(
         # a point at exactly `bounds.right` (or `bounds.top`) maps to a pixel index
         # of `width` (or `height`), which is outside the array. Inclusive on the
         # west/south edges (pixel index 0). Fail fast on the first offending vertex
-        # (in edge-iteration order), matching the old per-edge loop's first raise.
+        # in edge-iteration order, so the reported edge is deterministic.
         in_bounds = (
             (bounds.left <= xs) & (xs < bounds.right) & (bounds.bottom < ys) & (ys <= bounds.top)
         )
@@ -213,10 +212,10 @@ def sample_elevation(
             )
 
         # `rasterio.transform.rowcol` is the exact call `dataset.sample` uses to map
-        # coordinates to pixels (default op = `numpy.floor` → int), so the resolved
-        # rows/cols — and therefore the sampled values off a full-band read — are
-        # bit-identical to the old per-point `dataset.sample`. Every vertex is
-        # in-bounds here, so all indices are valid array positions.
+        # coordinates to pixels (default op = `numpy.floor` → int), so reading those
+        # rows/cols off a full-band read yields bit-identical values to sampling
+        # point-by-point. Every vertex is in-bounds here, so all indices are valid
+        # array positions.
         rows, cols = rasterio.transform.rowcol(dataset.transform, xs, ys)
         band = dataset.read(1)
         elevs = np.asarray(band[rows, cols], dtype=np.float64)

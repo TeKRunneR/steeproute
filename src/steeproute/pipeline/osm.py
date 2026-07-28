@@ -1,7 +1,12 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
 # Reason: networkx + osmnx ship partial / no type stubs; MultiDiGraph operations
 # surface as Unknown. Architecture §Type hints lists OSM as an external boundary.
-"""Pipeline stages 1-2: OSM ingestion (osmnx) and trail filtering."""
+"""Pipeline stages 1-2: OSM ingestion (osmnx) and trail filtering.
+
+This module's raw bytes are part of the prepared-cache key
+(`cache._PIPELINE_CONTENT_GLOBS`), so any edit here — comments included —
+re-keys subsequent setup runs.
+"""
 
 from __future__ import annotations
 
@@ -15,8 +20,8 @@ import shapely
 # `_ensure_sac_scale_in_useful_tags`) — they serve only stage 1. `pipeline/__init__`
 # imports this module, so every consumer of any pipeline submodule (including
 # spawned solver workers that only need `max_sac_rank`/`parse_difficulty_cap`)
-# would otherwise pay the full fetch stack at import time (~4 s of the ~5 s
-# per-worker import chain measured at r20 — Story 14.4 follow-up).
+# would otherwise pay the full fetch stack at import time — ~4 s of a ~5 s
+# per-worker import chain, measured at r20 (2026-07-14).
 from steeproute.errors import BadCLIArgError, DataSourceUnavailableError
 from steeproute.models import Area
 from steeproute.pipeline._common import empty_like
@@ -36,13 +41,13 @@ SAC_SCALE_RANK: dict[str, int] = {
 # untagged-trails-policy + sac_scale cap further narrow the surviving edges.
 TRAIL_HIGHWAY_TAGS: frozenset[str] = frozenset({"path", "footway", "track", "steps", "bridleway"})
 
-# OSM highway tags admitted as *connectors* — short paved links between trails
-# (Story 6.2). Roads carry no sac_scale, so they bypass the SAC cap and the
-# untagged-trails policy and are never climbs (stage 8 is gradient-driven; roads
-# are ~flat). They ride the existing length-based reuse-exemption (`reusable` iff
+# OSM highway tags admitted as *connectors* — short paved links between trails.
+# Roads carry no sac_scale, so they bypass the SAC cap and the untagged-trails
+# policy, and they are never climbs (stage 8 is gradient-driven; roads are ~flat).
+# They ride the length-based reuse-exemption (`reusable` iff
 # `length_m < l_connector`) and the D+/D- objective, which self-limits road use
-# to genuine links — no road-specific cost or reuse term. Major roads (motorway,
-# primary, ...) and bike-only cycleway are deliberately excluded.
+# to genuine links — there is deliberately no road-specific cost or reuse term.
+# Major roads (motorway, primary, ...) and bike-only cycleway are excluded.
 MINOR_ROAD_HIGHWAY_TAGS: frozenset[str] = frozenset(
     {"residential", "unclassified", "service", "living_street", "tertiary"}
 )
@@ -58,14 +63,14 @@ _OSM_CUSTOM_FILTER = '["highway"~"{}"]'.format(
 def osm_load(area: Area) -> nx.MultiDiGraph:
     """Stage 1: fetch the OSM trail network for `area` from Overpass via osmnx.
 
-    Dispatches on the area's shape (Story 15.2):
+    Dispatches on the area's shape:
 
     - **Square** (`Area.is_square`) — `osmnx.graph_from_point(dist_type="bbox")`
-      off `radius_km` (the bbox half-side, not a disk radius; see `Area`). Kept
-      **exactly** as pre-Epic-15: osmnx derives its bbox with its own
-      `EARTH_RADIUS_M = 6_371_009` (~1/111.195 deg/km) while `cache._area_to_polygon`
-      uses `1/111`, so feeding our ring in here would widen the fetch ~0.18% and
-      silently shift the pinned regression goldens.
+      off `radius_km` (the bbox half-side, not a disk radius; see `Area`). Do
+      **not** unify this with the polygon branch below: osmnx derives its bbox with
+      its own `EARTH_RADIUS_M = 6_371_009` (~1/111.195 deg/km) while
+      `cache.area_polygon` uses `1/111`, so feeding our ring in here widens the
+      fetch ~0.18% and silently shifts every pinned regression golden.
     - **Non-square / rotated** — `osmnx.graph_from_polygon` over the shared
       `cache.area_polygon(area)` ring, so only the rectangle's own footprint is
       pre-processed and off-axis valley never enters setup. This reuses osmnx's
@@ -108,9 +113,9 @@ def osm_load(area: Area) -> nx.MultiDiGraph:
     try:
         if area.is_square:
             # `half_extents_km[0]` (not `radius_km`) so a square expressed as
-            # explicit equal extents fetches its real size — for the classic
-            # `Area(center=..., radius_km=r)` the two are the same float, which
-            # is what keeps this call byte-identical to pre-Epic-15.
+            # explicit equal extents fetches its real size. For the shorthand
+            # `Area(center=..., radius_km=r)` the two are the same float, so this
+            # never perturbs a square area's fetch.
             raw = osmnx.graph_from_point(
                 center_point=area.center,
                 dist=area.half_extents_km[0] * 1000.0,
@@ -157,7 +162,7 @@ def _validate_area(area: Area) -> None:
 
     Validates the *effective* geometry, not `radius_km` alone: a rotated area
     carries an inert `radius_km=0.0` and drives the fetch entirely off its
-    half-extents + bearing (Story 15.2).
+    half-extents + bearing.
 
     Diagnostics are reported against the flag the user actually typed. Which one
     that is comes from **whether the extents were supplied**, not from
@@ -232,12 +237,12 @@ def filter_trails(
         difficulty_cap: "T1".."T6" (case-insensitive); edges whose `sac_scale`
             ranks strictly above the cap are dropped.
         consume: when True, remove the rejected edges from `graph` in place and
-            return `graph` itself instead of building a new graph — the
-            ownership path (Story 16.1). The caller then forfeits the
-            *unfiltered* graph: after the call there is only the filtered one.
-            Only safe when the caller owns `graph` exclusively and never needs
-            the rejected edges again. Default False keeps the pure "input never
-            mutated" contract every other caller (and the purity test) relies on.
+            return `graph` itself instead of building a new graph. The caller then
+            forfeits the *unfiltered* graph: after the call there is only the
+            filtered one. Only safe when the caller owns `graph` exclusively and
+            never needs the rejected edges again. Default False keeps the pure
+            "input never mutated" contract every other caller (and the purity
+            test) relies on.
 
     Returns:
         The filtered graph — a new MultiDiGraph, leaving the input untouched;
@@ -261,30 +266,31 @@ def filter_trails(
             # Roads aren't subject to the untagged policy (they carry no SAC
             # grade by nature). A road that *does* carry an over-cap sac_scale
             # respects the difficulty cap, like a trail; an untagged or
-            # unrecognized-sac road is admitted as a connector (Story 6.2).
+            # unrecognized-sac road is admitted as a connector.
             rank = max_sac_rank(data.get("sac_scale"))
             return rank is None or rank <= cap_rank
         return False
 
     if consume:
-        # Ownership path (Story 16.1): the query has just operationalized this
-        # graph and the difficulty-cap redux rejects only a small minority of its
-        # edges, so collecting the rejects and removing them beats rebuilding the
-        # whole graph to keep the majority (4.6 s → ~0.3 s on an r20 graph).
-        # Removal preserves the surviving edges' insertion order, so the result is
-        # order-identical to the rebuild below. Nodes are never removed here
-        # either — orphan pruning stays the orchestrator's job.
+        # Remove-the-rejects, not build-the-survivors. The two branches differ only
+        # in which side is the minority: a query-side re-filter at the user's
+        # difficulty cap rejects a small fraction of an already-filtered graph, so
+        # removing those beats rebuilding the whole graph to keep the rest
+        # (~0.3 s against 4.6 s on an r20 graph, 2026-07-24). Removal preserves the
+        # surviving edges' insertion order, so the result is order-identical to the
+        # rebuild below. Nodes are never removed here either — orphan pruning stays
+        # the orchestrator's job.
         rejected = [
             (u, v, k) for u, v, k, data in graph.edges(data=True, keys=True) if not keep(data)
         ]
         graph.remove_edges_from(rejected)
         return graph
 
-    # Build the output from the KEPT edges rather than copy-then-remove (Story
-    # 14.2, S3): stage 2 drops most edges (all non-trail/non-connector, over-cap,
-    # excluded-untagged), so copying them only to remove them is the dominant
-    # cost. All nodes carry over (orphan pruning is the orchestrator's job);
-    # edge/node iteration order is preserved so downstream output is unchanged.
+    # Build the output from the KEPT edges rather than copy-then-remove: a
+    # setup-side stage-2 pass drops most edges (all non-trail/non-connector,
+    # over-cap, excluded-untagged), so copying them only to remove them is the
+    # dominant cost. All nodes carry over (orphan pruning is the orchestrator's
+    # job); edge/node iteration order is preserved.
     out = empty_like(graph)
     for u, v, k, data in graph.edges(data=True, keys=True):
         if keep(data):
@@ -355,7 +361,7 @@ def _highway_tags(value: object) -> tuple[list[str], bool]:
 def classify_highway(value: object) -> str | None:
     """Classify an OSM `highway` value as a routable `"trail"`, road `"connector"`, or None.
 
-    One classifier, two deliberately-asymmetric multi-tag rules (Story 6.2):
+    One classifier, two deliberately-asymmetric multi-tag rules:
 
     - **Trail (permissive):** any constituent tag in `TRAIL_HIGHWAY_TAGS` makes
       the edge a trail — osmnx-merged edges should join the trail graph if any

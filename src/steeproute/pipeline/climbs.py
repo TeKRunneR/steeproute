@@ -24,9 +24,8 @@ smoothed by stage 6) and attaches four numeric metrics:
   window that nets a climb contributes nothing). Because the reciprocal edge carries
   reversed `vertices_resampled`, it records the descent grade for the *opposite*
   direction — so the value is direction-aware, mirroring `d_plus_m`/`d_minus_m`.
-  Governs the opt-in FR32 descent cap (Story 10.2), compared against
-  `--max-descent-slope` only when that flag is set. Parameter-independent of all
-  `SolverParams`.
+  Governs the opt-in FR32 descent cap, compared against `--max-descent-slope`
+  only when that flag is set. Parameter-independent of all `SolverParams`.
 
 Stage 8 (`detect_climbs`) walks the post-stage-7 MultiDiGraph and emits the
 maximal edge-disjoint contiguous edge-sequences whose cumulative directional
@@ -34,9 +33,13 @@ uphill slope (`d_plus_sum / length_sum`) stays ≥ `min_climb_slope` and whose
 total ground length is ≥ `min_climb_ground_length`. Each candidate is grown
 from its seed in *both* directions — backward to the true steep bottom, then
 forward to the top — so the emitted climb is genuinely maximal regardless of
-node-id labeling or seed order (Story 9.1, review finding #7). Output is a
-`list[Climb]`; the input graph is never mutated. Stage 9 (graph contraction,
-Story 3.3) consumes the output to build the solver-side `ContractedGraph`.
+node-id labeling or seed order. Output is a `list[Climb]`; the input graph is
+never mutated. Stage 9 (`pipeline.graph.contract_climbs`) consumes the output to
+build the solver-side `ContractedGraph`.
+
+This module's raw bytes are part of the prepared-cache key
+(`cache._PIPELINE_CONTENT_GLOBS`), so any edit here — comments included —
+re-keys subsequent setup runs.
 """
 
 from __future__ import annotations
@@ -67,15 +70,13 @@ _DEG_TO_M_LAT: float = _EARTH_RADIUS_M * math.radians(1.0)
 # below any real edge, so it never rejects production data.
 _MIN_METRIC_LENGTH_M: float = 1e-6
 
-# Distance window (m) for the FR32 windowed descent metric (Story 10.2). The
-# steepest *sustained* grade is measured over a sliding window of this ground
-# length, so a short cliff section is caught even when the whole-edge
-# `avg_gradient` averages it away. A module-scope named constant (not a CLI flag)
-# keeps `max_windowed_descent_grad` parameter-independent — the Architecture §3c
-# contract and FR29 determinism both rely on the metric being a pure function of
-# the cached geometry. PROVISIONAL: ~30 m spans ~3 resampled segments (≈10 m
-# spacing); a future story may surface it as `--descent-window` if needed (PRD
-# FR32 leaves the door open).
+# Distance window (m) for the FR32 windowed descent metric. The steepest
+# *sustained* grade is measured over a sliding window of this ground length, so a
+# short cliff section is caught even when the whole-edge `avg_gradient` averages it
+# away. This must stay a module-scope constant rather than becoming a CLI flag:
+# `max_windowed_descent_grad` is computed setup-side and cached, and both the
+# Architecture §3c contract and FR29 determinism rely on it being a pure function
+# of the cached geometry. 30 m spans ~3 resampled segments at the 10 m spacing.
 _DESCENT_WINDOW_M: float = 30.0
 
 
@@ -93,15 +94,14 @@ def compute_edge_metrics(graph: nx.MultiDiGraph, *, inplace: bool = False) -> nx
         Upstream attributes (`geometry`, `vertices_resampled`, `sac_scale`,
         `highway`, `osm_way_id`) are carried through unchanged.
 
-    Vectorization (Story 14.2): every edge's `vertices_resampled` is gathered
-    into ONE flat `(V, 3)` array and all four metrics are computed with flat numpy
-    array ops over the whole graph at once — a per-edge-reset `np.cumsum` arc
-    length (`np.hypot` segments), `np.diff`-based gain/loss reduced per edge, and
-    a single `np.searchsorted` windowed-descent scan (a per-edge monotone offset
-    keeps each search inside its own edge). Numerically equivalent to the
-    pre-14.2 per-vertex loops to within floating-point reordering (measured max
-    ~1.7e-10 on the fixture; `d_plus_m`/`d_minus_m` were exactly bit-identical) —
-    small enough that the regression goldens stay byte-identical, no rebake needed.
+    Vectorization: every edge's `vertices_resampled` is gathered into ONE flat
+    `(V, 3)` array and all metrics are computed with flat numpy array ops over the
+    whole graph at once — a per-edge-reset `np.cumsum` arc length (`np.hypot`
+    segments), `np.diff`-based gain/loss reduced per edge, and a single
+    `np.searchsorted` windowed-descent scan (a per-edge monotone offset keeps each
+    search inside its own edge). This differs from per-vertex loops only by
+    floating-point reordering: max ~1.7e-10 on the grenoble_small fixture, with
+    `d_plus_m`/`d_minus_m` exactly bit-identical.
     """
     out: nx.MultiDiGraph = graph if inplace else graph.copy()
     keys: list[tuple[int, int, int]] = []
@@ -119,8 +119,8 @@ def compute_edge_metrics(graph: nx.MultiDiGraph, *, inplace: bool = False) -> nx
     # Fail fast on non-finite input. Stage-4's degenerate-edge drop and the
     # orchestrator's finite-elevation guard should have removed these upstream;
     # the vectorized reductions below share one `np.cumsum` and one `.max()`
-    # across the whole graph, so a single NaN would silently corrupt other edges'
-    # metrics (not just its own, as the old per-edge loop did). Cheap O(V) guard.
+    # across the whole graph, so a single NaN would silently corrupt *other* edges'
+    # metrics, not just its own. Cheap O(V) guard.
     if not np.isfinite(flat).all():
         raise PipelineContractError(
             "compute_edge_metrics: non-finite coordinate in vertices_resampled "
@@ -172,15 +172,15 @@ def _windowed_descent_all(
     offs: np.ndarray,
     length_m: np.ndarray,
 ) -> np.ndarray:
-    """Per-edge `max_windowed_descent_grad` for the whole graph in flat numpy (Story 14.2).
+    """Per-edge `max_windowed_descent_grad` for the whole graph in flat numpy.
 
     For every vertex `i`, `_common.per_edge_searchsorted` finds the first vertex
     `j` (within the same edge) with `cum[j] - cum[i] >= _DESCENT_WINDOW_M` — its
     per-edge monotone offset keeps each search inside its own edge. Windows are
     gated on `run >= window` and
     `drop > 0`, the per-edge max is a `np.maximum.reduceat`, and edges with no full
-    window fall back to their end-to-end descent grade — matching the scalar
-    two-pointer descent-scan semantics.
+    window fall back to their end-to-end descent grade — the same semantics as a
+    scalar two-pointer descent scan.
     """
     v_count = len(cum)
     edge_last = offs[1:] - 1  # last vertex index per edge
@@ -229,7 +229,7 @@ def is_valid_for_metrics(verts: list[tuple[float, float, float]]) -> bool:
 
 
 def _projected_cumulative(verts: list[tuple[float, float, float]]) -> np.ndarray:
-    """Prefix-sum of ground-distance in meters as a numpy array (Story 14.2 internal form).
+    """Prefix-sum of ground-distance in meters as a numpy array.
 
     Local equirectangular projection at the polyline's mean latitude — the same
     pattern as `pipeline.smoothing._resample_meters`. Accurate to ~0.1% over
@@ -238,11 +238,12 @@ def _projected_cumulative(verts: list[tuple[float, float, float]]) -> np.ndarray
     and `_windowed_descent_all` read this one array, so the projection is
     computed once per edge and the two cannot drift.
 
-    Vectorization (Story 14.2): `mean_lat` stays a builtin `sum()` (compensated
-    since 3.12 — kept in Python so it's bit-identical, one scalar per edge), the
-    coordinate deltas are `np.diff`, and per-segment `math.hypot` is kept per
-    segment (numpy's `hypot` diverges by up to a ULP on ~17% of inputs). The
-    `np.cumsum` left-fold is bit-identical to the old `cum[i] = cum[i-1] + …` loop.
+    Two deliberate non-vectorizations here; both change results if "fixed":
+    `mean_lat` stays a builtin `sum()` (Neumaier-compensated since Python 3.12, and
+    it is only one scalar per edge), and the per-segment distance stays
+    `math.hypot`, because numpy's `hypot` diverges from it by up to a ULP on ~17%
+    of inputs. The coordinate deltas are `np.diff` and the `np.cumsum` left-fold is
+    bit-identical to a `cum[i] = cum[i-1] + …` loop.
     """
     n = len(verts)
     cum = np.zeros(n, dtype=np.float64)
@@ -276,18 +277,19 @@ def detect_climbs(
     cumulative directional uphill slope (`d_plus_sum / length_sum`) stays
     `≥ min_climb_slope` along the chain and whose total `length_m` is
     `≥ min_climb_ground_length`. Each underlying graph edge appears in at most
-    one returned `Climb` — Story 3.3's back-mapping injectivity depends on it.
+    one returned `Climb` — stage 9's back-mapping injectivity depends on it.
 
-    Maximality (Story 9.1, review finding #7): each candidate is grown from its
-    seed edge in both directions — first *backward* (prepending the steepest
-    qualifying-as-seed incoming edge until none remains) to root the climb at
-    its true steep bottom, then *forward* to its top. Because every backward
-    edge is itself `≥ min_climb_slope`, every prefix measured from the new
-    bottom stays `≥ min_climb_slope`, so the running-average constraint is
-    preserved without a recheck. This makes the output independent of node-id
-    labeling and seed order: previously a mid-chain edge seeding before the
-    chain's bottom would extend forward only and orphan the (steep) bottom edge,
-    silently demoting a real climb-start to a connector.
+    Maximality: each candidate is grown from its seed edge in both directions —
+    first *backward* (prepending the steepest qualifying-as-seed incoming edge
+    until none remains) to root the climb at its true steep bottom, then *forward*
+    to its top. Because every backward edge is itself `≥ min_climb_slope`, every
+    prefix measured from the new bottom stays `≥ min_climb_slope`, so the
+    running-average constraint is preserved without a recheck.
+
+    Growing forward only is the trap this avoids: a mid-chain edge that seeds before
+    the chain's bottom orphans the (steep) bottom edge, silently demoting a real
+    climb-start to a connector — and which edge seeds first depends on node-id
+    labeling, so the bug is data-dependent and invisible on most fixtures.
 
     Args:
         graph: post-stage-7 MultiDiGraph; every edge must carry the stage-7
@@ -343,12 +345,11 @@ def detect_climbs(
         # the extension pickers; without it, `edge_id in candidate` is O(n)
         # per scanned edge, giving worst-case O(E² · avg_degree).
         candidate_set: set[tuple[int, int, int]] = {seed}
-        # Node-monotonicity guard: a candidate climb is a path, not a walk —
-        # consumers (Story 3.3 super-edge back-mapping, Story 3.6 solver
-        # route construction) treat each climb as a monotone uphill segment
-        # between two distinct endpoints. Visiting the same node twice would
-        # admit zigzag tuples through bidirectional / parallel edges on
-        # saddle-shaped terrain.
+        # Node-monotonicity guard: a candidate climb is a path, not a walk — both
+        # consumers (stage 9's super-edge back-mapping and the solver's route
+        # construction) treat each climb as a monotone uphill segment between two
+        # distinct endpoints. Visiting the same node twice would admit zigzag tuples
+        # through bidirectional / parallel edges on saddle-shaped terrain.
         visited_nodes: set[int] = {u, v}
         cum_d_plus: float = seed_data["d_plus_m"]
         cum_length: float = seed_data["length_m"]
@@ -488,7 +489,7 @@ def _pick_steepest_backward(
 ) -> tuple[int, int, int] | None:
     """Steepest qualifying-as-seed incoming edge to `bottom`, or `None`.
 
-    Used to root a climb at its true steep bottom (Story 9.1). An edge
+    Used to root a climb at its true steep bottom. An edge
     `(a, bottom, k)` is a valid backward extension iff it is unconsumed, not
     already in the candidate, its source node `a` is not already on the
     candidate's path (node-monotonicity), and it qualifies as a seed on its own

@@ -7,9 +7,8 @@
 `Climb` from stage 8 into a single directed super-edge in a new `MultiDiGraph`,
 carries forward **all** non-climb connector edges unchanged (no length-based
 drop), and returns the contracted graph plus a
-`(node_u, node_v, key) -> tuple[Edge, ...]` back-mapping so the validator
-(Story 3.9) can expand super-edges back to base edges for per-base-edge
-constraint checks.
+`(node_u, node_v, key) -> tuple[Edge, ...]` back-mapping so the validator can
+expand super-edges back to base edges for per-base-edge constraint checks.
 
 Super-edges carry the same numeric attribute schema as base edges (`length_m`,
 `d_plus_m`, `d_minus_m`, `avg_gradient`, `sac_scale`), with `length_m` /
@@ -19,14 +18,13 @@ definition). `sac_scale` aggregates as the maximum SAC rank across the climb's
 edges per `pipeline.osm.SAC_SCALE_RANK`, with `None` entries treated as
 below-`hiking` (so they never raise the aggregate). `models.HEAVY_EDGE_ATTRS`
 (`geometry`, `vertices_resampled`) stay on the base edges and appear nowhere in
-the contracted graph — not on super-edges and, since Story 16.1, not on
-connectors either; consumers reach them via `super_edge_to_base` against the
-base graph when they need geometry.
+the contracted graph — not on super-edges, not on connectors; consumers reach
+them via `super_edge_to_base` against the base graph when they need geometry.
 
-**Undirected base-segment reuse tagging (Story 5.1, FR5).** Every contracted
-edge additionally carries two attributes the solver / oracle / validator
-(Story 5.2) use to enforce once-per-route reuse on the underlying *physical*
-trail segment, regardless of direction:
+**Undirected base-segment reuse tagging (FR5).** Every contracted edge
+additionally carries two attributes the solver / oracle / validator use to
+enforce once-per-route reuse on the underlying *physical* trail segment,
+regardless of direction:
 
 - `base_segment_id` — a `frozenset[tuple[int, int, int]]` of undirected
   base-segment identities. The identity of one base edge is its canonical
@@ -34,15 +32,16 @@ trail segment, regardless of direction:
   and its reverse `(v, u, k)` resolve to the *same* id. A **connector** carries
   a one-element set (its own id); a **super-edge** carries the set of ids of
   the base edges it contracts. Stored as a set uniformly (not a scalar on
-  connectors) so Story 5.2 can test "any non-exempt id already used?" without
-  branching on edge kind. A climb super-edge therefore shares an id with the
-  reverse-direction connectors of the same trail — that collision is what kills
-  the degenerate out-and-back.
+  connectors) so the reuse rule can test "any non-exempt id already used?"
+  without branching on edge kind. A climb super-edge therefore shares an id with
+  the reverse-direction connectors of the same trail — that collision is what
+  kills the degenerate out-and-back.
 - `reusable` — `True` only for a connector with `length_m < l_connector` (a
   short linking segment, exempt from the once-only rule and traversable both
-  ways). `False` for long connectors and for every super-edge. This repurposes
-  `--l-connector` from the old graph-pruning threshold into a reuse-exemption
-  threshold (the originally-intended FR5 semantics).
+  ways). `False` for long connectors and for every super-edge. Note that
+  `--l-connector` is purely a reuse-exemption threshold: **no edge is ever
+  dropped on it**, so a short connector below the threshold still exists in the
+  contracted graph.
 
 A super-edge is identified by dict-membership in `super_edge_to_base`:
 `(u, v, k) in contracted.super_edge_to_base` iff that triple denotes a
@@ -88,19 +87,19 @@ def contract_climbs(
     is therefore `lean=True`. Every contracted edge is additionally tagged with a
     `base_segment_id` (undirected, see module docstring) and a `reusable` flag.
 
-    **Junction-aware splitting (Story 6.1, FR10).** A climb is collapsed into
-    one atomic super-edge from `climb.edges[0].node_u` to `climb.edges[-1].
-    node_v`, deleting its interior nodes. That makes a trail joining the climb
-    *partway up* (at a real interior junction) unable to board it — the solver
-    can only enter/leave at the two endpoints. With `split_at_junctions=True`
-    (default), the climb is split at every interior node that is a real trail
-    junction — incident, in `base_graph`, to a base segment whose undirected
-    identity is *outside* the climb's own segment set (the climb's own
-    reverse-direction edges share ids, so they never trigger a split). Each
-    resulting sub-segment becomes its own super-edge and the junction node
-    survives as a real node a connector can board at. Single-edge climbs and
-    junction-free climbs are unaffected. `split_at_junctions=False` reproduces
-    the pre-fix atomic-climb behaviour (diagnostics only).
+    **Junction-aware splitting (FR10).** Collapsing a climb into one atomic
+    super-edge from `climb.edges[0].node_u` to `climb.edges[-1].node_v` deletes
+    its interior nodes, which leaves a trail joining the climb *partway up* (at a
+    real interior junction) unable to board it — the solver could only enter/leave
+    at the two endpoints. So with `split_at_junctions=True` (default) the climb is
+    split at every interior node that is a real trail junction: incident, in
+    `base_graph`, to a base segment whose undirected identity is *outside* the
+    climb's own segment set (the climb's own reverse-direction edges share ids, so
+    they never trigger a split). Each resulting sub-segment becomes its own
+    super-edge and the junction node survives as a real node a connector can board
+    at. Single-edge climbs and junction-free climbs are unaffected.
+    `split_at_junctions=False` emits the atomic form instead — diagnostics only,
+    since it reintroduces the unboardable-climb problem.
 
     Args:
         base_graph: post-stage-7 `MultiDiGraph` carrying the
@@ -112,12 +111,12 @@ def contract_climbs(
         l_connector: short-connector reuse-exemption threshold in meters. A
             carried-over connector is tagged `reusable=True` iff
             `length_m < l_connector` (strict). No edge is dropped on this
-            threshold any longer.
+            threshold.
         split_at_junctions: when `True` (default), split each climb at its
             interior trail junctions (one super-edge per sub-segment); when
             `False`, emit one atomic super-edge per climb.
         annotate_junctions: when `True`, tag every surviving node with
-            `is_road_trail_junction` (FR31, Story 10.1) — an O(E) pass the
+            `is_road_trail_junction` (FR31) — an O(E) pass the
             solver/oracle/validator consult only under `--start-at-junction`.
             Default `False` so the common (flag-off) query skips the work
             entirely; the CLI passes `params.start_at_junction`.
@@ -140,9 +139,9 @@ def contract_climbs(
 
     # 1. Build the set of base-edge identities consumed by climbs, then carry
     #    over EVERY non-climb connector unchanged (no length-based drop — short
-    #    connectors are revived as reuse-exempt linking segments, Story 5.1).
-    #    Connectors land first so super-edge key allocation in step 2 sees them
-    #    and picks non-colliding keys.
+    #    connectors survive as reuse-exempt linking segments). Connectors land
+    #    first so super-edge key allocation in step 2 sees them and picks
+    #    non-colliding keys.
     climb_edge_ids: set[tuple[int, int, int]] = set()
     for climb in climbs:
         for e in climb.edges:
@@ -151,14 +150,14 @@ def contract_climbs(
     for u, v, k, data in base_graph.edges(data=True, keys=True):
         if (u, v, k) in climb_edge_ids:
             continue
-        # The connector's attribute dict is rebuilt WITHOUT `HEAVY_EDGE_ATTRS`
-        # (Story 16.1): `geometry` / `vertices_resampled` are rendering-only
-        # payloads, and no contracted-graph consumer reads them — the solver,
-        # detection, contraction and the validator are geometry-blind, and
-        # `output.render` resolves geometry off the operational graph through
-        # `super_edge_to_base`. Carrying them here only to have
-        # `solver_graph_view` rebuild the whole graph to strip them again cost a
-        # full ~327k-edge rebuild per r20 run.
+        # The connector's attribute dict is rebuilt WITHOUT `HEAVY_EDGE_ATTRS`:
+        # `geometry` / `vertices_resampled` are rendering-only payloads, and no
+        # contracted-graph consumer reads them — the solver, detection,
+        # contraction and the validator are geometry-blind, and `output.render`
+        # resolves geometry off the operational graph through
+        # `super_edge_to_base`. Don't carry them here and leave
+        # `solver_graph_view` to strip them: that costs a full graph rebuild
+        # (~327k edges at r20, 2026-07-24) on every parallel run.
         #
         # Mutable values that DO carry over (list-valued `highway` /
         # `osm_way_id`) remain aliased to `base_graph`'s. `contract_climbs`
@@ -176,7 +175,7 @@ def contract_climbs(
             reusable=data["length_m"] < l_connector,
         )
 
-    # 2. Emit one super-edge per climb sub-segment (junction-split, Story 6.1).
+    # 2. Emit one super-edge per climb sub-segment (junction-split).
     #    Each super-edge carries the aggregated metrics + the max-rank SAC;
     #    geometry / vertices stay on base edges reachable through
     #    `super_edge_to_base`. Its `base_segment_id` is the set of undirected ids
@@ -192,14 +191,15 @@ def contract_climbs(
             d_plus_m: float = sum(e.d_plus_m for e in seg_edges)
             d_minus_m: float = sum(e.d_minus_m for e in seg_edges)
             # Guard against a zero-length sub-segment (a junction-isolated run of
-            # degenerate zero-length base edges) — mirrors `models.route_avg_gradient`'s
-            # `length_m > 0 else 0.0` convention. Splitting newly exposes this: the
-            # atomic-climb path summed over the whole (min-length-guaranteed) climb.
+            # degenerate zero-length base edges) — mirrors
+            # `models.route_avg_gradient`'s `length_m > 0 else 0.0` convention.
+            # Needed because stage 8's min-length floor applies to the whole climb,
+            # not to each junction-split sub-segment of it.
             avg_gradient: float = (d_plus_m + d_minus_m) / length_m if length_m > 0 else 0.0
             sac_scale: str | None = _aggregate_sac_scale(seg_edges)
             # Carry the FR32 descent metric onto the super-edge as the steepest
-            # window across its base edges (Story 10.2). A forward super-edge is a
-            # climb (net uphill) so it is never itself a *descent* — this value is
+            # window across its base edges. A forward super-edge is a climb (net
+            # uphill) so it is never itself a *descent* — this value is
             # not read by the descent check on the super-edge — but keeping the
             # full edge-attribute contract uniform on every contracted edge avoids
             # `.get(..., 0.0)` surprises downstream. Read from `base_graph` data
@@ -237,7 +237,7 @@ def contract_climbs(
     # super-edge and simply never added unless a surviving connector touches
     # them.
 
-    # Road/trail junction annotation (Story 10.1, FR31): tag each surviving node
+    # Road/trail junction annotation (FR31): tag each surviving node
     # `is_road_trail_junction` only when `--start-at-junction` is in play
     # (`annotate_junctions`). It is an O(E) pass nothing reads otherwise, so the
     # common flag-off query skips it. Deterministic, no RNG.
@@ -246,12 +246,12 @@ def contract_climbs(
     # `lean=True`: neither branch above ever writes a `HEAVY_EDGE_ATTRS` key —
     # connectors filter them out and super-edges carry an explicit whitelist — so
     # the parallel solver can ship this graph to its workers without rebuilding a
-    # stripped copy (Story 16.1).
+    # stripped copy.
     return ContractedGraph(graph=contracted, super_edge_to_base=super_edge_to_base, lean=True)
 
 
 def is_junction_node(graph: ContractedGraph, node: int) -> bool:
-    """Single source of the road/trail junction read predicate (FR31, Story 10.1).
+    """Single source of the road/trail junction read predicate (FR31).
 
     The seed pool (`solver.grasp`), the oracle's walk-starts
     (`tests/integration/exhaustive_oracle.py`), and the validator
@@ -364,9 +364,9 @@ def _base_segment_id(u: int, v: int, k: int) -> tuple[int, int, int]:
 
     A forward edge `(u, v, k)` and its reverse-direction counterpart `(v, u, k)`
     resolve to the same tuple, so once-only reuse keyed on this id forbids
-    re-walking a physical trail segment in either direction (Story 5.1, FR5).
-    The natural extension of the existing canonical `(node_u, node_v, key)` edge
-    identity documented on `models.Edge`.
+    re-walking a physical trail segment in either direction (FR5). The undirected
+    counterpart of the canonical `(node_u, node_v, key)` edge identity documented
+    on `models.Edge`.
 
     The `key` is preserved as-is: osmnx assigns the same key (0 for a simple
     two-way edge) to both directions, so the reverse edge collides as intended.

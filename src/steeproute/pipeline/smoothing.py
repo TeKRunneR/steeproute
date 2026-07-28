@@ -6,29 +6,36 @@ Stages 3-4 operate on each edge's `geometry` (a `shapely.LineString` in WGS84
 lon/lat from stages 1-2). The polyline is smoothed via a symmetric moving
 average then resampled to a uniform ground-meter spacing. Operations use a
 per-edge local equirectangular projection (cosine-of-mean-latitude correction)
-so spacing_m is honoured in real meters; we keep the graph in WGS84 throughout
-(Story 2.3 handles CRS at the DEM boundary, not here).
+so spacing_m is honoured in real meters; the graph stays in WGS84 throughout
+(`pipeline/dem.py` handles CRS at the DEM boundary, not here).
 
-Stage 6 — the canonical-elevation-profile reshaping (Story 6.3) — moved
-**query-side**: setup caches the raw post-stage-5 elevation, and the query CLI
-applies `graph_smooth_elevation` then `graph_deadband_elevation` once over the
-whole graph before naive-sum metrics (stage 7). The two together produce the
-*single* elevation profile that the metric box, the solver objective, and the
-plotted curve all read — see each function's docstring. The pre-6.3 per-edge
-`median_smooth_elevation` is gone: per-edge smoothing pinned the shared node
-elevation per-edge, so incident edges disagreed at the join (box ≠ curve) and
-short edges with no interior went unsmoothed. The global graph-Laplacian fixes
-both — each graph node is one shared variable, so joins stay consistent.
+Stage 6 — the canonical-elevation-profile reshaping — is **query-side**: setup
+caches the raw post-stage-5 elevation, and the query CLI applies
+`graph_smooth_elevation` then `graph_deadband_elevation` once over the whole
+graph before naive-sum metrics (stage 7). The two together produce the *single*
+elevation profile that the metric box, the solver objective, and the plotted
+curve all read — see each function's docstring.
+
+Elevation smoothing is deliberately a **global graph-Laplacian** rather than a
+per-edge filter (there was once a per-edge `median_smooth_elevation` here; don't
+reintroduce that shape). Per-edge smoothing pins a shared node's elevation
+independently on each incident edge, so incident edges disagree at the join
+(box ≠ curve) and short edges with no interior vertex go unsmoothed. Under the
+graph-Laplacian each graph node is one shared variable, so joins stay consistent.
 
 Endpoints are preserved exactly across stages 3-4: topology — node coordinates
 — must not drift. Edges with degenerate geometry (fewer than 2 distinct finite
-points) are dropped from the output graph; carry-forward policy from Story 2.1.
-Non-LineString geometry on a pipeline edge is treated as an upstream contract
-violation and raises `TypeError` (fail-fast).
+points) are dropped from the output graph. Non-LineString geometry on a pipeline
+edge is treated as an upstream contract violation and raises `TypeError`
+(fail-fast).
 
 Resample-spacing contract: vertex spacing is uniform within float roundoff —
 `actual_spacing = total / n_intervals`, with `n_intervals = round(total / spacing_m)`
 — and the equirectangular round-trip adds sub-‰ drift over edge-scale distances.
+
+This module's raw bytes are part of the prepared-cache key
+(`cache._PIPELINE_CONTENT_GLOBS`), so any edit here — comments included —
+re-keys subsequent setup runs.
 """
 
 from __future__ import annotations
@@ -49,17 +56,16 @@ SMOOTHING_WINDOW: int = 3
 # Default vertex spacing for stage 4, in ground meters along the polyline.
 RESAMPLE_SPACING_M: float = 10.0
 
-# Default strength of the query-side elevation smoothing, in ground meters. This
-# replaces the removed per-edge median (which smoothed over ~50 m at the 10 m
-# resample spacing) so the cliff-bias mitigation it provided is preserved by
-# default; `--elevation-smoothing` overrides it. Expressed in meters and
-# converted to a vertex window internally so it is decoupled from the resample
-# spacing (a future spacing change re-derives the iteration count automatically).
+# Default strength of the query-side elevation smoothing, in ground meters. 50 m
+# is the span needed for cliff-bias mitigation at the 10 m resample spacing;
+# `--elevation-smoothing` overrides it. Expressed in meters and converted to a
+# vertex window internally so it is decoupled from the resample spacing (changing
+# the spacing re-derives the iteration count automatically).
 ELEVATION_SMOOTHING_DEFAULT_M: float = 50.0
 
-# Default elevation deadband, in meters. 0 disables the profile transform —
-# matching pre-6.3 behaviour, where gain/loss summed every raw delta. The
-# deadband is opt-in via `--elevation-deadband`.
+# Default elevation deadband, in meters. 0 disables the profile transform, so
+# gain/loss sums every raw delta. The deadband is opt-in via
+# `--elevation-deadband`.
 ELEVATION_DEADBAND_DEFAULT_M: float = 0.0
 
 # Jacobi relaxation factor for the graph-Laplacian diffusion. 0.5 is the standard
@@ -79,13 +85,13 @@ _DEG_TO_M_LAT: float = _EARTH_RADIUS_M * math.radians(1.0)
 class FlatPolylines:
     """Edge polylines in flat-array form, the hand-off between stages 3 and 4.
 
-    Story 16.2: the two stages each already work in flat numpy arrays internally,
-    but the boundary between them used to materialize a 327k-edge NetworkX +
-    Shapely graph that the next stage immediately flattened again (~7.4 s / ~7.8 s
-    of profiled rebuild at r20). Passing this instead lets the setup orchestrator
-    run stage 3 → stage 4 with the coordinates staying flat and the graph built
-    **once**, while `smooth_polylines` / `resample_edges` remain available as pure
-    graph-in/graph-out stage functions for tests and external callers.
+    Both stages work in flat numpy arrays internally, so this keeps the boundary
+    between them flat too and lets the setup orchestrator build the output graph
+    **once**. Materializing a graph at this boundary instead costs a 327k-edge
+    NetworkX + Shapely rebuild that the next stage immediately flattens again —
+    ~7.4 s / ~7.8 s at r20 (2026-07-24). `smooth_polylines` / `resample_edges`
+    stay available as pure graph-in/graph-out stage functions for tests and
+    external callers.
 
     Fields:
         source: the graph the polylines came from; supplies nodes + graph attrs to
@@ -235,21 +241,21 @@ def smooth_polylines(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
 
     Returns a new `MultiDiGraph`; the input graph is never mutated.
 
-    Vectorization (Story 14.2): coordinates for the whole graph are gathered in
-    ONE `shapely.get_coordinates` call, the window-3 moving average is a handful
-    of flat numpy array ops over every vertex at once (per-edge numpy dispatch
-    was measured to *regress* on these light loops — the win comes from
-    amortizing the overhead across the whole graph), and the smoothed geometries
-    are rebuilt in ONE `shapely.linestrings` call. Degenerate edges are dropped;
-    all nodes and edge iteration order are preserved. The output is numerically
-    equivalent to the pre-14.2 per-vertex formulation to within floating-point
-    reordering (the naive `(a+b+c)/3` mean replaces the compensated builtin
-    `sum()`; measured max ~1.4e-14 deg on the fixture) — small enough that the
-    regression goldens stay byte-identical, so no rebake was needed.
+    A thin wrapper over `collect_polylines` → `smooth_polylines_flat` → one graph
+    rebuild, so this and the setup orchestrator's fused stage-3→4 path share one
+    copy of the numerics and cannot drift.
 
-    Story 16.2: a thin wrapper over `collect_polylines` → `smooth_polylines_flat`
-    → one graph rebuild, so this and the setup orchestrator's fused stage-3→4 path
-    share a single copy of the numerics and cannot drift.
+    Vectorization: coordinates for the whole graph are gathered in ONE
+    `shapely.get_coordinates` call, the window-3 moving average is a handful of
+    flat numpy array ops over every vertex at once, and the smoothed geometries
+    are rebuilt in ONE `shapely.linestrings` call. Do **not** push the numpy
+    dispatch down to per-edge arrays — that measurably *regresses* on loops this
+    light; the win is amortizing numpy's call overhead across the whole graph.
+    Degenerate edges are dropped; all nodes and edge iteration order are preserved.
+    The flat form differs from a per-vertex formulation only by floating-point
+    reordering (the naive `(a+b+c)/3` mean in place of the compensated builtin
+    `sum()`; max ~1.4e-14 deg on the grenoble_small fixture) — far below the
+    resolution any downstream metric or golden can see.
     """
     flat = smooth_polylines_flat(collect_polylines(graph))
     out = empty_like(graph)
@@ -285,20 +291,19 @@ def resample_edges(
         ValueError: if `spacing_m` is non-positive or non-finite.
         TypeError: if any edge's `geometry` is not a `shapely.LineString`.
 
-    Vectorization (Story 14.2): the whole graph is resampled in flat numpy array
-    ops — one `shapely.get_coordinates` gather, a per-edge equirectangular
-    projection, `np.hypot` segment lengths + a per-edge-reset `np.cumsum` arc
-    length, and one `np.searchsorted` locating every uniform sample's segment
-    across all edges at once (a per-edge monotone offset keeps each search inside
-    its own edge). Geometries are rebuilt in one `shapely.linestrings` call. This
-    is numerically equivalent to the pre-14.2 per-vertex loop to within
-    floating-point reordering (`np.hypot` ≠ CPython's `math.hypot` by up to a ULP,
-    which could in principle nudge a sample across a segment boundary; measured
-    max ~1.4e-14 deg on the fixture, zero boundary flips) — small enough that the
-    regression goldens stay byte-identical, so no rebake was needed.
+    A thin wrapper over `collect_polylines` → `resample_polylines_flat`, shared
+    with the setup orchestrator's fused stage-3→4 path.
 
-    Story 16.2: a thin wrapper over `collect_polylines` → `resample_polylines_flat`,
-    shared with the setup orchestrator's fused stage-3→4 path.
+    Vectorization: the whole graph is resampled in flat numpy array ops — one
+    `shapely.get_coordinates` gather, a per-edge equirectangular projection,
+    `np.hypot` segment lengths + a per-edge-reset `np.cumsum` arc length, and one
+    `np.searchsorted` locating every uniform sample's segment across all edges at
+    once (a per-edge monotone offset keeps each search inside its own edge).
+    Geometries are rebuilt in one `shapely.linestrings` call. This differs from a
+    per-vertex loop only by floating-point reordering — `np.hypot` and CPython's
+    `math.hypot` disagree by up to a ULP, which could in principle nudge a sample
+    across a segment boundary, but measures max ~1.4e-14 deg and zero boundary
+    flips on the grenoble_small fixture.
     """
     if not math.isfinite(spacing_m) or spacing_m <= 0:
         raise ValueError(f"spacing_m must be a positive finite number (got {spacing_m})")
@@ -320,9 +325,9 @@ def graph_smooth_elevation(
     consequences matter:
 
     * Diffusion is a low-pass filter — it strictly shrinks adjacent elevation
-      differences, so it can never *create* a slope spike (the failure mode of
-      the per-edge moving-average it replaces, which manufactured ~1000 %
-      segments by dumping a node offset into one ~10 m segment).
+      differences, so it can never *create* a slope spike. A per-edge
+      moving-average can: dumping a node offset into one ~10 m segment
+      manufactures ~1000 % gradients.
     * Because a node is one shared value, edges incident to it stay consistent
       at the join, so the per-edge metric sum (stage 7) equals the plotted-curve
       sum (`output._profile_series`): **box == curve** by construction. It also
@@ -335,19 +340,20 @@ def graph_smooth_elevation(
     `strength_m` at or below the resample spacing (window ≤ 1) is a no-op and the
     input graph is returned unchanged.
 
-    Vectorization (Story 13.1): the whole field lives in ONE flat float64 array —
-    node values first, then each edge's interior vertices in edge-iteration
-    order — and every Jacobi sweep is a few numpy array passes instead of
-    per-vertex Python loops (~417 whole-graph sweeps at the 50 m default made
-    the loop form the dominant query-side cost on large areas). Results are
-    BIT-IDENTICAL to the scalar formulation, not merely close (pinned by the
-    scalar-reference tests in `tests/unit/test_smoothing.py`), so regression
-    goldens don't move. Two details make that exact: the interior rule keeps
+    Vectorization: the whole field lives in ONE flat float64 array — node values
+    first, then each edge's interior vertices in edge-iteration order — and every
+    Jacobi sweep is a few numpy array passes rather than per-vertex Python loops.
+    The default 50 m strength is ~417 whole-graph sweeps, which makes the loop form
+    the dominant query-side cost on large areas.
+
+    Results are BIT-IDENTICAL to the scalar formulation, not merely close (pinned
+    by the scalar-reference tests in `tests/unit/test_smoothing.py`). Two details
+    are load-bearing for that and must not be "simplified": the interior rule keeps
     the literal `(left + right) / 2` shape, and the per-node neighbour sum
     replicates CPython's builtin `sum()` — which since Python 3.12 is Neumaier
     COMPENSATED summation, not naive sequential adds — via round-by-round
-    compensated accumulation (round r adds every node's r-th adjacency entry
-    in per-node adjacency order; max-degree rounds total, each a pure array op).
+    compensated accumulation (round r adds every node's r-th adjacency entry in
+    per-node adjacency order; max-degree rounds total, each a pure array op).
 
     Only the elevation component of each `(lat, lon, elev)` triple is touched;
     `(lat, lon)` pass through unchanged. Returns a new MultiDiGraph; the input is
@@ -498,12 +504,13 @@ def graph_deadband_elevation(
     (the `operationalize_graph` single-working-copy optimization; safe here because
     each edge's elevations are read into a local list before being written back).
 
-    Not vectorized (Story 14.2): the transform is off by default
-    (`ELEVATION_DEADBAND_DEFAULT_M == 0`, early-return), and even active its cost
-    is the sequential hysteresis scan + the per-point `(lat, lon, elev)` tuple
-    rebuild — neither vectorizable without the deferred array-edge contract (Q4).
-    A flat-interp variant was measured *slower* (the flat machinery cost more than
-    the minority interp it replaced), so this stays scalar and bit-identical.
+    Deliberately **not** vectorized, unlike the rest of this module: the transform
+    is off by default (`ELEVATION_DEADBAND_DEFAULT_M == 0`, early-return), and even
+    active its cost is the sequential hysteresis scan plus the per-point
+    `(lat, lon, elev)` tuple rebuild — neither is vectorizable while edges carry
+    their vertices as tuple lists rather than arrays. A flat-interp variant
+    measured *slower*: the flat machinery cost more than the minority interpolation
+    it replaced.
     """
     if deadband_m <= 0.0:
         return graph
@@ -551,7 +558,7 @@ def _deadband_profile(elevs: list[float], deadband_m: float) -> list[float]:
 def _collect_linestrings(
     graph: nx.MultiDiGraph,
 ) -> tuple[list[tuple[int, int, int, dict[str, object]]], np.ndarray, np.ndarray]:
-    """Gather every edge's LineString coords into ONE flat array (Story 14.2 vectorization primitive).
+    """Gather every edge's LineString coords into ONE flat array.
 
     Returns `(meta, coords, offs)` where `meta[e] = (u, v, k, data)` in edge
     iteration order, `coords` is the `(V, 2)` float64 array of all vertices from

@@ -12,9 +12,9 @@
       → resample_polylines_flat (stage 4)      + short-edge prune guard
       → sample_elevation     (stage 5)         + finite-elevation guard
 
-Stages 3-4 are **fused** (Story 16.2): the orchestrator carries the polylines as
-flat coordinate arrays (`smoothing.FlatPolylines`) across the two stages and the
-output graph is built once. `smooth_polylines` / `resample_edges` remain the pure
+Stages 3-4 are **fused**: the orchestrator carries the polylines as flat
+coordinate arrays (`smoothing.FlatPolylines`) across the two stages and the
+output graph is built once. `smooth_polylines` / `resample_edges` are the pure
 graph-in/graph-out stage functions for tests and external callers, wrapping the
 same internals. Stage 5 runs `inplace=True` — `attach_elevation` owns the graph.
 
@@ -28,7 +28,8 @@ edge-attribute contract (`geometry`, `vertices_resampled` with raw elevation,
 called by `cli/query.py` — deliberately not in the setup pipeline. That keeps
 the cache smoothing-independent: `--elevation-smoothing` /
 `--elevation-deadband` stay free query knobs and the cache key need not
-include them.
+include them. Stage 8 (climb detection) and stage 9 (climb-graph contraction)
+are query-side too, downstream of `operationalize_graph`.
 
 **Difficulty-cap policy (Architecture §Cat 3b + §Cat 4b).** Stages 1-5 are
 cached parameter-independent over `difficulty_cap` — the cache key omits it.
@@ -49,8 +50,9 @@ stage stays a pure transform under a stated input contract):
 - `_assert_finite_elevations`: post-stage-5 elevation must be finite on every
   vertex; non-finite → `PipelineContractError` naming the offending edge.
 
-Stage 8 (climb detection) and stage 9 (climb-graph contraction) wire on the
-query side in Epic 3, downstream of `operationalize_graph`.
+This package's raw bytes are part of the prepared-cache key
+(`cache._PIPELINE_CONTENT_GLOBS`), so any edit here — comments included —
+re-keys subsequent setup runs.
 """
 
 from __future__ import annotations
@@ -116,15 +118,15 @@ def run_setup_stages(
     Wires the five stage functions with four orchestrator-level inter-stage
     contract guards (see module docstring for the full sequence and rationale).
     Elevation smoothing/deadband (stage 6) and per-edge metrics (stage 7) are
-    query-side now (Story 6.3) — see `operationalize_graph`.
+    query-side — see `operationalize_graph`.
 
     Args:
         area: search area to ingest (drives OSM fetch + DEM coverage check).
         config: per-run knobs — `untagged_policy` (passed to `filter_trails`)
             and `dem_path` (passed to `sample_elevation`).
-        progress: optional stage-timing seam (Story 11.1, FR33) — each stage
-            announces start/elapsed through it and records into its `timings`
-            dict. `None` (the default) is silent, preserving existing callers.
+        progress: optional stage-timing seam (FR33) — each stage announces
+            start/elapsed through it and records into its `timings` dict. `None`
+            (the default) is silent.
 
     Returns:
         A `networkx.MultiDiGraph` with the raw post-stage-5 edge-attribute
@@ -176,10 +178,10 @@ def build_graph_geometry(
     *actual* edge geometry (`pipeline.dem_download.graph_dem_bounds`) before
     `attach_elevation` runs, guaranteeing DEM coverage of every probed vertex.
 
-    Each stage runs inside `progress.stage(...)` (Story 11.1, FR33): the guards
-    are folded into their preceding stage (they cost microseconds — a separate
-    timeline line would be noise). The stage functions themselves stay pure and
-    seam-free; only the orchestrator observes them.
+    Each stage runs inside `progress.stage(...)` (FR33): the guards are folded
+    into their preceding stage (they cost microseconds — a separate timeline line
+    would be noise). The stage functions themselves stay pure and seam-free; only
+    the orchestrator observes them.
 
     Returns a `MultiDiGraph` whose edges carry the post-stage-4 contract
     (`geometry`, `sac_scale`, `highway`, `osm_way_id`) — no `vertices_resampled`
@@ -188,26 +190,28 @@ def build_graph_geometry(
     seam = progress if progress is not None else StageProgress()
     # Named `osm-load`, not `osm-download`: the stage is one Overpass request *plus*
     # osmnx's graph build (JSON parse, truncation, simplification, largest-component),
-    # and on a warm run the request is served from osmnx's HTTP cache — Story 16.1
-    # measured 169.76 s of this stage at r20 with the response already cached, i.e.
-    # essentially all graph-building CPU. Which of the two happened is reported as a
-    # within-stage line by `cli/setup.py:_OsmnxFetchReporter`; a real timing *split*
-    # needs Story 16.4's adapter.
+    # and on a warm run the request is served from osmnx's HTTP cache — so the
+    # measured 169.76 s of this stage at r20 (2026-07-24) was almost entirely
+    # graph-building CPU, with the response already cached. Which of the two
+    # happened is reported as a within-stage line by
+    # `cli/setup.py:_OsmnxFetchReporter`; splitting the *timing* in two would take
+    # an adapter around osmnx's internals.
     with seam.stage("osm-load", note="Overpass fetch (cached responses reused) plus graph build"):
         graph = osm_load(area)
     with seam.stage("trail-filter"):
         graph = filter_trails(graph, untagged_policy, _SETUP_DIFFICULTY_CAP)
         _assert_non_empty(graph, area, untagged_policy)
         graph = _drop_orphan_nodes(graph)
-    # Stages 3-4 fused (Story 16.2): the coordinates stay in flat arrays across
-    # both stages and the graph is built ONCE, instead of stage 3 materializing a
-    # 327k-edge NetworkX + Shapely graph that stage 4 immediately flattens again
-    # (~7.4 s / ~7.8 s of profiled rebuild at r20). The two stage *seams* are
-    # deliberately kept — `polyline-smoothing` times the gather + smooth,
-    # `resampling` the resample + single rebuild — so the timeline, the App's
-    # SETUP_STAGES list, and the e2e stage assertions are unchanged. The public
-    # `smooth_polylines` / `resample_edges` wrap the same two internals, so this
-    # path cannot drift from them.
+    # Stages 3-4 are fused here: the coordinates stay in flat arrays across both
+    # stages and the graph is built ONCE. Don't split them back apart — stage 3
+    # then materializes a 327k-edge NetworkX + Shapely graph that stage 4
+    # immediately flattens again, ~7.4 s / ~7.8 s of pure rebuild at r20
+    # (2026-07-24). The two stage *seams* are deliberately kept —
+    # `polyline-smoothing` times the gather + smooth, `resampling` the resample +
+    # single rebuild — so the timeline, the App's SETUP_STAGES list, and the e2e
+    # stage assertions all still see two stages. The public `smooth_polylines` /
+    # `resample_edges` wrap the same two internals, so this path cannot drift from
+    # them.
     with seam.stage("polyline-smoothing"):
         flat = smooth_polylines_flat(collect_polylines(graph))
     with seam.stage("resampling"):
@@ -233,12 +237,12 @@ def attach_elevation(
     by sizing the raster from `graph_dem_bounds(graph)`. A vertex outside the DEM
     raises `DEMCoverageError` from `sample_elevation`.
 
-    **Consumes `graph`** (Story 16.2): stage 5 runs `inplace=True`, so `graph` is
-    annotated rather than copied (~5.4 s saved on an r20 graph). The only caller is
-    `cli/setup.py` — directly and via `run_setup_stages` — which built the graph
-    itself and hands it straight on to `write_entry`; it never reads a pre-stage-5
-    version. Callers who need the input preserved should call `sample_elevation`
-    directly with its copying default.
+    **Consumes `graph`**: stage 5 runs `inplace=True`, so `graph` is annotated
+    rather than copied (~5.4 s on an r20 graph, 2026-07-24). A caller therefore
+    forfeits `graph` — it is mutated into the post-stage-5 graph. Only safe when
+    the caller owns `graph` exclusively and never reads a pre-stage-5 version of
+    it. Callers who need the input preserved must call `sample_elevation` directly
+    with its copying default.
     """
     seam = progress if progress is not None else StageProgress()
     with seam.stage("elevation-sampling"):
@@ -276,23 +280,20 @@ def operationalize_graph(
         elevation_smoothing_m: graph-Laplacian smoothing strength in meters.
         elevation_deadband_m: deadband hysteresis floor in meters (0 = off).
         consume: when True, reshape `graph` in place instead of copying it first,
-            saving one full-graph `copy()` (~5 s on an r20 graph). The caller then
-            forfeits `graph` — it is mutated into the operational graph. Only safe
-            when the caller owns `graph` exclusively and never reads it again; the
-            sole such caller is `cli/query.py`, which passes a freshly cache-loaded
-            graph it discards after this call. Default False keeps the pure "input
-            never mutated" contract every other caller (and the purity test) relies
-            on. The returned graph is identical either way; only input aliasing
-            differs, so results are byte-for-byte unaffected.
+            saving one full-graph `copy()` (~5 s on an r20 graph, 2026-07-24). The
+            caller then forfeits `graph` — it is mutated into the operational
+            graph. Only safe when the caller owns `graph` exclusively and never
+            reads it again. Default False keeps the pure "input never mutated"
+            contract every other caller (and the purity test) relies on. The
+            returned graph is identical either way; only input aliasing differs.
     """
-    # One working copy, threaded through the three stages `inplace=True`, instead
-    # of a fresh `graph.copy()` inside each (~5 s per copy on an r20 graph — ~10 s
-    # of pure redundant copying eliminated). Output is byte-identical to the
-    # copy-per-stage form: the stages read each edge's vertices into local arrays
-    # before writing back, so mutating one shared copy in sequence is equivalent.
-    # `consume=True` drops even this last top-level copy when the caller owns the
-    # graph and discards it (the query CLI); the default copy preserves the "input
-    # never mutated" contract.
+    # One working copy, threaded through the three stages `inplace=True`, rather
+    # than a fresh `graph.copy()` inside each — that costs ~5 s per copy on an r20
+    # graph (2026-07-24), ~10 s of pure redundant copying. Output is identical to
+    # the copy-per-stage form: the stages read each edge's vertices into local
+    # arrays before writing back, so mutating one shared copy in sequence is
+    # equivalent. `consume=True` drops even this last top-level copy; the default
+    # copy preserves the "input never mutated" contract.
     working = graph if consume else graph.copy()
     working = graph_smooth_elevation(working, elevation_smoothing_m, inplace=True)
     working = graph_deadband_elevation(working, elevation_deadband_m, inplace=True)
@@ -310,10 +311,9 @@ def _assert_non_empty(
     edges under the current `untagged_policy`. Without this guard, downstream
     stages divide by zero (stage 7's `avg_gradient`) with no edge context.
 
-    The area is described by its actual shape (Story 15.2 envelope audit) — a
-    rotated box reports its extents and bearing rather than the inert
-    `radius_km=0`, which would read as a nonsense empty area. A square reports
-    `radius_km=<half-side>` exactly as before.
+    The message describes the area by its actual shape: a rotated box reports its
+    extents and bearing, because such an area's `radius_km` is the inert `0` and
+    would read as a nonsense empty area. A square reports `radius_km=<half-side>`.
     """
     if graph.number_of_edges() == 0:
         half_width_km, half_height_km = area.half_extents_km
@@ -344,9 +344,10 @@ def _drop_orphan_nodes(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
     return a clean subgraph; downstream stages assume every node connects to
     at least one edge.
     """
-    # Build from the kept nodes rather than copy-then-remove (Story 14.2, S3).
-    # Orphans have degree 0, so every edge carries over; node/edge order is
-    # preserved so downstream output is bit-identical.
+    # Build from the kept nodes rather than copy-then-remove: copying the whole
+    # graph only to delete from it is the expensive direction at r20 scale.
+    # Orphans have degree 0, so every edge carries over; node/edge insertion order
+    # is preserved, so downstream output is bit-identical either way.
     orphans = {n for n, deg in graph.degree() if deg == 0}
     out = empty_like(graph, exclude_nodes=orphans)
     for u, v, k, data in graph.edges(data=True, keys=True):
@@ -367,7 +368,7 @@ def _drop_short_edges(graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
     Length probe uses the same local-equirectangular projection as
     `pipeline.smoothing._resample_meters` (cos-of-mean-latitude correction).
     """
-    # Build from kept edges rather than copy-then-remove (Story 14.2, S3).
+    # Build from kept edges rather than copy-then-remove — see `_drop_orphan_nodes`.
     out = empty_like(graph)
     dropped = 0
     for u, v, k, data in graph.edges(data=True, keys=True):
