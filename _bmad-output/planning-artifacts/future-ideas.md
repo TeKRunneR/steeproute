@@ -172,3 +172,4 @@ territory (noted there).
   **Done 2026-07-28:** `--difficulty-cap`, `--l-connector`, `--elevation-deadband`, `--j-max`, `--n`, `--workers`, and the `--iter-budget`/`--stagnation-iters`/`--progress-interval` unset-flag fallbacks all bumped to match real usage; `--start-at-junction` and `--max-descent-slope` got flag-shape simplifications alongside (spec-cli-defaults-and-setup-radius-cap.md).
 * Being able to delete cached areas
 * Add timestamps to osmnx logs, to know how much each step takes
+* Fix code comments
