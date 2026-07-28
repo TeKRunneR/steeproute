@@ -1,4 +1,4 @@
-"""Stdout line classifier — setup + query flavours (App Stories 1.4 / 2.2).
+"""Stdout line classifier — setup + query flavours.
 
 Only `cli_adapter` knows CLI stdout line shapes (architecture-app.md §"The
 load-bearing rule"). This module classifies the three progress flavours of

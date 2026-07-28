@@ -27,9 +27,9 @@ the cache-miss branch downloads; a cache hit touches neither OSM nor the DEM.
 
 The summary block emits the 16-hex `cache_key_hash`, the entry path, and the
 elapsed wall-clock. `--verbose` switches the stdlib `logging` root to DEBUG on
-stderr so the deferred pipeline `logger.debug(...)` and cache `logger.warning(...)`
-calls (Stories 2.5/2.7 deferreds) become visible — as does osmnx's own INFO
-chatter (`_configure_osmnx_logging`).
+stderr so the pipeline's `logger.debug(...)` and the cache's
+`logger.warning(...)` calls become visible — as does osmnx's own INFO chatter
+(`_configure_osmnx_logging`).
 
 Independently of `--verbose`, a cache-miss run reports the Overpass fetch outcome
 as a within-stage line under `osm-load` (`_OsmnxFetchReporter`), because "did this
