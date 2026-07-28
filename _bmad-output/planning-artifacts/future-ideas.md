@@ -167,6 +167,8 @@ territory (noted there).
 * Fix CI ==> actually it's pretty much pointless for a personal tool with no build nor deployment, it should probably just be replaced by pre-commit hooks.
 * ~~Remove area cap: I don't use that for anything, I typically just set it to a very high value so that it doesn't bother me~~
   **Done 2026-07-27:** `--area-cap` removed entirely from the query CLI (spec-remove-area-cap.md, quick-dev). The setup CLI's separate 50 km radius ceiling is unaffected.
-* Change default query CLI values to be closer to what I actually use
+  **Done 2026-07-28:** the setup CLI's separate 50 km radius/dimension ceiling (`_SETUP_MAX_RADIUS_KM`/`validate_setup_area`) is now also removed entirely (spec-cli-defaults-and-setup-radius-cap.md), for the same reason — same treatment, one epic later.
+* ~~Change default query CLI values to be closer to what I actually use~~
+  **Done 2026-07-28:** `--difficulty-cap`, `--l-connector`, `--elevation-deadband`, `--j-max`, `--n`, `--workers`, and the `--iter-budget`/`--stagnation-iters`/`--progress-interval` unset-flag fallbacks all bumped to match real usage; `--start-at-junction` and `--max-descent-slope` got flag-shape simplifications alongside (spec-cli-defaults-and-setup-radius-cap.md).
 * Being able to delete cached areas
 * Add timestamps to osmnx logs, to know how much each step takes

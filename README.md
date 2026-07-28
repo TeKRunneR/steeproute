@@ -56,9 +56,11 @@ for the Chamrousse area in the Belledonne massif:
 uv run steeproute-setup --center 45.12,5.88 --radius 6.5
 
 # 2. Search it for up to N steep, distinct loops -> one HTML + JSON report per route.
+#    (--iter-budget/--stagnation-iters/--n below trade search quality for a quick
+#    first look (seconds, not minutes); drop them to use the full defaults for a
+#    better search that can run up to --time-budget's 600s - see Key parameters below.)
 uv run steeproute --center 45.12,5.88 --radius 6.0 \
-    --difficulty-cap T4 --iter-budget 200000 --stagnation-iters 10000 \
-    --elevation-deadband 1 --j-max 0 --n 3 --seed 42 --output-dir results
+    --iter-budget 200000 --stagnation-iters 10000 --n 3 --seed 42 --output-dir results
 ```
 
 Then open `results/route-1.html` in a browser. Keep the query area a little smaller
@@ -105,14 +107,14 @@ a performance guarantee.
 | `--center` / `--radius` | area center `lat,lon` and radius in km (a `2R x 2R` square) | your area |
 | `--width` / `--height` / `--angle` | area as a rotated rectangle instead of a square — full dimensions in km plus a bearing in degrees | use when the terrain runs diagonally; keeps off-axis valley out of setup |
 | `--theta` | route-level average-slope floor every route must clear | `0.20` — this *is* the steepness bar; raise it for steeper routes, lower it to admit gentler ones |
-| `--difficulty-cap` | SAC hiking-scale ceiling for eligible trails | `T4` (the `T3` default filters out a lot of steep alpine terrain) |
+| `--difficulty-cap` | SAC hiking-scale ceiling for eligible trails | `T4` by default (the tighter `T3` filters out a lot of steep alpine terrain) |
 | `--start-at-junction` | require each route to start at a road/trail junction (a realistic trailhead) rather than mid-trail | off by default; turn it on for routes you'd actually set off on from a road |
-| `--max-descent-slope` | cap how steeply a route may *descend* (windowed, uphill-measured slope) while still allowing steep climbs | `0.4` keeps descents runnable instead of cliff-like; off by default |
-| `--iter-budget` / `--stagnation-iters` | GRASP search budget / stop after this many iterations with no improvement | `1000000` / `200000` — GRASP needs a large budget to converge. Higher value means longer execution, but higher likelihood of convergence. The value required for convergence depends on area size and steep trail density. 1M iterations are usually enough to at least get close to convergence on a radius 20 area with fairly dense trails. |
-| `--elevation-deadband` | drop up/down wiggles smaller than N metres when summing D+/D− | `1` (removes elevation-model noise from the climb totals) |
-| `--n` / `--j-max` | how many routes to return / max segment overlap allowed between them (`0` = fully disjoint) | `3` / `0` |
+| `--max-descent-slope` | cap how steeply a route may *descend* (windowed, uphill-measured slope) while still allowing steep climbs | off (no cap) unless passed; bare `--max-descent-slope` means `0.4`, or pass an explicit value |
+| `--iter-budget` / `--stagnation-iters` | GRASP search budget / stop after this many iterations with no improvement | `1000000` / `200000` by default — GRASP needs a large budget to converge. Higher value means longer execution, but higher likelihood of convergence. The value required for convergence depends on area size and steep trail density. 1M iterations are usually enough to at least get close to convergence on a radius 20 area with fairly dense trails. |
+| `--elevation-deadband` | drop up/down wiggles smaller than N metres when summing D+/D− | `1` by default (removes elevation-model noise from the climb totals) |
+| `--n` / `--j-max` | how many routes to return / max segment overlap allowed between them (`0` = fully disjoint) | `10` / `0` by default; lower `--n` for a quicker look |
 | `--seed` | fixes GRASP's randomness so a run is reproducible | any integer |
-| `--workers` | run independent GRASP restarts across CPU cores | `1` (default, single-process and byte-identical); set to your core count for a stronger search in the same wall-clock. `N>1` is reproducible per `(seed, workers)` but differs by design from single-process |
+| `--workers` | run independent GRASP restarts across CPU cores | `4` by default; `1` runs the single-process path (byte-identical output). `N>1` is reproducible per `(seed, workers)` but differs by design from single-process — lower it if memory is tight (see the memory note above) |
 
 See `uv run steeproute --help` and `uv run steeproute-setup --help` for the full set.
 

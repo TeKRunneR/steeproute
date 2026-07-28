@@ -44,19 +44,22 @@ Planning lives under `_bmad-output/planning-artifacts/`:
   features will arrive (new param vs. separate layer) — only commit to: a
   future change must not silently alter existing goldens, and new behavior
   gets its own regression coverage.
-- Good manual-run / demo / gallery params (CLI defaults are too low for
-  quality output): `--iter-budget 1000000 --stagnation-iters 200000
-  --difficulty-cap T4 --elevation-deadband 1 --j-max 0 --workers 4`.
-  `--j-max 0` for `--n >= 2` on a reasonably large box
-  returns fully segment-disjoint routes (only affects routes 2+, not route 1)
-  — it's a real, valid ceiling value, not a "disable" flag. The area itself is
-  either `--radius R` (centered `2R × 2R` square) or `--width W --height H`
-  (full dimensions), with an optional `--angle` bearing on either; the two
-  spellings are mutually exclusive and both CLIs take the identical set.
-  Do **not** lower `--theta` below its 0.20 default — the
-  route-level average-slope floor is intentionally limiting; that's the whole
-  point of the tool. (The web App's query config form mirrors these as its
-  quality-demo defaults — `cli_adapter/params_schema.py`.)
+- Good manual-run / demo / gallery params: as of 2026-07-28
+  (`spec-cli-defaults-and-setup-radius-cap.md`) `--iter-budget 1000000
+  --stagnation-iters 200000 --difficulty-cap T4 --elevation-deadband 1
+  --j-max 0 --workers 4` are simply the plain query CLI's own defaults — no
+  longer overrides to type by hand. `--j-max 0` for `--n >= 2` on a reasonably
+  large box returns fully segment-disjoint routes (only affects routes 2+,
+  not route 1) — it's a real, valid ceiling value, not a "disable" flag. The
+  area itself is either `--radius R` (centered `2R × 2R` square) or `--width W
+  --height H` (full dimensions), with an optional `--angle` bearing on either;
+  the two spellings are mutually exclusive and both CLIs take the identical
+  set. Do **not** lower `--theta` below its 0.20 default — the route-level
+  average-slope floor is intentionally limiting; that's the whole point of
+  the tool. (The web App's query config form mirrors these; only
+  `--max-descent-slope`/`--start-at-junction` are still genuine App-side
+  overrides of the CLI's own off-by-default state (`None` for the former,
+  `False` for the latter) — `cli_adapter/params_schema.py`.)
 
 ## Scale target
 

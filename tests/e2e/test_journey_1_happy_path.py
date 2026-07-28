@@ -50,3 +50,24 @@ def test_happy_path_writes_validated_reports_and_exits_0(
         # Happy path: every route passed validation, so exit code was 0.
         assert payload["validation"]["passed"] is True
         assert payload["metadata"]["params"]["seed"] == 42  # FR29 seed recorded
+
+
+def test_bare_max_descent_slope_flag_resolves_to_0_4(
+    seeded_cache: pathlib.Path,
+    run_query: Callable[..., Result],
+    tmp_path: pathlib.Path,
+) -> None:
+    """`--max-descent-slope` with no value uses Click's optional-flag-value form
+    (spec-cli-defaults-and-setup-radius-cap.md): bare presence means 0.4, while
+    omitting the flag entirely still means no cap (untouched by this test).
+    """
+    output_dir = tmp_path / "reports"
+    result = run_query(
+        seeded_cache, output_dir, seed=42, extra_args=["--max-descent-slope"]
+    )
+
+    assert result.exit_code == 0, result.output
+    json_files = sorted(output_dir.glob("route-*.json"))
+    assert json_files, "expected at least one JSON sidecar"
+    payload = json.loads(json_files[0].read_text(encoding="utf-8"))
+    assert payload["metadata"]["params"]["max_descent_slope"] == 0.4

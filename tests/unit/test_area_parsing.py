@@ -13,7 +13,6 @@ from steeproute.cli._shared import (
     ensure_output_dir,
     is_verbose,
     resolve_area,
-    validate_setup_area,
     validate_solver_options,
 )
 from steeproute.cli.query import cli as query_cli
@@ -181,41 +180,6 @@ def test_resolve_area_rejects_out_of_range_center() -> None:
     with pytest.raises(BadCLIArgError) as exc_info:
         _resolve(radius=5.0, center=(95.0, 0.0))
     assert "latitude" in exc_info.value.user_message
-
-
-# --- validate_setup_area: shape-aware setup ceiling (Story 15.3 AC #5) ---
-
-
-def test_validate_setup_area_accepts_at_the_ceiling() -> None:
-    """The 50 km half-side ceiling is inclusive, unchanged from Story 2.8."""
-    validate_setup_area(_resolve(radius=50.0))
-
-
-def test_validate_setup_area_rejects_radius_above_ceiling() -> None:
-    """Square wording and threshold are unchanged (byte-identical to pre-Epic-15)."""
-    with pytest.raises(BadCLIArgError) as exc_info:
-        validate_setup_area(_resolve(radius=60.0))
-    msg = exc_info.value.user_message
-    assert msg == "--radius 60 km exceeds the steeproute-setup ceiling of 50 km."
-
-
-@pytest.mark.parametrize(
-    ("width", "height", "flag"),
-    [(120.0, 10.0, "--width"), (10.0, 120.0, "--height")],
-)
-def test_validate_setup_area_rejects_oversize_dimension(
-    width: float, height: float, flag: str
-) -> None:
-    """AC #5: the ceiling generalizes per dimension, expressed as a full 100 km span."""
-    with pytest.raises(BadCLIArgError) as exc_info:
-        validate_setup_area(_resolve(width=width, height=height))
-    msg = exc_info.value.user_message
-    assert msg.startswith(f"{flag} 120 km exceeds the steeproute-setup ceiling of 100 km.")
-
-
-def test_validate_setup_area_accepts_a_long_thin_rotated_box() -> None:
-    """A 100x20 km box is exactly the square ceiling's span — the point of the epic."""
-    validate_setup_area(_resolve(width=100.0, height=20.0, angle=45.0))
 
 
 # --- validate_solver_options: §Cat 10 CLI-boundary guards (Story 3.11 review) ---

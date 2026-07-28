@@ -103,16 +103,18 @@ def build_query_argv(
     """Build the `steeproute` (query) argv for a query job.
 
     Every exposed field is always emitted explicitly (unlike
-    `build_setup_argv`'s only-non-default style) — with ~20 flags whose App
-    default deliberately differs from the CLI default (the quality-demo
-    overrides, AGENTS.md), a "skip if default" rule would have to know which
-    default applies per-flag and is a needless way to reintroduce the bug this
-    story's `resolve_query_defaults` seam exists to prevent. A `None` field
+    `build_setup_argv`'s only-non-default style) — a "skip if default" rule
+    would have to know which default applies per-flag (most now match the
+    plain CLI default 1:1, but `max_descent_slope`/`start_at_junction` still
+    deliberately differ — the App's two quality-demo overrides, AGENTS.md) and
+    is a needless way to reintroduce the bug this story's
+    `resolve_query_defaults` seam exists to prevent. A `None` field
     (unset) resolves to the App's actual default via
     `params_schema.resolve_query_defaults` — the single place that mapping
-    lives — except `--seed` and `--max-descent-slope`, whose CLI meaning is
-    itself "omit the flag" (unseeded / descent cap disabled), so those two are
-    only emitted when actually set.
+    lives — except `--seed`, `--max-descent-slope`, and `--start-at-junction`,
+    whose CLI meaning is itself "omit the flag" (unseeded / descent cap
+    disabled / no junction constraint), so those three are only emitted when
+    actually set/true.
 
     `output_dir` MUST be a per-job path — the CLI's own `--output-dir` default
     (`./results`) is relative to the App server's cwd and would collide across

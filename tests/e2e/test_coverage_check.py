@@ -128,6 +128,34 @@ def _invoke_query(
     return runner.invoke(query_cli, args, catch_exceptions=False)
 
 
+# Pre-2026-07-28 effective defaults (spec-cli-defaults-and-setup-radius-cap.md),
+# pinned here for the same reason `tests/e2e/conftest.py::run_query` pins them:
+# this file builds its own query argv independently of that shared fixture, so
+# it needs its own copy of the baseline or every query invocation below would
+# silently pick up the new iter-budget/stagnation-iters/etc. defaults (2000/100
+# -> 1_000_000/200_000 alone turns a few-second call into ~90s).
+_BASELINE_SOLVER_ARGS: list[str] = [
+    "--difficulty-cap",
+    "T3",
+    "--l-connector",
+    "200",
+    "--elevation-deadband",
+    "0",
+    "--j-max",
+    "0.30",
+    "--n",
+    "5",
+    "--iter-budget",
+    "2000",
+    "--stagnation-iters",
+    "100",
+    "--workers",
+    "1",
+    "--progress-interval",
+    "5.0",
+]
+
+
 def _query_args(
     cache_dir: pathlib.Path,
     *,
@@ -141,6 +169,7 @@ def _query_args(
         f"{radius_km}",
         "--cache-dir",
         str(cache_dir),
+        *_BASELINE_SOLVER_ARGS,
     ]
 
 
@@ -329,3 +358,21 @@ def test_query_no_osm_age_warning_on_fresh_cache_hit(tmp_path: pathlib.Path) -> 
     # No warning fires for a fresh entry — neither phrase appears on stderr.
     assert "OSM extract for this cache entry" not in stderr
     assert "steeproute-setup --force-refresh" not in stderr
+
+
+# --- Setup-side radius/dimension ceiling removed (spec-cli-defaults-and- ----
+# --- setup-radius-cap.md, 2026-07-28) ---------------------------------------
+
+
+def test_setup_accepts_a_radius_far_above_the_former_ceiling(tmp_path: pathlib.Path) -> None:
+    """The setup CLI's former 50 km `_SETUP_MAX_RADIUS_KM` ceiling is gone.
+
+    `_osm_load_from_fixture`/`_resolve_dem_from_fixture` ignore the requested
+    area and always return the small committed fixture, so this only exercises
+    CLI-boundary validation, not a real 200 km fetch — exactly what's needed to
+    pin "no longer rejected on size grounds" (I/O matrix) without a real
+    Overpass/DEM request.
+    """
+    seed = _seed_setup(tmp_path, radius_km=200.0)
+    assert seed.exit_code == 0, seed.output
+    assert "ceiling" not in seed.output

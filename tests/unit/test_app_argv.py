@@ -97,8 +97,10 @@ def test_query_argv_includes_area_and_output_dir() -> None:
 
 
 def test_query_argv_unset_fields_resolve_to_quality_demo_defaults() -> None:
-    # All-None QueryParams() must NOT fall back to the CLI's own low defaults —
-    # the App's quality-demo overrides must be what actually gets passed.
+    # All-None QueryParams() must resolve to these quality-demo numbers. As of
+    # 2026-07-28 (spec-cli-defaults-and-setup-radius-cap.md) these are simply
+    # the plain query CLI's own defaults — no more App-side override — but the
+    # values themselves, and this test pinning them, are unchanged.
     argv = _query_argv(AreaSpec(center=(1.0, 2.0), radius_km=1.0), QueryParams())
     assert argv[argv.index("--iter-budget") + 1] == "1000000"
     assert argv[argv.index("--stagnation-iters") + 1] == "200000"
@@ -111,7 +113,7 @@ def test_query_argv_unset_fields_resolve_to_quality_demo_defaults() -> None:
 def test_query_argv_unset_fields_resolve_to_cli_defaults_when_unmentioned() -> None:
     argv = _query_argv(AreaSpec(center=(1.0, 2.0), radius_km=1.0), QueryParams())
     assert argv[argv.index("--theta") + 1] == "0.2"
-    assert argv[argv.index("--n") + 1] == "5"
+    assert argv[argv.index("--n") + 1] == "10"
     assert argv[argv.index("--untagged-trails") + 1] == "include"
 
 

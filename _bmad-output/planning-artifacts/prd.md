@@ -349,23 +349,23 @@ All configuration via CLI flags. No config file in v1 (N=1, flag count manageabl
 |---|---|---|
 | `--theta` | 0.20 | Route-level average-slope floor, `(D+ + D−)/length` |
 | `--min-climb-slope` | 0.20 | Min running-average uphill slope (`d_plus/length`) for a segment to count as a climb |
-| `--difficulty-cap` | T3 | SAC difficulty ceiling |
-| `--l-connector` | 200m | Short-connector reuse-exemption threshold: connectors shorter than this may be reused (bidirectional); all other segments are once-per-route, undirected |
+| `--difficulty-cap` | T4 | SAC difficulty ceiling |
+| `--l-connector` | 50m | Short-connector reuse-exemption threshold: connectors shorter than this may be reused (bidirectional); all other segments are once-per-route, undirected |
 | `--min-climb-ground-length` | 300m | Minimum climb 2D arc length |
-| `--j-max` | 0.30 | Top-N pairwise Jaccard ceiling |
-| `--n` | 5 | Target result count |
+| `--j-max` | 0 | Top-N pairwise Jaccard ceiling |
+| `--n` | 10 | Target result count |
 | `--untagged-trails` | `include` | Policy for OSM trails without sac_scale |
 | `--start-at-junction` | off | Constrain each route's start endpoint to a road/trail junction (FR31) |
 | `--max-descent-slope` | off (None) | Direction-aware cap: forbid descending a segment whose windowed uphill slope exceeds this, while it stays eligible as a climb (FR32). The distance window is a fixed internal constant (not a separate flag) for v1; may be surfaced later if needed. |
 | `--elevation-smoothing` | (meters; tuned) | Strength of the global elevation smoothing (graph-Laplacian diffusion), in meters — one canonical profile feeds solver, metric box, and plotted curve |
-| `--elevation-deadband` | 0 (off) | Hysteresis floor (m): flattens sub-floor up/down reversals out of the elevation profile, reshaping which segments clear the slope thresholds (a route-selection control, not a noise reducer) |
+| `--elevation-deadband` | 1 (m) | Hysteresis floor (m): flattens sub-floor up/down reversals out of the elevation profile, reshaping which segments clear the slope thresholds (a route-selection control, not a noise reducer) |
 
 **Solver**
 
 | Flag | Default | Description |
 |---|---|---|
 | `--seed` | unseeded | Random seed for GRASP |
-| `--iter-budget` | TBD (architecture) | Max GRASP iterations |
+| `--iter-budget` | 1,000,000 | Max GRASP iterations |
 | `--time-budget` | 10 min | Wall-clock budget (soft) |
 
 **Output / meta**
@@ -373,7 +373,7 @@ All configuration via CLI flags. No config file in v1 (N=1, flag count manageabl
 | Flag | Default | Description |
 |---|---|---|
 | `--output-dir` | `./results/` | Output directory for HTML + JSON |
-| `--progress-interval` | TBD (architecture) | Seconds between progress prints |
+| `--progress-interval` | 1s | Seconds between progress prints |
 | `--verbose` / `--quiet` | off | Log verbosity |
 | `--version`, `--help` | — | Standard meta |
 
@@ -416,7 +416,7 @@ Post-v1 feature ideas are collected in a running backlog at [future-ideas.md](fu
 
 Flagged here for visibility, not decided:
 
-- `--iter-budget` and `--progress-interval` defaults depend on empirical measurement of GRASP iteration cost on real Grenoble queries. Set during implementation.
+- `--iter-budget` and `--progress-interval` defaults were set from empirical measurement of GRASP iteration cost on real Grenoble queries (1,000,000 / 1s respectively, `spec-cli-defaults-and-setup-radius-cap.md`, 2026-07-28).
 - `--time-budget` enforcement semantics (checked between iterations? between restarts?) defined during implementation.
 - CLI framework choice (`click` vs. `argparse` vs. `typer`) affects implementation ergonomics but not the flag surface. Defer.
 
@@ -447,7 +447,7 @@ Consolidated from the brainstorming risk register and PRD commitments. Top risks
 | **Validation rigor insufficient.** Previous attempt's exact failure mode — can't tell good output from bad output. | High | Explicit Validation & Quality Commitments (constraint validation, heuristic-quality bound, regression protection). Appendix A captures strategy detail for architecture phase. |
 | **Cliff-bias in top-5.** Phantom elevation from GPS-drift-induced DEM sampling error over-ranks cliff-adjacent routes. | High | v1: README "Known Limitations" + optional per-result high-gradient flag in HTML metadata. Full cliff detection + penalty deferred to v2. |
 | **Parameter tuning affects entire solution space.** `θ`, `min_climb_ground_length`, `L_connector`, `J_max` interact in non-obvious ways. | High | All parameters configurable via CLI flags with documented defaults. Dev-time diagnostic visualization of detected climbs (scope TBD in architecture). |
-| **Compute budget blown on large areas.** Preprocessing or solving on oversized areas consumes hours without convergence. | High | Setup-side hard radius ceiling bounds any single prepared area; query is bounded to whatever was prepared (no cross-region stitching). Progress reporting. Manual kill preserves best-so-far. Soft `--time-budget`. |
+| **Compute budget blown on large areas.** Preprocessing or solving on oversized areas consumes hours without convergence. | High | Query is bounded to whatever was prepared (no cross-region stitching). Progress reporting. Manual kill preserves best-so-far. Soft `--time-budget`. (The setup-side hard radius/dimension ceiling that used to bound any single prepared area was removed 2026-07-28, `spec-cli-defaults-and-setup-radius-cap.md`, for the same single-trusted-user reason the query-side `--area-cap` was removed 2026-07-27 — this mitigation no longer applies.) Severity stays High rather than being downgraded: this is a deliberate, accepted tradeoff for N=1 (the user chose to remove the ceiling rather than have it "bother" them), not a claim the underlying risk shrank — see `deferred-work.md`'s reopened DEM-mosaic-memory row for the concrete, now-larger-scale instance of it. |
 | **OSM trail graph disconnects.** Some Alpine areas have disconnected trail components, causing silent route oddities. | Medium | Connected-component analysis at preprocessing time; component sizes reported to the user. |
 
 **Market risks:** not applicable (N=1, no market).

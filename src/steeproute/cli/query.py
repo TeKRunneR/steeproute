@@ -102,9 +102,11 @@ from steeproute.validator import validate
 
 # Concrete fallback when `--iter-budget` is unset: the iteration ceiling that
 # bounds a solve once neither `--time-budget` nor `--stagnation-iters` has fired
-# first (§Cat 5e). Sized to find routes on a real Grenoble query while staying
-# well inside NFR1's 10-minute design target; tunable post-baseline.
-DEFAULT_ITER_BUDGET: int = 2000
+# first (§Cat 5e). Matches the user's real manual-run/demo/gallery params
+# (AGENTS.md §Solver / GRASP) rather than a fast-iteration smoke-test value —
+# large enough for quality output on a real Grenoble query, bounded by
+# NFR1's 10-minute design target via `--time-budget` (600s default).
+DEFAULT_ITER_BUDGET: int = 1_000_000
 
 
 @click.command(

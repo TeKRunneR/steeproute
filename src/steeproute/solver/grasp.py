@@ -142,16 +142,15 @@ from steeproute.solver.reuse import (
 __all__ = ["STAGNATION_ITERS_DEFAULT_PLACEHOLDER", "AdjacencyTable", "GraspSolver", "RCL_SIZE"]
 
 
-STAGNATION_ITERS_DEFAULT_PLACEHOLDER: int = 100
+STAGNATION_ITERS_DEFAULT_PLACEHOLDER: int = 200_000
 """Default `--stagnation-iters` window when the flag is unset (Story 7.2).
 
-PROVISIONAL — tune empirically before release by observing convergence behaviour
-on the metamorphic suite, the `test_time_budget.py` / `test_stagnation.py`
-integration tests, and real Grenoble-fixture runs. 100 consecutive iterations
-without a top-N total-objective improvement is a first guess: large enough that
-a still-productive search isn't cut short, small enough that a plateaued search
-on a sparse area stops well inside NFR1's budget. `--stagnation-iters 0` disables
-the check entirely (Architecture §Cat 5e).
+Matches the user's real manual-run/demo/gallery params (AGENTS.md §Solver /
+GRASP) rather than the original fast-iteration-test placeholder: large enough
+that a still-productive search at the 1_000_000 default `--iter-budget` isn't
+cut short, small enough that a plateaued search on a sparse area still stops
+well inside NFR1's budget. `--stagnation-iters 0` disables the check entirely
+(Architecture §Cat 5e).
 """
 
 

@@ -77,7 +77,6 @@ from steeproute.cli._shared import (
     run_entry_point,
     untagged_trails_option,
     validate_dem_fetch_workers,
-    validate_setup_area,
     verbose_option,
     width_option,
 )
@@ -133,13 +132,17 @@ def cli(
 ) -> int:
     configure_cli_logging(verbose=verbose)
 
-    # Area resolution + numeric checks first (pure arithmetic, no I/O) so a typo
-    # like `--radius 5000` — or a `--width` with no `--height` — is rejected before
-    # any cache or network work.
+    # Area resolution + numeric checks first (pure arithmetic, no I/O) so a
+    # malformed area — no size, both spellings, a `--width` with no `--height`,
+    # a non-finite/non-positive dimension — is rejected before any cache or
+    # network work. No upper size ceiling (this class of ceiling was already
+    # removed query-side 2026-07-27, `spec-remove-area-cap.md`; the setup-side
+    # `_SETUP_MAX_RADIUS_KM` ceiling followed the same pattern 2026-07-28,
+    # `spec-cli-defaults-and-setup-radius-cap.md`): a large
+    # `--radius`/`--width`/`--height` is not rejected on size grounds.
     area = resolve_area(
         center=center, radius_km=radius, width_km=width, height_km=height, angle_deg=angle
     )
-    validate_setup_area(area)
     validate_dem_fetch_workers(dem_fetch_workers)
 
     cache_root = resolve_cache_root(cache_dir)

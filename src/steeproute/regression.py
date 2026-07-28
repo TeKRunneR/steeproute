@@ -133,6 +133,16 @@ _PINNED_PARAMS: dict[str, str] = {
     "--iter-budget": "2000",
     "--stagnation-iters": "100",
     "--time-budget": "100000",
+    # Pinned explicitly (2026-07-28, spec-cli-defaults-and-setup-radius-cap.md):
+    # this flag was previously left to the CLI default, which was `1`
+    # (single-process, deterministic) at the time every committed golden here
+    # was baked — but was never actually *pinned*, so when the CLI default
+    # itself was bumped to `4` (real usage), these fixtures silently started
+    # running the entirely different parallel-GRASP path and every golden
+    # "drifted". `--workers 1` restores the single-process path these goldens
+    # were always meant to pin, closing the gap the module docstring's own
+    # "never inherited from CLI defaults" rule was supposed to prevent.
+    "--workers": "1",
 }
 
 # Realistic-tier budgets: the regime the tool is actually used at (~200k iters /

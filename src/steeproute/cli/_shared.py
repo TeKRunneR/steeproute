@@ -14,10 +14,7 @@ from steeproute.cache import Manifest
 from steeproute.errors import BadCLIArgError, PreExecutionError
 from steeproute.models import Area
 from steeproute.pipeline.dem_download import DEFAULT_DEM_FETCH_WORKERS
-from steeproute.pipeline.smoothing import (
-    ELEVATION_DEADBAND_DEFAULT_M,
-    ELEVATION_SMOOTHING_DEFAULT_M,
-)
+from steeproute.pipeline.smoothing import ELEVATION_SMOOTHING_DEFAULT_M
 
 _verbose: bool = False
 
@@ -108,27 +105,6 @@ class LatLonParamType(click.ParamType):
 
 
 LAT_LON = LatLonParamType()
-
-
-def _is_radius_shorthand(area: Area) -> bool:
-    """True iff `area` was spelled with `--radius` rather than `--width`/`--height`.
-
-    The discriminator for **which flag a diagnostic names**, and deliberately not
-    `Area.is_square`: `is_square` compares the two extents (so a NaN radius, where
-    `nan == nan` is False, would be misreported as a width problem) and it folds in
-    the bearing (so a rotated *square* — a legitimate `--radius --angle` pair —
-    would name a `--width` the user never typed).
-
-    **Deliberately duplicated with `pipeline/osm.py::_validate_area`**, which
-    applies the identical rule as setup's own backstop for direct (non-CLI)
-    pipeline callers. Since Story 15.3 the CLI validates first, so on the CLI path
-    the pipeline copy is unreachable and this one owns all user-facing wording.
-    They were not merged because the only neutral home is inside
-    `_PIPELINE_CONTENT_GLOBS` (`pipeline/**`, `models.py`), so touching it at all
-    re-keys every cache entry on disk — too high a price for de-duplicating one
-    predicate. Keep the two in step; if the rule changes, change both.
-    """
-    return area.half_width_km is None and area.half_height_km is None
 
 
 def resolve_area(
@@ -243,57 +219,6 @@ def _validate_center(center: tuple[float, float]) -> None:
         raise BadCLIArgError(f"--center latitude {lat} is outside [-90, 90]")
     if not -180.0 <= lon <= 180.0:
         raise BadCLIArgError(f"--center longitude {lon} is outside [-180, 180]")
-
-
-# Setup-side hard ceiling on each area half-extent (km), routed in via deferred-work
-# D8 from Story 2.1. A 2*r bbox at r=50 km still spans 10_000 km^2 — far above the
-# Grenoble Alps personal-tool use case but small enough to catch obvious typos
-# (e.g. `--radius 5000`) that would otherwise hand osmnx an Overpass query that
-# either times out or exceeds the 1 GB response cap. The query CLI has no
-# equivalent ceiling of its own — this constant carries the only area-size
-# safety net.
-_SETUP_MAX_RADIUS_KM: float = 50.0
-
-# Shared by both branches of `validate_setup_area`, so the wording has to fit a
-# `--radius` square and a `--width`/`--height` rectangle alike: "dimensions", not
-# "radii", and no claim about *how* the area is fetched (a square goes to Overpass
-# as a bounding box, a rotated rectangle as a `poly:` filter — Story 15.2).
-_SETUP_CEILING_DETAIL: str = (
-    "Setup downloads the whole area from Overpass in one request; very large "
-    "dimensions hit the Overpass timeout / 1 GB response cap. Split the "
-    "area into smaller prepared regions instead."
-)
-
-
-def validate_setup_area(area: Area) -> None:
-    """Setup-side size ceiling, applied per dimension (Story 15.3 generalization).
-
-    The ceiling is a **half-extent** of `_SETUP_MAX_RADIUS_KM`, so the square
-    wording and threshold are exactly Story 2.8's; a rectangle is reported in the
-    full dimensions the user typed, against the same box span expressed as
-    `2 × _SETUP_MAX_RADIUS_KM`. A `--radius 50` square and a `--width 100` box are
-    the same span, so the two phrasings describe one ceiling.
-
-    Finiteness and positivity are already enforced by `resolve_area`; this is
-    purely the upper bound. Bearing-independent — rotation does not change how
-    much of the world a dimension spans.
-    """
-    half_width_km, half_height_km = area.half_extents_km
-    if _is_radius_shorthand(area):
-        if area.radius_km > _SETUP_MAX_RADIUS_KM:
-            raise BadCLIArgError(
-                f"--radius {area.radius_km:g} km exceeds the steeproute-setup ceiling of "
-                f"{_SETUP_MAX_RADIUS_KM:g} km.",
-                detail=_SETUP_CEILING_DETAIL,
-            )
-        return
-    for flag, half_extent_km in (("--width", half_width_km), ("--height", half_height_km)):
-        if half_extent_km > _SETUP_MAX_RADIUS_KM:
-            raise BadCLIArgError(
-                f"{flag} {2.0 * half_extent_km:g} km exceeds the steeproute-setup ceiling of "
-                f"{2.0 * _SETUP_MAX_RADIUS_KM:g} km.",
-                detail=_SETUP_CEILING_DETAIL,
-            )
 
 
 def validate_dem_fetch_workers(dem_fetch_workers: int) -> None:
@@ -532,7 +457,7 @@ min_climb_slope_option = click.option(
 difficulty_cap_option = click.option(
     "--difficulty-cap",
     type=click.Choice(["T1", "T2", "T3", "T4", "T5", "T6"], case_sensitive=False),
-    default="T3",
+    default="T4",
     show_default=True,
     help="SAC difficulty ceiling for eligible route segments.",
 )
@@ -540,7 +465,7 @@ difficulty_cap_option = click.option(
 l_connector_option = click.option(
     "--l-connector",
     type=click.FLOAT,
-    default=200.0,
+    default=50.0,
     show_default=True,
     help=(
         "Short-connector reuse-exemption threshold in meters: connectors shorter "
@@ -569,10 +494,17 @@ elevation_smoothing_option = click.option(
     ),
 )
 
+# CLI-flag default only (1.0 m) — deliberately decoupled from
+# `pipeline.smoothing.ELEVATION_DEADBAND_DEFAULT_M` (0.0), which stays a
+# pipeline-content-hashed constant untouched by this change. The CLI default
+# reflects the value the user actually runs with; the pipeline constant is
+# just the function-signature fallback for direct (non-CLI) callers.
+_ELEVATION_DEADBAND_CLI_DEFAULT_M: float = 1.0
+
 elevation_deadband_option = click.option(
     "--elevation-deadband",
     type=click.FLOAT,
-    default=ELEVATION_DEADBAND_DEFAULT_M,
+    default=_ELEVATION_DEADBAND_CLI_DEFAULT_M,
     show_default=True,
     help=(
         "Elevation deadband hysteresis floor in meters: flattens sub-floor up/down "
@@ -584,14 +516,14 @@ elevation_deadband_option = click.option(
 j_max_option = click.option(
     "--j-max",
     type=click.FLOAT,
-    default=0.30,
+    default=0.0,
     show_default=True,
     help="Top-N pairwise Jaccard ceiling (segment-overlap distinctness).",
 )
 
 start_at_junction_option = click.option(
-    "--start-at-junction/--no-start-at-junction",
-    "start_at_junction",
+    "--start-at-junction",
+    is_flag=True,
     default=False,
     show_default=True,
     help=(
@@ -602,20 +534,22 @@ start_at_junction_option = click.option(
 
 max_descent_slope_option = click.option(
     "--max-descent-slope",
-    type=click.FLOAT,
+    is_flag=False,
+    flag_value=0.4,
     default=None,
+    type=click.FLOAT,
     show_default=True,
     help=(
         "Direction-aware descent cap: forbid descending a segment whose windowed "
         "uphill slope exceeds this, while it stays eligible as a climb (opt-in; "
-        "off when unset; FR32)."
+        "off when unset; bare flag means 0.4; FR32)."
     ),
 )
 
 n_option = click.option(
     "--n",
     type=click.INT,
-    default=5,
+    default=10,
     show_default=True,
     help="Target result count (max number of distinct routes returned).",
 )
@@ -641,7 +575,10 @@ iter_budget_option = click.option(
     "--iter-budget",
     type=click.INT,
     default=None,
-    help="Maximum GRASP iterations (default: unlimited until time/stagnation budget hits).",
+    help=(
+        "Maximum GRASP iterations (default: 1000000; --time-budget or "
+        "--stagnation-iters may still end the solve first)."
+    ),
 )
 
 time_budget_option = click.option(
@@ -658,21 +595,21 @@ stagnation_iters_option = click.option(
     default=None,
     help=(
         "Stop after this many consecutive iterations with no top-N improvement; "
-        "0 disables (default: 100, tunable post-baseline)."
+        "0 disables (default: 200000, tunable post-baseline)."
     ),
 )
 
 workers_option = click.option(
     "--workers",
     type=click.INT,
-    default=1,
+    default=4,
     show_default=True,
     help=(
-        "Number of parallel processes for independent GRASP restarts. 1 (default) "
-        "runs the single-process path with byte-identical output; N>1 splits the "
-        "iteration budget across N cores and is reproducible per (seed, workers) but "
-        "differs by design from --workers 1. --time-budget/--stagnation-iters apply "
-        "per worker."
+        "Number of parallel processes for independent GRASP restarts. 1 runs "
+        "the single-process path with byte-identical output; N>1 (default 4) "
+        "splits the iteration budget across N cores and is reproducible per "
+        "(seed, workers) but differs by design from --workers 1. "
+        "--time-budget/--stagnation-iters apply per worker."
     ),
 )
 
@@ -696,17 +633,17 @@ merge_interval_option = click.option(
 )
 
 # Wall-clock seconds between progress prints. A concrete default so a long run is
-# legible out of the box; "tunable post-baseline" per Architecture §Cat 8 — the
-# right cadence depends on typical real-query duration, observed once Epic 7's
-# time/stagnation termination (Story 7.2) lands.
-PROGRESS_INTERVAL_DEFAULT_S: float = 5.0
+# legible out of the box; 1s matches the user's real long-running (iter-budget
+# 1_000_000) invocations, where a coarser cadence would leave stdout looking
+# stalled for minutes at a time.
+PROGRESS_INTERVAL_DEFAULT_S: float = 1.0
 
 progress_interval_option = click.option(
     "--progress-interval",
     type=click.FLOAT,
     default=PROGRESS_INTERVAL_DEFAULT_S,
     show_default=True,
-    help="Seconds between progress prints (tunable post-baseline).",
+    help="Seconds between progress prints.",
 )
 
 # --- Output ---

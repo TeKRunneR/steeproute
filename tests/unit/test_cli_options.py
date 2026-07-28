@@ -151,13 +151,15 @@ def test_verbose_flag_sets_verbose_state_on_setup_cli() -> None:
     """`--verbose` is an eager click callback — state flips even when the body later fails.
 
     The eager-callback contract is "set state during the first parse pass", which
-    runs before the command body raises. We trip the body with a radius above the
-    50 km ceiling (`validate_setup_radius`), which fails before any cache/network
+    runs before the command body raises. We trip the body with a malformed
+    `--center`, which fails `LatLonParamType.convert` before any cache/network
     work — so the assertion stays offline while still proving eager evaluation.
+    (The setup CLI's radius/dimension ceiling this test used to trip was removed
+    2026-07-28, `spec-cli-defaults-and-setup-radius-cap.md`.)
     """
     runner = CliRunner()
-    result = runner.invoke(setup_cli, ["--center", "45.07,6.11", "--radius", "5000", "--verbose"])
-    # The above-ceiling radius raises BadCLIArgError, but the eager --verbose
+    result = runner.invoke(setup_cli, ["--center", "abc,def", "--radius", "10", "--verbose"])
+    # The malformed --center raises BadCLIArgError, but the eager --verbose
     # callback has already flipped the global state during parsing.
     assert isinstance(result.exception, BadCLIArgError)
     assert is_verbose() is True
@@ -168,9 +170,12 @@ def test_setup_cli_without_verbose_leaves_state_false() -> None:
     # `False` before this test runs, so the assertion below tests "the eager
     # callback did NOT flip the state without `--verbose`" — not just inertia
     # carried over from a previous test.
-    # Above-ceiling radius fails in the body before any cache/network work, so the
-    # invocation stays offline while still proving the callback didn't flip state.
+    # A malformed --center fails in `LatLonParamType.convert` before any
+    # cache/network work, so the invocation stays offline while still proving
+    # the callback didn't flip state. (Previously tripped via an above-ceiling
+    # `--radius`; that ceiling was removed 2026-07-28,
+    # `spec-cli-defaults-and-setup-radius-cap.md`.)
     runner = CliRunner()
-    result = runner.invoke(setup_cli, ["--center", "45.07,6.11", "--radius", "5000"])
+    result = runner.invoke(setup_cli, ["--center", "abc,def", "--radius", "10"])
     assert isinstance(result.exception, BadCLIArgError)
     assert is_verbose() is False

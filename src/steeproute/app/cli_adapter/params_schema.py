@@ -6,9 +6,12 @@
 The only place the App reads `steeproute.cli.query`'s click `Command` object.
 Introspecting it (rather than hand-listing flags) makes the form/validation
 schema the single source of truth (architecture-app.md §Category 9): field
-names, types, choices, and CLI defaults all come straight from the click
-`Option` objects that `cli/_shared.py` already defines, so a CLI flag
-rename/add/remove is caught here instead of silently drifting the App's form.
+names, types, and choices all come straight from the click `Option` objects
+that `cli/_shared.py` already defines, so a CLI flag rename/add/remove is
+caught here instead of silently drifting the App's form. Defaults come from
+`param.default` for every field except `iter_budget`/`stagnation_iters`,
+whose real "unset" resolution isn't expressible as a click default (see
+`_UNSET_FLAG_FALLBACKS`).
 
 `QueryParams` (models.py) mirrors the exposed field *names and types* by hand
 (FastAPI needs a concrete pydantic model); every field there defaults to
@@ -26,7 +29,9 @@ from typing import Any, Literal
 
 import click
 
+from steeproute.cli.query import DEFAULT_ITER_BUDGET
 from steeproute.cli.query import cli as _query_cli
+from steeproute.solver.grasp import STAGNATION_ITERS_DEFAULT_PLACEHOLDER
 
 FieldType = Literal["float", "int", "string", "bool", "choice"]
 
@@ -58,24 +63,43 @@ _EXCLUDED_FIELDS: frozenset[str] = frozenset(
     }
 )
 
-# Quality-demo overrides (AGENTS.md §Solver / GRASP): the App's defaults are
-# the high-quality manual-run params, not the CLI's fast-iteration defaults.
-# Every field not listed here keeps its CLI default unchanged.
+# App-only overrides (AGENTS.md §Solver / GRASP). Every field not listed here
+# keeps its CLI default unchanged. As of 2026-07-28 the plain query CLI's own
+# defaults were bumped to match these quality-demo numbers (`difficulty_cap`,
+# `elevation_deadband`, `j_max`, `workers` all dropped from here — they're
+# just the click-level CLI default now, read straight off `param.default`, no
+# override needed).
 #
-# `max_descent_slope` (0.4) and `start_at_junction` (on) are steep-route-tool
-# defaults corrected in Story app-4-2: the CLI ships them off/false, but the
-# whole point of this tool is steep routes, so the App defaults them on. These
-# override the CLI's None/False through the same `resolve_query_defaults` seam
-# `build_query_argv` reads, so no argv.py change is needed.
+# `max_descent_slope` (0.4) and `start_at_junction` (on) are the two genuine,
+# intentional divergences left: steep-route-tool defaults from Story app-4-2.
+# The CLI still ships them off/None (opt-in flags with a real meaning when
+# absent), but the whole point of this tool is steep routes, so the App
+# defaults them on. These override the CLI's None/False through the same
+# `resolve_query_defaults` seam `build_query_argv` reads, so no argv.py change
+# is needed.
 _QUALITY_DEFAULTS: dict[str, Any] = {
-    "iter_budget": 1_000_000,
-    "stagnation_iters": 200_000,
-    "difficulty_cap": "T4",
-    "elevation_deadband": 1.0,
-    "j_max": 0.0,
-    "workers": 4,
     "max_descent_slope": 0.4,
     "start_at_junction": True,
+}
+
+# `iter_budget`/`stagnation_iters` are NOT literal click-option defaults —
+# both flags keep `default=None` at the click level (an explicit "unset"
+# sentinel `cli/query.py`/`solver/grasp.py` resolve to a concrete ceiling only
+# inside the CLI body, not via click's own default machinery), so introspecting
+# `param.default` for either would report `None` instead of the number a bare
+# invocation actually runs with. These two read straight from the same
+# constants `cli/query.py`/`solver/grasp.py` resolve the unset flag to, so this
+# module can't drift from what the plain CLI actually does — the analogue of
+# `param.default` for a flag whose real default isn't expressible as one. The
+# two constants deliberately come from two different layers — `iter_budget`'s
+# fallback (`DEFAULT_ITER_BUDGET`) lives in `cli.query` itself (the module this
+# schema already treats as its source of truth); `stagnation_iters`'s
+# (`STAGNATION_ITERS_DEFAULT_PLACEHOLDER`) lives in `solver.grasp`, since that's
+# where the query CLI's own `None`-resolution logic (`cli/query.py`) reads it
+# from — this module simply follows the same indirection, not a new one.
+_UNSET_FLAG_FALLBACKS: dict[str, Any] = {
+    "iter_budget": DEFAULT_ITER_BUDGET,
+    "stagnation_iters": STAGNATION_ITERS_DEFAULT_PLACEHOLDER,
 }
 
 
@@ -123,11 +147,14 @@ def query_params_schema() -> list[SchemaField]:
         if name is None or name in _EXCLUDED_FIELDS:
             continue
         choices = tuple(param.type.choices) if isinstance(param.type, click.Choice) else None
+        default = _QUALITY_DEFAULTS.get(
+            name, _UNSET_FLAG_FALLBACKS.get(name, param.default)
+        )
         fields.append(
             SchemaField(
                 name=name,
                 type=_field_type(param),
-                default=_QUALITY_DEFAULTS.get(name, param.default),
+                default=default,
                 help=param.help,
                 choices=choices,
             )

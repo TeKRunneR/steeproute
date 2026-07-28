@@ -123,6 +123,37 @@ def seeded_cache(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
     return cache_root
 
 
+# Pre-change effective defaults for the flags `spec-cli-defaults-and-setup-
+# radius-cap.md` (2026-07-28) bumped, pinned here so every e2e test that omits
+# these flags keeps today's pre-change behavior/runtime instead of silently
+# picking up the new fast-iteration-unfriendly defaults (iter-budget/
+# stagnation-iters alone would jump 2000/100 -> 1_000_000/200_000). Mirrors the
+# pinning discipline `tests/integration/conftest.py`, `tests/benchmarks/
+# conftest.py`, and `regression.py` already use. Placed ahead of each call's
+# `extra_args` in the args list `_invoke` builds, so a per-test override still
+# wins (click resolves a repeated option to its last occurrence).
+_BASELINE_SOLVER_ARGS: list[str] = [
+    "--difficulty-cap",
+    "T3",
+    "--l-connector",
+    "200",
+    "--elevation-deadband",
+    "0",
+    "--j-max",
+    "0.30",
+    "--n",
+    "5",
+    "--iter-budget",
+    "2000",
+    "--stagnation-iters",
+    "100",
+    "--workers",
+    "1",
+    "--progress-interval",
+    "5.0",
+]
+
+
 @pytest.fixture
 def run_query() -> Callable[..., Result]:
     """Return a helper that invokes the query CLI in-process against a seeded cache.
@@ -150,6 +181,7 @@ def run_query() -> Callable[..., Result]:
             str(cache_dir),
             "--output-dir",
             str(output_dir),
+            *_BASELINE_SOLVER_ARGS,
         ]
         if seed is not None:
             args += ["--seed", str(seed)]

@@ -76,6 +76,25 @@ def test_real_ctrl_c_flushes_best_so_far_and_preserves_cache(
         str(output_dir),
         "--seed",
         "42",
+        # Pinned pre-2026-07-28 baseline (spec-cli-defaults-and-setup-radius-cap.md):
+        # this test builds its own subprocess argv rather than going through
+        # `run_query`, so it must pin its own baseline. `--workers 1` is the one
+        # that matters most here — the CLI's own default is now 4, and this test
+        # specifically exercises the single-process `except KeyboardInterrupt`
+        # path (real OS signal -> best-so-far flush), not the separate N>1
+        # `ParallelGraspInterrupted` salvage path.
+        "--difficulty-cap",
+        "T3",
+        "--l-connector",
+        "200",
+        "--elevation-deadband",
+        "0",
+        "--j-max",
+        "0.30",
+        "--n",
+        "5",
+        "--workers",
+        "1",
         # Keep the solve running until interrupted: an iteration ceiling it can't
         # reach, a generous time budget, and stagnation off so it can't converge.
         "--iter-budget",

@@ -142,6 +142,19 @@ def test_query_area_cap_flag_removed() -> None:
     assert "no such option" in result.stderr.lower()
 
 
+def test_query_no_start_at_junction_flag_removed() -> None:
+    """`--start-at-junction` is now a plain presence flag (spec-cli-defaults-and-
+    setup-radius-cap.md): the old `--start-at-junction/--no-start-at-junction`
+    pair's negation spelling is gone outright, not deprecated — unknown-option,
+    exit 2, same treatment as `--area-cap` above.
+    """
+    result = _run_cli(
+        "steeproute", "--center", "45.07,6.11", "--radius", "30", "--no-start-at-junction"
+    )
+    assert result.returncode == 2
+    assert "no such option" in result.stderr.lower()
+
+
 # --- Task 5: query CLI surface ---
 
 
@@ -215,20 +228,6 @@ def test_setup_dem_path_flag_removed() -> None:
     )
     assert result.returncode == 2, result.stderr
     assert "no such option" in result.stderr.lower()
-
-
-def test_setup_radius_above_ceiling_exits_2() -> None:
-    """Story 2.8: `validate_setup_radius` rejects half-side > 50 km."""
-    result = _run_cli(
-        "steeproute-setup",
-        "--center",
-        "45.0716,6.1079",
-        "--radius",
-        "5000",
-    )
-    assert result.returncode == 2, result.stderr
-    assert result.stderr.startswith("error:")
-    assert "ceiling" in result.stderr
 
 
 def test_setup_zero_dem_fetch_workers_exits_2() -> None:
