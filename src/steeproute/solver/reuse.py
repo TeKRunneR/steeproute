@@ -1,32 +1,32 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
 # Reason: networkx operations on `ContractedGraph.graph` surface as Unknown —
 # same external-boundary pattern as `solver/grasp.py` and the `pipeline/` modules.
-"""Undirected base-segment reuse rule — the single source of feasibility truth (Story 5.2, FR5).
+"""Undirected base-segment reuse rule — the single source of feasibility truth (FR5).
 
 The GRASP solver (`solver/grasp.py`), the exhaustive oracle
 (`tests/integration/exhaustive_oracle.py`), and the runtime validator
 (`validator.py`) all enforce the *same* once-per-route reuse rule on the
 underlying physical trail segment, regardless of direction. Routing the rule
 through this one module is what keeps their feasible sets bit-identical — the
-property the Story 3.7 GRASP-vs-exhaustive quality gate depends on. (Same
-single-source discipline as `models.route_avg_gradient` for the slope floor.)
+property the GRASP-vs-exhaustive quality gate depends on. (Same single-source
+discipline as `models.route_avg_gradient` for the slope floor.)
 
 The rule
 ========
 
-Story 5.1 tags every contracted edge with a `base_segment_id`
+Contraction tags every contracted edge with a `base_segment_id`
 (`frozenset[tuple[int, int, int]]` of undirected ids, so a segment and its
 reverse share an id) and a `reusable` flag (`True` only for a short connector
 `length_m < l_connector`). A route may traverse any **non-exempt** base segment
 **at most once**, in either direction; exempt short connectors may recur freely.
 
-**Exemption is evaluated per-id, not per-edge** (resolving the gap deferred from
-Story 5.1): an id is reuse-exempt iff *every* edge carrying it is `reusable`.
-`reusable` is a per-edge flag but the once-only identity is per-id, so a short
-connector that happens to share an id with a (non-reusable) climb super-edge —
-the reverse of that climb — is **not** exempt for that id. That is exactly what
-forbids descending the reverse of a climb you have already ascended, killing the
-degenerate out-and-back for short-edge climbs.
+**Exemption is evaluated per-id, not per-edge**: an id is reuse-exempt iff
+*every* edge carrying it is `reusable`. `reusable` is a per-edge flag but the
+once-only identity is per-id, so a short connector that happens to share an id
+with a (non-reusable) climb super-edge — the reverse of that climb — is **not**
+exempt for that id. That is exactly what forbids descending the reverse of a
+climb you have already ascended, killing the degenerate out-and-back for
+short-edge climbs.
 
 Mechanically: `non_exempt_base_segment_ids(graph)` is the union of the base ids
 of every non-reusable edge (computed once per graph). An edge's *blocking ids*
@@ -36,10 +36,10 @@ is a truly-exempt connector that never blocks and is never recorded.
 Robustness
 ==========
 
-A production `ContractedGraph` always carries the tags (Story 5.1). The lookups
-fall back to the directed `(u, v, key)` identity with `reusable=False` for any
-edge missing them, so a hand-built or not-yet-tagged test graph degrades to the
-pre-5.1 directed edge-simple rule rather than raising `KeyError`.
+A production `ContractedGraph` always carries the tags. The lookups fall back to
+the directed `(u, v, key)` identity with `reusable=False` for any edge missing
+them, so a hand-built or untagged test graph degrades to a plain directed
+edge-simple rule rather than raising `KeyError`.
 """
 
 from __future__ import annotations
@@ -59,11 +59,11 @@ __all__ = [
 def base_segment_ids(
     data: dict[str, Any] | None, u: int, v: int, k: int
 ) -> frozenset[tuple[int, int, int]]:
-    """The undirected base-segment ids an edge occupies (Story 5.1 `base_segment_id`).
+    """The undirected base-segment ids an edge occupies (its `base_segment_id` tag).
 
     Falls back to the directed identity `{(u, v, k)}` when `data` is `None` (the
-    edge is absent from the graph) or carries no `base_segment_id` (a not-yet-
-    tagged test graph) — the pre-5.1 directed behaviour.
+    edge is absent from the graph) or carries no `base_segment_id` (an untagged
+    test graph).
     """
     if data is None:
         return frozenset({(u, v, k)})
@@ -78,12 +78,12 @@ def base_segment_id_map(
 ) -> dict[tuple[int, int, int], frozenset[tuple[int, int, int]]]:
     """Map each contracted edge's directed `(u, v, k)` identity → its undirected base ids.
 
-    The single source of the directed-edge → undirected-base-segment projection
-    (Story 6.1). `solver/distinctness.py` consumes this so Jaccard distinctness
-    keys on the *same* `base_segment_id` the reuse rule uses — a route walking a
-    trail and another walking its reverse then count as overlapping, aligning
-    FR11 distinctness with FR5 undirected reuse. An edge missing its tag degrades
-    to its directed identity via `base_segment_ids` (test-graph robustness).
+    The single source of the directed-edge → undirected-base-segment projection.
+    `solver/distinctness.py` consumes this so Jaccard distinctness keys on the
+    *same* `base_segment_id` the reuse rule uses — a route walking a trail and
+    another walking its reverse then count as overlapping, aligning FR11
+    distinctness with FR5 undirected reuse. An edge missing its tag degrades to
+    its directed identity via `base_segment_ids` (test-graph robustness).
     """
     return {
         (u, v, k): base_segment_ids(data, u, v, k)

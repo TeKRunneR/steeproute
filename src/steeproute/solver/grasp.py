@@ -1,16 +1,16 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
 # Reason: networkx operations on `ContractedGraph.graph` surface as Unknown — same
 # boundary pattern as `pipeline/` modules and `tests/integration/exhaustive_oracle.py`.
-"""GRASP construction loop + anytime best-so-far (Story 3.6).
+"""GRASP construction loop with a continuously-readable best-so-far.
 
-Implements Architecture §Cat 5's solver shape: a class with an injected RNG,
-parameter snapshot, prepared `ContractedGraph`, and a continuously-readable
-`best_so_far`. `run()` terminates on three of §Cat 5e's four conditions —
-iter-budget, `--time-budget` wall-clock, and `--stagnation-iters` (Story 7.2) —
-recording the outcome in `convergence_status`. The fourth, `KeyboardInterrupt`,
-is handled at the CLI layer (Story 7.3) per §Cat 5b. The `progress_callback` is
-invoked once per iteration with a `ProgressEvent` (Story 7.1); the CLI wraps it
-with `progress.throttle(...)` so emission honours `--progress-interval`.
+Implements Architecture §Cat 5's solver shape: a class with an injected RNG, a
+parameter snapshot, a prepared `ContractedGraph`, and an anytime `best_so_far`.
+`run()` terminates on three of §Cat 5e's four conditions — iter-budget,
+`--time-budget` wall-clock, and `--stagnation-iters` — recording the outcome in
+`convergence_status`. The fourth, `KeyboardInterrupt`, is handled at the CLI
+layer per §Cat 5b. The `progress_callback` is invoked once per iteration with a
+`ProgressEvent`; the CLI wraps it with `progress.throttle(...)` so emission
+honours `--progress-interval`.
 
 Construction shape
 ==================
@@ -32,85 +32,75 @@ start node by greedy-randomized walk extension:
    `Solution`.
 
 The slope floor θ (FR3) is a **route-level** constraint — the whole-route
-average `(Σ d_plus_m + Σ d_minus_m) / Σ length_m` must clear θ — so it is NOT
-applied per-edge during construction. It is enforced at finalization in `run()`:
-a partial walk may dip below θ and recover by appending a steep climb, so greedy
-mid-walk pruning would wrongly discard recoverable routes. Per-climb steepness
-lives in the separate `--min-climb-slope` detection threshold (Story 4.1),
-upstream in stage 8.
+average `(Σ d_plus_m + Σ d_minus_m) / Σ length_m` must clear θ — so it is NOT an
+RCL filter; it is enforced at finalization (`_route_slope_ok`, which holds the
+argument for why). Per-climb steepness is a separate concern, the
+`--min-climb-slope` detection threshold upstream in stage 8.
 
 Because construction always extends to a **maximal** walk, that walk's average
 can be dragged below θ by a forced flat tail even when a steep **prefix** of it
 clears θ. So `run()` offers the best θ-clearing prefix of each constructed walk
-to the tracker — `_best_theta_prefix` — rather than only the whole maximal walk
-(Story 9.2 / review finding #10). This stops GRASP discarding a feasible route
-the exhaustive oracle keeps (the oracle emits every prefix), so GRASP no longer
-returns `[]` where a θ-feasible route exists. The longest θ-clearing prefix is
-chosen because per-edge `d_plus_m + d_minus_m` is non-negative, so objective is
-non-decreasing in prefix length — the longest is the highest-objective one, and
-the choice is deterministic with no tie-break (FR29). A prefix of a feasible
-walk is itself edge-simple and reuse-respecting, so this keeps GRASP on the same
-feasible set the oracle enumerates (Story 3.7 stays apples-to-apples).
+to the tracker rather than only the whole maximal walk; `_best_theta_prefix`
+holds the argument for why the *longest* qualifying prefix is the right one. A
+prefix of a feasible walk is itself edge-simple and reuse-respecting, and the
+exhaustive oracle enumerates every prefix, so this keeps GRASP on the same
+feasible set the oracle does — without it, GRASP discards θ-feasible routes the
+oracle keeps.
 
-The best θ-clearing prefix of each constructed walk is offered to a
-`TopNTracker(params.n, params.j_max)`
-— the same admission policy the oracle uses (`tests/integration/exhaustive_oracle.py`,
-Story 3.5). This is what makes the Story 3.7 GRASP-vs-exhaustive quality
-ratio apples-to-apples: identical distinctness semantics on both sides.
+Admission goes through `TopNTracker(params.n, params.j_max)` — the same policy
+`tests/integration/exhaustive_oracle.py` applies. That is what makes the
+GRASP-vs-exhaustive quality ratio apples-to-apples: identical distinctness
+semantics on both sides.
 
-Walks obey **undirected base-segment reuse** (Story 5.2, FR5): a route may
-traverse any non-exempt physical trail segment at most once, *in either
-direction*. The rule keys on the `base_segment_id` tags Story 5.1 wrote at
-contraction and is single-sourced through `solver/reuse.py` so GRASP, the
-exhaustive oracle, and the validator share one feasible set. Short connectors
-(`reusable`, `length_m < l_connector`) are exempt and may recur in both
-directions, so loops stay constructible; everything else — climbs and long
-connectors — is once-only. This forbids descending the reverse of a climb you
-just ascended, eliminating the degenerate out-and-back by construction.
-Node-revisits via distinct (non-conflicting) segments are still allowed (Story
-3.5 oracle contract). Strict containment (FR10) is guaranteed upstream —
+Walks obey **undirected base-segment reuse** (FR5): a route may traverse any
+non-exempt physical trail segment at most once, *in either direction*. The rule
+keys on the `base_segment_id` tags written at contraction and is single-sourced
+through `solver/reuse.py` so GRASP, the exhaustive oracle, and the validator
+share one feasible set. Short connectors (`reusable`, `length_m < l_connector`)
+are exempt and may recur in both directions, so loops stay constructible;
+everything else — climbs and long connectors — is once-only. This forbids
+descending the reverse of a climb you just ascended, eliminating the degenerate
+out-and-back by construction. Node-revisits via distinct (non-conflicting)
+segments are still allowed. Strict containment (FR10) is guaranteed upstream —
 `contract_climbs` cuts the contracted graph to the area before the solver sees
 it; no `Area` check is performed here.
 
 Determinism (FR29)
 ==================
 
-All randomness flows through the injected `numpy.random.Generator`. No
-ambient `numpy.random.seed`, no `random` stdlib usage, no time-derived seeds.
+All randomness flows through the injected `numpy.random.Generator`. No ambient
+`numpy.random.seed`, no `random` stdlib usage, no time-derived seeds. Two
+`GraspSolver` instances built with `numpy.random.default_rng(seed)` on the same
+`ContractedGraph` and `SolverParams` produce byte-identical `list[Solution]`
+results — including the edges' traversal order.
 
-Draws are **batched** (Story 12.3): instead of one scalar `Generator` call per
-walk step — measured at ~13% of query wall-clock, all numpy per-call boundary
-overhead — `_next_uniform` consumes uniform `[0, 1)` values from a buffer
-refilled by one native `rng.random(_RNG_CHUNK)` call per `_RNG_CHUNK` draws. A
-bounded index in `0..n-1` is derived as `int(u * n)` — uniform up to float64
-granularity, which is exact for every `n` this solver sees (`n ≤` node count
-`< 2^53`, so `int(u * n) < n` always holds and no bounds clamp is needed).
-Determinism is unchanged: the value sequence is a pure function of the seed,
-and consumption order is a pure function of the walks. The buffer refills only
-on exhaustion — never on a clock, callback, or termination condition — so a
-fixed seed still yields a byte-identical iteration sequence. NOTE: the draw
-*sequence* differs from the pre-12.3 scalar scheme (`Generator.integers` and
-chunked `Generator.random` advance the bit stream differently), which is why
-Story 12.3 carries the epic's one documented golden rebake.
+Draws are **batched**: `_next_uniform` consumes uniform `[0, 1)` values from a
+buffer refilled by one native `rng.random(_RNG_CHUNK)` call per `_RNG_CHUNK`
+draws, because one scalar `Generator` call per walk step cost ~13% of query
+wall-clock — pure numpy per-call boundary overhead, no compute (py-spy, r6
+Grenoble area, 2026-07-03). A bounded index in `0..n-1` is derived as
+`int(u * n)` — uniform up to float64 granularity, which is exact for every `n`
+this solver sees (`n ≤` node count `< 2^53`, so `int(u * n) < n` always holds
+and no bounds clamp is needed). The buffer refills only on exhaustion — never on
+a clock, callback, or termination condition — so a fixed seed yields a
+byte-identical iteration sequence.
 
 The `time.monotonic()` reads in `run()` feed only the `ProgressEvent`'s
-`elapsed_s` / ETA — a pure reporting side-effect that never touches the RNG or
-the iteration count, so progress timing cannot perturb the route output.
-Two `GraspSolver` instances built with `numpy.random.default_rng(seed)` on
-the same `ContractedGraph` and `SolverParams` produce byte-identical
-`list[Solution]` results — including the edges' traversal order. The two
-order-sensitive sites are pinned explicitly so this holds across Python /
-networkx versions, where dict-insertion order is not a contract (see
-`deferred-work.md` "Story 3.5 deferred #5"):
+`elapsed_s` / ETA and the time-budget comparison — a pure reporting/termination
+side-effect that never touches the RNG or the iteration *content*, so progress
+timing cannot perturb the route output.
+
+Two order-sensitive sites are pinned explicitly, because dict-insertion order is
+not a contract across Python / networkx versions:
 
 - **Start-node sampling** draws an index into `tuple(sorted(graph.graph.nodes))`
   (sorted once in `__init__`), so the start node depends only on the RNG, not
   on node-insertion order.
 - **RCL ranking** comes from the per-node adjacency table `run()` precomputes
-  once per solve (Story 12.1): each node's candidate records are pre-sorted by
-  the total key (`-objective`, then `(node_v, key)`), which fully determines
-  the candidate order regardless of the order `graph.edges(...)` yields edges
-  in during the table build.
+  once per solve: each node's candidate records are pre-sorted by the total key
+  (`-objective`, then `(node_v, key)`), which fully determines the candidate
+  order regardless of the order `graph.edges(...)` yields edges in during the
+  table build.
 """
 
 from __future__ import annotations
@@ -143,14 +133,13 @@ __all__ = ["STAGNATION_ITERS_DEFAULT_PLACEHOLDER", "AdjacencyTable", "GraspSolve
 
 
 STAGNATION_ITERS_DEFAULT_PLACEHOLDER: int = 200_000
-"""Default `--stagnation-iters` window when the flag is unset (Story 7.2).
+"""Default `--stagnation-iters` window when the flag is unset.
 
-Matches the user's real manual-run/demo/gallery params (AGENTS.md §Solver /
-GRASP) rather than the original fast-iteration-test placeholder: large enough
-that a still-productive search at the 1_000_000 default `--iter-budget` isn't
-cut short, small enough that a plateaued search on a sparse area still stops
-well inside NFR1's budget. `--stagnation-iters 0` disables the check entirely
-(Architecture §Cat 5e).
+Sized to the real manual-run/demo/gallery params (AGENTS.md §Solver / GRASP):
+large enough that a still-productive search at the 1_000_000 default
+`--iter-budget` isn't cut short, small enough that a plateaued search on a
+sparse area still stops well inside NFR1's budget. `--stagnation-iters 0`
+disables the check entirely (Architecture §Cat 5e).
 """
 
 
@@ -165,7 +154,7 @@ uniform-random construction.
 
 
 _RNG_CHUNK: int = 1024
-"""Draws per native `Generator.random` call in the batched scheme (Story 12.3).
+"""Draws per native `Generator.random` call in the batched scheme.
 
 Large enough to amortize the numpy call boundary to noise (one native call per
 1024 draws), small enough that the refill itself is microseconds and the
@@ -178,7 +167,7 @@ the requested size).
 
 
 class _CandidateRecord(NamedTuple):
-    """One pre-built RCL candidate in the per-node adjacency table (Story 12.1).
+    """One pre-built RCL candidate in the per-node adjacency table.
 
     Everything about a candidate that does not depend on walk state, computed
     once per solve so `_build_rcl` never touches the networkx graph, never
@@ -197,8 +186,8 @@ AdjacencyTable = dict[int, tuple[_CandidateRecord, ...]]
 
 A pure function of the contracted graph + the SAC/descent filter params, so it is
 identical across a parallel worker's migration rounds and can be built once and
-reused (Story 14.4). Exposed as a named type so `solver/parallel.py` can cache and
-pass it back without naming the private `_CandidateRecord`.
+reused. Exposed as a named type so `solver/parallel.py` can cache and pass it
+back without naming the private `_CandidateRecord`.
 """
 
 
@@ -216,8 +205,8 @@ class GraspSolver:
     returns the final `tracker.current_top()`. It records which one fired in the
     public `convergence_status` attribute (`converged` on stagnation,
     `budget-exhausted` on iter/time budget). It does not catch
-    `KeyboardInterrupt` — Architecture §Cat 5b puts that at the CLI layer, where
-    Story 7.3 sets the third status value (`interrupted`).
+    `KeyboardInterrupt` — Architecture §Cat 5b puts that at the CLI layer, which
+    owns the third status value (`interrupted`).
     """
 
     def __init__(
@@ -231,49 +220,48 @@ class GraspSolver:
     ) -> None:
         if params.iter_budget < 1:
             # Fail loud at the boundary, symmetric with `TopNTracker`'s `n >= 1`
-            # guard (Story 3.4). A 0/negative budget would otherwise make
-            # `run()` silently return `[]` — indistinguishable from "searched
-            # and found nothing", which would mislead Story 3.7's quality-ratio
+            # guard. A 0/negative budget would otherwise make `run()` silently
+            # return `[]` — indistinguishable from "searched and found nothing",
+            # which would mislead the GRASP-vs-exhaustive quality-ratio
             # comparator on a misconfigured budget.
             raise ValueError(f"iter_budget must be >= 1, got {params.iter_budget}")
         self._graph: ContractedGraph = graph
         self._params: SolverParams = params
         self._rng: np.random.Generator = rng
-        # Invoked once per iteration in `run()` (Story 7.1). The CLI passes a
+        # Invoked once per iteration in `run()`. The CLI passes a
         # `progress.throttle(...)`-wrapped renderer; `None` disables emission
         # (e.g. `--quiet`, or non-CLI callers like the quality-gate tests).
         self._progress_callback: ProgressCallback | None = progress_callback
-        # Undirected base-segment distinctness (Story 6.1): the tracker keys
-        # Jaccard on the same `base_segment_id` identity the reuse rule uses, so
+        # Undirected base-segment distinctness: the tracker keys Jaccard on the
+        # same `base_segment_id` identity the reuse rule uses, so
         # opposite-direction reuse of one trail counts as overlap. Single-sourced
         # with the oracle + validator via `solver/reuse.py`.
         self._segment_map: dict[tuple[int, int, int], frozenset[tuple[int, int, int]]] = (
             base_segment_id_map(graph)
         )
         self._tracker: TopNTracker = TopNTracker(params.n, params.j_max, self._segment_map)
-        # Elite migration (parallel island model, Story 14.4 follow-up): pre-seed the
-        # tracker with solutions merged from other workers' previous rounds, so this
-        # worker only *keeps* routes that beat the shared global elite (construction
-        # itself is unaffected — it's memoryless random restart). This bounds the
-        # parallel downside: with periodic migration, workers converge toward one
-        # shared elite instead of drifting into independent, redundant local optima.
+        # Elite migration (parallel island model): pre-seed the tracker with
+        # solutions merged from other workers' previous rounds, so this worker only
+        # *keeps* routes that beat the shared global elite (construction itself is
+        # unaffected — it's memoryless random restart). This bounds the parallel
+        # downside: with periodic migration, workers converge toward one shared
+        # elite instead of drifting into independent, redundant local optima.
         # `None` (the default, and every single-process caller) leaves the tracker
-        # empty — byte-identical to pre-migration behaviour. Order matters for the
-        # order-sensitive tracker, so callers must pass a deterministically-ordered
-        # list (the merged `current_top()`).
+        # empty. The tracker is order-sensitive, so callers must pass a
+        # deterministically-ordered list (the merged `current_top()`).
         if initial_solutions:
             for solution in initial_solutions:
                 self._tracker.consider(solution)
         # Seed-node pool. Sorted ascending so start-node sampling is deterministic
         # across Python / networkx versions (dict-insertion order is the FR29
-        # fragility). Under `--start-at-junction` (FR31, Story 10.1) the pool is
-        # pruned to road/trail junction nodes via the shared `is_junction_node`
-        # predicate — the same one the oracle and validator use, so all three stay
-        # on one feasible set. This restriction is an *efficiency/guidance* prune,
-        # not the constraint's enforcement: FR31 is enforced by the validator's
-        # independent `start_at_junction` check on `edges[0].node_u`, which holds
-        # whatever the solver does. An empty pool (no junctions) makes `run()`
-        # return `[]` via its existing `if not self._nodes` guard — correct FR12.
+        # fragility). Under `--start-at-junction` (FR31) the pool is pruned to
+        # road/trail junction nodes via the shared `is_junction_node` predicate —
+        # the same one the oracle and validator use, so all three stay on one
+        # feasible set. This restriction is an *efficiency/guidance* prune, not the
+        # constraint's enforcement: FR31 is enforced by the validator's independent
+        # `start_at_junction` check on `edges[0].node_u`, which holds whatever the
+        # solver does. An empty pool (no junctions) makes `run()` return `[]` via
+        # its `if not self._nodes` guard — correct FR12.
         all_nodes = sorted(graph.graph.nodes)
         if params.start_at_junction:
             nodes = [n for n in all_nodes if is_junction_node(graph, n)]
@@ -281,21 +269,21 @@ class GraspSolver:
             nodes = all_nodes
         self._nodes: tuple[int, ...] = tuple(nodes)
         self._cap_rank: int = parse_difficulty_cap(params.difficulty_cap)
-        # Direction-aware descent cap (FR32, Story 10.2). `None` → off; when set,
-        # `_build_rcl` drops any descending candidate edge steeper than this, via
-        # the `solver.descent` predicate single-sourced with the oracle + validator.
+        # Direction-aware descent cap (FR32). `None` → off; when set, `_build_rcl`
+        # drops any descending candidate edge steeper than this, via the
+        # `solver.descent` predicate single-sourced with the oracle + validator.
         self._max_descent_slope: float | None = params.max_descent_slope
         # Base-segment ids subject to the once-only reuse rule, computed once per
-        # graph (Story 5.2). Single-sourced with the oracle + validator via
-        # `solver/reuse.py` so all three share one feasible set.
+        # graph. Single-sourced with the oracle + validator via `solver/reuse.py`
+        # so all three share one feasible set.
         self._non_exempt_ids: frozenset[tuple[int, int, int]] = non_exempt_base_segment_ids(graph)
         # Termination outcome (§Cat 5e). Initialised to the iter-budget outcome so
         # the attribute is always readable/typed — including after the empty-graph
         # early return in `run()` — and set definitively at each termination
-        # branch. `interrupted` is never set here; Story 7.3's CLI handler owns it.
+        # branch. `interrupted` is never set here; the CLI's interrupt handler owns it.
         self.convergence_status: ConvergenceStatus = "budget-exhausted"
         # 1-based iteration of the last admission — the last time the top-N held
-        # set changed (`tracker.consider()` returned `True`), Story 7.3.
+        # set changed (`tracker.consider()` returned `True`).
         # Anytime-readable like `best_so_far`/`convergence_status`, so it holds the
         # right value on every termination path, *including* a `KeyboardInterrupt`
         # that unwinds `run()` and discards its locals. `0` means no admission ever
@@ -303,24 +291,24 @@ class GraspSolver:
         # admission). It equals `(i + 1) − stagnation_counter` at any point, since
         # the stagnation counter resets to 0 exactly when an admission lands.
         self.convergence_iteration: int = 0
-        # Per-node adjacency table of pre-built candidate records (Story 12.1).
-        # Empty until `run()` builds it once per solve — solver instances are
-        # single-run, and building it inside `run()` keeps the (one-off) cost
-        # inside the benchmark suite's measured region.
+        # Per-node adjacency table of pre-built candidate records. Empty until
+        # `run()` builds it once per solve — solver instances are single-run, and
+        # building it inside `run()` keeps the (one-off) cost inside the benchmark
+        # suite's measured region.
         #
-        # A caller MAY pass a prebuilt `adjacency` (Story 14.4 island migration): it
-        # is a pure function of the graph + the SAC/descent filter params, so it is
-        # identical across a parallel worker's migration rounds. Reusing it skips the
-        # ~8 s `_build_adjacency` rebuild each round (measured on the r20 graph) — the
+        # A caller MAY pass a prebuilt `adjacency`: it is a pure function of the
+        # graph + the SAC/descent filter params, so it is identical across a
+        # parallel worker's migration rounds. Reusing it skips a ~8 s
+        # `_build_adjacency` rebuild each round (r20 area, 2026-07-08) — the
         # dominant per-round cost. The caller is responsible for passing an adjacency
         # built from the *same* graph + params; `run()` reuses a non-empty table
         # verbatim, so a mismatched one would silently corrupt results.
         self._adjacency: AdjacencyTable = adjacency if adjacency is not None else {}
-        # Batched-draw buffer (Story 12.3): uniform [0, 1) values, refilled by
-        # `_next_uniform` in `_RNG_CHUNK`-sized native calls and held as a plain
-        # list (one exact `.tolist()` per refill) so per-draw consumption is a
-        # native list index yielding a Python float, not an ndarray scalar.
-        # Starts empty (`index == len`) so the first draw triggers a refill.
+        # Batched-draw buffer: uniform [0, 1) values, refilled by `_next_uniform`
+        # in `_RNG_CHUNK`-sized native calls and held as a plain list (one exact
+        # `.tolist()` per refill) so per-draw consumption is a native list index
+        # yielding a Python float, not an ndarray scalar. Starts empty
+        # (`index == len`) so the first draw triggers a refill.
         self._draw_buffer: list[float] = []
         self._draw_index: int = 0
 
@@ -335,7 +323,7 @@ class GraspSolver:
 
         Exposed so a parallel worker can build it once and pass it back into the
         next round's solver (see the `adjacency` constructor arg) instead of paying
-        the ~8 s `_build_adjacency` rebuild every round.
+        the `_build_adjacency` rebuild every round.
         """
         return self._adjacency
 
@@ -356,26 +344,28 @@ class GraspSolver:
           Stagnation is checked before time so a search that has truly converged
           is labelled `converged` even if it also just crossed the clock.
 
-        `stagnation_counter` counts consecutive iterations with no admission —
-        it resets exactly when `tracker.consider()` returns `True` (the held set
-        changed), so this is exactly "iterations since the last admission". It is
-        driven off that verdict, not a top-N total-objective delta: the
-        evict-many-admit-one branch can change the held set while leaving the
-        total equal (or lowering it), so a delta would miscount. This
-        bookkeeping (and the monotonic-clock reads) now runs every iteration
-        because it gates termination, not just the `ProgressEvent`; only the
-        event *construction* stays behind the callback check. FR29 still holds:
-        the clock reads feed `elapsed_s` / the ETA / the time-budget comparison
-        only — never the RNG, `_construct_one`, or the admission sequence. So a
-        fixed seed yields a byte-identical iteration *sequence*; only the *count*
-        is wall-clock-dependent, and solely when the soft time-budget binds.
+        `stagnation_counter` counts consecutive iterations with no admission — it
+        resets exactly when `tracker.consider()` returns `True` (the held set
+        changed), so it is exactly "iterations since the last admission". Drive it
+        off that verdict, never off a top-N total-objective delta: the
+        evict-many-admit-one branch can admit a candidate that leaves the total
+        unchanged (a delta reads it as stagnant) or even lowers it (a delta reads
+        it as an improvement).
+
+        The counter and the monotonic-clock reads run every iteration because they
+        gate termination; only the `ProgressEvent` *construction* sits behind the
+        callback check. FR29 still holds: the clock reads feed `elapsed_s` / the
+        ETA / the time-budget comparison only — never the RNG, `_construct_one`, or
+        the admission sequence. So a fixed seed yields a byte-identical iteration
+        *sequence*; only the *count* is wall-clock-dependent, and solely when the
+        soft time-budget binds.
         """
         if not self._nodes:
             return self._tracker.current_top()
-        # Once-per-solve precompute (Story 12.1): the contracted graph is
-        # immutable for the duration of a solve, so every walk-state-independent
-        # part of RCL construction is hoisted out of the hot loop here. Skipped
-        # when a prebuilt table was injected (Story 14.4 island-migration reuse).
+        # Once-per-solve precompute: the contracted graph is immutable for the
+        # duration of a solve, so every walk-state-independent part of RCL
+        # construction is hoisted out of the hot loop here. Skipped when a prebuilt
+        # table was injected (island-migration reuse).
         if not self._adjacency:
             self._adjacency = self._build_adjacency()
         callback = self._progress_callback
@@ -385,26 +375,20 @@ class GraspSolver:
         stagnation_counter = 0
         for i in range(self._params.iter_budget):
             solution = self._construct_one()
-            # Drive stagnation off the tracker's admission verdict, NOT a
-            # total-objective delta. The two are not equivalent: the evict-many-
-            # admit-one branch can admit a candidate that leaves the total
-            # unchanged (a delta would read it as stagnant) or even lowers it (a
-            # delta would read it as an improvement). `consider()` returns True iff
-            # the held set actually changed, so this counter is exactly
-            # "iterations since the last admission".
-            # Offer the best θ-clearing prefix of the constructed walk (Story 9.2),
-            # not just the maximal walk: a steep prefix forced to append a flat tail
-            # would otherwise drag the whole-walk average below θ and be discarded,
-            # losing a feasible route the oracle keeps. `_best_theta_prefix` returns
-            # None when no prefix clears θ (including the empty walk).
+            # Offer the best θ-clearing prefix of the constructed walk, not just
+            # the maximal walk: a steep prefix forced to append a flat tail would
+            # otherwise drag the whole-walk average below θ and be discarded,
+            # losing a feasible route the oracle keeps. `_best_theta_prefix`
+            # returns None when no prefix clears θ (including the empty walk), so
+            # no separate empty-walk guard is needed.
             admitted = False
             candidate = self._best_theta_prefix(solution.edges)
             if candidate is not None:
                 admitted = self._tracker.consider(candidate)
             if admitted:
                 stagnation_counter = 0
-                # Record where the held set last changed (Story 7.3). Held on
-                # `self` (not a local) so an interrupt mid-loop preserves it.
+                # Record where the held set last changed. Held on `self` (not a
+                # local) so an interrupt mid-loop preserves it.
                 self.convergence_iteration = i + 1
             else:
                 stagnation_counter += 1
@@ -449,33 +433,25 @@ class GraspSolver:
     def _best_theta_prefix(self, edges: tuple[Edge, ...]) -> Solution | None:
         """Longest θ-clearing prefix of `edges` as a `Solution`, or `None` if none clears θ.
 
-        A maximal walk can dip below θ when a forced flat tail follows a steep
-        start (review finding #10); offering the whole walk alone would discard a
-        feasible route. Every prefix of a feasible walk is itself a feasible walk
-        (edge-simple, reuse-respecting), and the exhaustive oracle enumerates
-        every prefix, so recovering the best θ-clearing prefix keeps GRASP on one
-        feasible set with the oracle (Story 9.2).
-
-        The **longest** θ-clearing prefix is the best: per-edge `d_plus_m +
+        The **longest** θ-clearing prefix is the best one: per-edge `d_plus_m +
         d_minus_m` is non-negative, so the objective is non-decreasing in prefix
         length and the longest qualifying prefix carries the highest objective.
         Scanning from the full length downward returns it on the first hit — a
-        single, deterministic answer with no tie-break, so FR29 holds (this is a
-        pure function of the already-deterministic walk; no RNG). The empty walk
-        has no non-empty prefix and yields `None`, so `run()`'s old
-        `if solution.edges` guard is subsumed.
+        single, deterministic answer with no tie-break, so FR29 holds (a pure
+        function of the already-deterministic walk; no RNG). The empty walk has no
+        non-empty prefix and yields `None`.
 
-        Each prefix is tested in O(1) from forward cumulative sums (Story 12.2)
-        instead of re-summing the whole prefix per candidate (quadratic in walk
-        length). The cumulative sums are the same left fold `route_avg_gradient`
-        computes — start `0.0`, add per edge in walk order — so the value at
-        every `end` is bit-identical to `route_avg_gradient(edges[:end])`, and
-        the zero-length branch (`0.0` when `Σlength ≤ 0`) is mirrored exactly.
-        The winning prefix still passes through the canonical
-        `_route_slope_ok` gate before admission, keeping the models.py
-        single-sourcing contract (solver / validator / oracle compare
-        bit-identical values) structural rather than incidental; by the fold
-        identity the gate always agrees with the incremental test.
+        Each prefix is tested in O(1) from forward cumulative sums rather than
+        re-summing the whole prefix per candidate (quadratic in walk length). The
+        cumulative sums are the same left fold `route_avg_gradient` computes —
+        start `0.0`, add per edge in walk order — so the value at every `end` is
+        bit-identical to `route_avg_gradient(edges[:end])`, and the zero-length
+        branch (`0.0` when `Σlength ≤ 0`) is mirrored exactly. The winning prefix
+        still passes through the canonical `_route_slope_ok` gate before
+        admission, which keeps the `models.py` single-sourcing contract (solver /
+        validator / oracle compare bit-identical values) structural rather than
+        incidental; by the fold identity the gate always agrees with the
+        incremental test.
         """
         n = len(edges)
         cum_length = [0.0] * (n + 1)
@@ -499,16 +475,16 @@ class GraspSolver:
         return None
 
     def _next_uniform(self) -> float:
-        """Next uniform `[0, 1)` draw from the chunked buffer (Story 12.3).
+        """Next uniform `[0, 1)` draw from the chunked buffer.
 
         Semantically `float(self._rng.random())` — same stream, same values, in
         the same order — but the native `Generator` boundary is crossed once per
-        `_RNG_CHUNK` draws instead of once per draw (the 11.2 profile's item 2:
-        ~13% of the run, all per-call overhead). Refills happen only here, only
-        on exhaustion — never conditioned on wall-clock, callbacks, or
+        `_RNG_CHUNK` draws instead of once per draw. Refills happen only here,
+        only on exhaustion — never conditioned on wall-clock, callbacks, or
         termination state — so the consumed sequence stays a pure function of
         the seed (FR29). Callers derive a bounded index as `int(u * n)`; see the
-        module docstring's Determinism section for the exactness argument.
+        module docstring's Determinism section for the exactness argument and the
+        measurement that motivates the batching.
         """
         i = self._draw_index
         buf = self._draw_buffer
@@ -522,22 +498,21 @@ class GraspSolver:
     def _construct_one(self) -> Solution:
         """Build one GRASP candidate via greedy-randomized walk extension.
 
-        Emits a walk obeying **undirected base-segment reuse** (Story 5.2): each
-        non-exempt base segment is traversed at most once, in either direction
-        (`used_segments`). The walk additionally stays **directed-edge-simple**
-        (`used_directed`) — no `(node_u, node_v, key)` triple twice — which is
-        what guarantees termination: exempt short connectors don't block on a
-        segment, so without the directed-simple bound a reusable connector could
-        be walked `a→b→a→b…` forever. An exempt connector is therefore bounded by
-        the directed-simple rule (each directed `(u, v, key)` at most once) rather
-        than the once-only segment rule — so a simple two-node connector recurs at
-        most twice (once per direction), while parallel keys over the same exempt
-        segment may each appear once. A non-exempt segment is used at most once.
-        Taking an edge records its directed id and its non-exempt base ids. Node-revisits via distinct non-conflicting segments are allowed, and
-        so are closed walks — including a single self-loop edge `(u, u, k)`, a
-        valid length-1 route. Such pathological-but-real OSM shapes (lollipop
-        trail-ends, roundabouts) are admitted by design; the runtime validator
-        (Story 3.9) owns any policy on rejecting them.
+        Two walk-state sets enforce the feasible set described in the module
+        docstring: `used_segments` (undirected base-segment once-only) and
+        `used_directed` (no `(node_u, node_v, key)` triple twice). The second is
+        what guarantees **termination**: exempt short connectors don't block on a
+        segment, so without the directed-simple bound a reusable connector could be
+        walked `a→b→a→b…` forever. An exempt connector is therefore bounded by the
+        directed-simple rule rather than the once-only segment rule — a simple
+        two-node connector recurs at most twice (once per direction), while
+        parallel keys over the same exempt segment may each appear once.
+
+        Node-revisits via distinct non-conflicting segments are allowed, and so are
+        closed walks — including a single self-loop edge `(u, u, k)`, a valid
+        length-1 route. Such pathological-but-real OSM shapes (lollipop trail-ends,
+        roundabouts) are admitted by design; the runtime validator owns any policy
+        on rejecting them.
 
         A start node with no feasible extension yields an empty walk
         (`edges == ()`, `objective == 0.0`); `run()` discards those before they
@@ -563,25 +538,24 @@ class GraspSolver:
         return Solution(edges=tuple(path_edges), objective=objective)
 
     def _build_adjacency(self) -> dict[int, tuple[_CandidateRecord, ...]]:
-        """Per-node adjacency table of pre-built candidate records (Story 12.1).
+        """Per-node adjacency table of pre-built candidate records.
 
-        One pass over the immutable contracted graph, hoisting everything about
-        RCL construction that does not depend on walk state — the 11.2 profile
-        attributed ~35–40% of query wall-clock to redoing this per step:
+        One pass over the immutable contracted graph, hoisting everything about RCL
+        construction that does not depend on walk state. Doing this work per step
+        instead cost ~35–40% of query wall-clock (py-spy, r6 Grenoble area,
+        2026-07-03), so keep it out of `_build_rcl`:
 
         - **Static filters applied once.** SAC cap (`max_sac_rank(sac_scale) >
           cap_rank` rejects; `None` / unrecognized values pass — cleared
           `filter_trails` upstream) and the direction-aware descent cap (FR32;
           off when unset). Both read only edge data and per-solve params, so an
           edge failing them can never become feasible and is dropped from the
-          table outright — exactly the edges the old per-step loop re-rejected
-          on every visit.
+          table outright.
         - **`Edge` built once** per graph edge instead of re-wrapped per visit
           (`Edge` is frozen, so sharing one instance across RCLs/solutions is
           safe), alongside its pre-built `directed_id` triple.
         - **Blocking sets computed once** — single-sourced via
-          `solver.reuse.blocking_ids` against `self._non_exempt_ids`, same as
-          before.
+          `solver.reuse.blocking_ids` against `self._non_exempt_ids`.
         - **Static sort applied once per node**: by per-edge objective
           contribution `d_plus_m + d_minus_m` descending, ties broken by
           `(node_v, key)` ascending. The key is static per edge and total —
@@ -635,27 +609,26 @@ class GraspSolver:
         lookup.
 
         Consumes the pre-sorted per-node table `run()` built once per solve
-        (`_build_adjacency`, Story 12.1) — no graph access, no `Edge`
-        construction, no set math beyond the walk-state checks, no sorting.
-        Only the two walk-state-dependent filters run here (same feasibility as
+        (`_build_adjacency`) — no graph access, no `Edge` construction, no set math
+        beyond the walk-state checks, no sorting. Only the two walk-state-dependent
+        filters run here (same feasibility as
         `tests/integration/exhaustive_oracle.py`):
 
         - Directed edge-simple: rejected iff `directed_id` is already in
           `used_directed` (→ termination).
-        - Undirected base-segment once-only (Story 5.2): rejected iff any
-          blocking id is already in `used_segments`. An exempt short connector
-          has an empty blocking set, so only the directed-simple bound limits
-          it (to once per direction).
+        - Undirected base-segment once-only: rejected iff any blocking id is
+          already in `used_segments`. An exempt short connector has an empty
+          blocking set, so only the directed-simple bound limits it (to once per
+          direction).
 
         Because each node's records are pre-sorted by the total static key,
-        collecting the first `RCL_SIZE` survivors in table order is identical
-        to the old filter-everything → sort → truncate — same candidates, same
-        order (FR29).
+        collecting the first `RCL_SIZE` survivors in table order yields the same
+        candidates in the same order as filtering the node's whole edge set and
+        then sorting would (FR29).
 
-        The slope floor θ is **not** an RCL filter: it is a route-level
-        constraint enforced at finalization (`run` / `_route_slope_ok`), not a
-        per-edge one. Every edge that clears the two filters above is a
-        candidate regardless of its own gradient.
+        The slope floor θ is **not** an RCL filter — it is a route-level constraint
+        enforced at finalization (`_route_slope_ok`). Every edge that clears the two
+        filters above is a candidate regardless of its own gradient.
         """
         rcl: list[tuple[Edge, frozenset[tuple[int, int, int]]]] = []
         for directed_id, edge, blocking in self._adjacency.get(current, ()):

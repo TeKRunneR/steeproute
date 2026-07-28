@@ -10,8 +10,8 @@ discipline"):
   `segment_map` (directed id → undirected `base_segment_id`, from
   `solver.reuse.base_segment_id_map`) each edge collapses to the **undirected**
   base segments it occupies, so a route and the reverse-direction traversal of
-  the same physical trail count as overlapping (Story 6.1 — aligns FR11
-  distinctness with FR5 undirected reuse). Identical sets give `0.0`; disjoint
+  the same physical trail count as overlapping — this is what aligns FR11
+  distinctness with FR5 undirected reuse. Identical sets give `0.0`; disjoint
   give `1.0`. Both-empty is defined as `0.0` (identical empty sets — keeps the
   function total for the otherwise-illegal zero-edge `Solution`).
 - `TopNTracker` reads `j_max` as the **similarity ceiling** (FR7's
@@ -19,9 +19,9 @@ discipline"):
   `jaccard_distance(...) < 1 - j_max`. So `j_max = 0.30` means "two routes
   may share at most 30% of their edges by Jaccard similarity."
 
-The tracker is solver-internal — `GraspSolver` (Story 3.6) is the sole
-producer; the validator (Story 3.9) consumes `current_top()`'s output. No
-CLI / config dependency: `n` and `j_max` arrive as raw constructor args.
+The tracker is solver-internal — `GraspSolver` is the sole producer; the
+validator consumes `current_top()`'s output. No CLI / config dependency: `n` and
+`j_max` arrive as raw constructor args.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ def _canonical_edge_set(
     With `segment_map=None`, each edge collapses to its directed `(node_u,
     node_v, key)` triple per Architecture §"Numerical and data discipline" — the
     same tuple used for cache-key hashing. With a `segment_map`, each edge
-    collapses to the **undirected** base-segment ids it occupies (Story 6.1), so
+    collapses to the **undirected** base-segment ids it occupies, so
     opposite-direction traversals of the same trail share identity. An edge
     absent from the map degrades to its own directed identity.
     """
@@ -66,10 +66,9 @@ def _jaccard_from_sets(
 ) -> float:
     """Jaccard distance over two already-canonical identity sets.
 
-    The set math of `jaccard_distance`, factored out (Story 12.2) so
-    `TopNTracker` can compare cached canonical sets without re-projecting the
-    solutions on every pairwise comparison. Same definition: both-empty →
-    `0.0`.
+    The set math of `jaccard_distance`, split out so `TopNTracker` can compare
+    cached canonical sets without re-projecting the solutions on every pairwise
+    comparison. Same definition: both-empty → `0.0`.
     """
     union = edges_a | edges_b
     if not union:
@@ -97,8 +96,8 @@ def jaccard_distance(a: Solution, b: Solution, segment_map: SegmentMap | None = 
 class _HeldEntry(NamedTuple):
     """A held solution paired with its cached canonical edge-identity set.
 
-    The set is computed once at insertion (Story 12.2) — `Solution` is
-    immutable, so it can never go stale.
+    The set is computed once at insertion — `Solution` is immutable, so it can
+    never go stale.
     """
 
     solution: Solution
@@ -158,17 +157,17 @@ class TopNTracker:
     sum equal (or lowering it). See `solver/grasp.py` `run`.
 
     Mutability: holds `Solution` references directly. `Solution` is
-    `frozen=True, slots=True` (Story 3.1) so this is safe — the tracker
-    cannot mutate the values, and the values cannot be mutated through
-    other references either.
+    `frozen=True, slots=True` so this is safe — the tracker cannot mutate the
+    values, and the values cannot be mutated through other references either.
 
-    Caching (Story 12.2): each held entry pairs the `Solution` with its
-    canonical edge-identity set, computed **once at insertion** — the 11.2
-    profile attributed ~7% of query wall-clock to re-projecting immutable held
-    solutions on every pairwise comparison. Immutability makes the cache safe;
-    a cached frozenset is *equal* to a recomputed one, so every distance,
-    overlap verdict, and admission decision is unchanged. The cache lives here
-    rather than on `Solution` because `slots=True` forbids attaching attributes.
+    Caching: each held entry pairs the `Solution` with its canonical
+    edge-identity set, computed **once at insertion**, because re-projecting
+    immutable held solutions on every pairwise comparison cost ~7% of query
+    wall-clock (py-spy, r6 Grenoble area, 2026-07-03). Immutability makes the
+    cache safe; a cached frozenset is *equal* to a recomputed one, so every
+    distance, overlap verdict, and admission decision is unchanged. The cache
+    lives here rather than on `Solution` because `slots=True` forbids attaching
+    attributes.
     """
 
     def __init__(self, n: int, j_max: float, segment_map: SegmentMap | None = None) -> None:
@@ -179,8 +178,8 @@ class TopNTracker:
         self._n: int = n
         self._j_max: float = j_max
         # `None` → directed `(u, v, key)` distinctness; a map → undirected
-        # base-segment distinctness (Story 6.1), shared with the reuse rule so
-        # admission and the validator's set-level check see one identity.
+        # base-segment distinctness, shared with the reuse rule so admission and
+        # the validator's set-level check see one identity.
         self._segment_map: SegmentMap | None = segment_map
         self._held: list[_HeldEntry] = []
 
@@ -199,7 +198,7 @@ class TopNTracker:
         if not math.isfinite(solution.objective):
             raise ValueError(f"solution.objective must be finite, got {solution.objective}")
         # Candidate's canonical set: once per consider() call, not once per
-        # held comparison (Story 12.2). Held sets were cached at insertion.
+        # held comparison. Held sets were cached at insertion.
         candidate_set = _canonical_edge_set(solution, self._segment_map)
         overlap_threshold = 1.0 - self._j_max
         overlapping = [

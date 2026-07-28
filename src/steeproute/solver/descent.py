@@ -1,12 +1,12 @@
-"""Direction-aware descent-slope feasibility — the single source of truth (Story 10.2, FR32).
+"""Direction-aware descent-slope feasibility — the single source of truth (FR32).
 
 The GRASP solver (`solver/grasp.py`), the exhaustive oracle
 (`tests/integration/exhaustive_oracle.py`), and the runtime validator
 (`validator.py`) all gate descending traversals on the *same* predicate. Routing
 it through this one module keeps their feasible sets bit-identical — the property
-the Story 3.7 GRASP-vs-exhaustive quality gate depends on. (Same single-source
-discipline as `solver/reuse.py` for the reuse rule and `pipeline.graph.
-is_junction_node` for FR31.)
+the GRASP-vs-exhaustive quality gate depends on. (Same single-source discipline
+as `solver/reuse.py` for the reuse rule and `pipeline.graph.is_junction_node`
+for FR31.)
 
 The rule
 ========
@@ -28,9 +28,8 @@ Robustness
 
 `max_descent_slope is None` means the cap is off → nothing ever blocks. A `None`
 `data` (edge absent from the graph) or a missing `max_windowed_descent_grad`
-(a hand-built / not-yet-tagged test graph) reads as grade `0.0` → never blocks, so
-non-production graphs degrade to the pre-10.2 unconstrained behaviour rather than
-raising `KeyError`.
+(a hand-built / untagged test graph) reads as grade `0.0` → never blocks, so
+non-production graphs degrade to unconstrained rather than raising `KeyError`.
 
 Known limitations (intentional, documented for future revisit)
 ==============================================================

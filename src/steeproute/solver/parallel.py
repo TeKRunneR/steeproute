@@ -1,12 +1,12 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false
 # Reason: `ContractedGraph.graph` is a networkx `MultiDiGraph[Unknown]` — the same
 # external-boundary pattern as `solver/grasp.py` and the `pipeline/` modules.
-"""Parallel GRASP restarts across processes (Story 14.4, Architecture §Cat 5a).
+"""Parallel GRASP restarts across processes (Architecture §Cat 5a).
 
 GRASP iterations are independent restarts — embarrassingly parallel. §Cat 5a
 shaped the solver loop to be `ProcessPoolExecutor`-convertible and chose
 `numpy.random.Generator` precisely for `SeedSequence.spawn` compatibility; this
-module realizes that latent design without touching `GraspSolver` itself.
+module realizes that design without touching `GraspSolver` itself.
 
 **Why this lives at the orchestration layer, not in `SolverParams`.** `models.py`
 is content-hashed (`cache.py` `_PIPELINE_CONTENT_GLOBS`), so adding a `workers`
@@ -16,11 +16,11 @@ here; the only per-worker `SolverParams` change is the iteration budget, produce
 by `dataclasses.replace`. `solver/` and `cli/` are not content-hashed at all, so
 this whole module is invisible to the cache key.
 
-**Sending the graph is the bottleneck, not the solve (measured).** At r20 the full
-contracted graph pickles to ~204 MB — because every edge carries its
+**Sending the graph is the bottleneck, not the solve.** The full contracted graph
+pickles to ~204 MB at r20 (2026-07-08) — every edge carries its
 `vertices_resampled` polyline (and `geometry`), which the **solver never reads**
 (only the renderer, in the parent, does). Shipping that to every worker under
-`spawn` dominated wall-clock and erased the speedup. So workers receive a
+`spawn` dominates wall-clock and erases the speedup. So workers receive a
 `solver_graph_view` — the same graph with those heavy geometry attributes
 stripped (~72 MB at r20), serialized **once** to bytes in the parent and handed to
 each worker as a cheap buffer copy. GRASP output is byte-identical on the lean
@@ -101,10 +101,9 @@ __all__ = [
     "split_iter_budget",
 ]
 
-# `HEAVY_EDGE_ATTRS` moved to `models.py` in Story 16.1: stage 9 now produces a
-# lean graph, so the strip set is part of the `ContractedGraph` contract rather
-# than a parallel-solver detail. Kept in `__all__` above so it stays importable
-# from `solver.parallel` for existing callers.
+# `HEAVY_EDGE_ATTRS` is defined in `models.py` — the strip set is part of the
+# `ContractedGraph` lean contract, not a parallel-solver detail — and re-exported
+# through `__all__` above so `solver.parallel` stays a valid import site for it.
 
 
 class _WorkerResult(NamedTuple):
@@ -176,8 +175,9 @@ class ParallelGraspInterrupted(KeyboardInterrupt):
     still treats it as an interrupt; the query CLI catches this type *first* to read
     `.partial` — the top-N merged from workers that had **already returned** before
     the interrupt. Workers still in flight cannot have their partial best-so-far
-    recovered across the process boundary, so their progress is lost by design
-    (documented degradation from the single-process Story 7.3 flush).
+    recovered across the process boundary, so their progress is lost by design — a
+    documented degradation from the single-process interrupt flush, which does
+    salvage the in-flight best-so-far.
     """
 
     def __init__(self, partial: ParallelResult) -> None:
@@ -216,10 +216,10 @@ def solver_graph_view(contracted: ContractedGraph) -> ContractedGraph:
     edge-insertion order, which is FR29-safe: the solver sorts nodes and pre-sorts
     adjacency by a total key, and the reuse/segment maps are order-independent.
 
-    Since Story 16.1 `contract_climbs` already produces a lean graph, so the
-    production path skips this rebuild (see `run_parallel_grasp`). It remains the
-    enforcement point for a `ContractedGraph` built anywhere else — a test
-    fixture, an external caller — which is why it stays public.
+    `contract_climbs` already produces a lean graph, so the production path skips
+    this rebuild (see `run_parallel_grasp`). This stays public as the enforcement
+    point for a `ContractedGraph` built anywhere else — a test fixture, an external
+    caller.
     """
     lean = contracted.graph.__class__()
     lean.add_nodes_from(contracted.graph.nodes(data=True))
@@ -265,8 +265,9 @@ _worker_graph: ContractedGraph | None = None
 
 # Built once per worker process on its first round and reused across the rest —
 # the per-node adjacency table is a pure function of the graph + filter params, so
-# rebuilding it every round (~8 s, measured) is pure waste. Persists across a
-# process's round tasks because the pool reuses its processes.
+# rebuilding it every round is pure waste, and it was the dominant per-round stall
+# (~8 s per worker per round at r20, 2026-07-08). Persists across a process's round
+# tasks because the pool reuses its processes.
 _worker_adjacency: AdjacencyTable | None = None
 
 # The parent's progress queue, handed to each worker once via the pool
@@ -335,8 +336,7 @@ def _run_round_worker(  # pragma: no cover
         callback = throttle(_emit, progress_interval)
 
     # Reuse this process's adjacency table across rounds (built on the first round);
-    # it is graph/param-derived and identical every round, so rebuilding it (~8 s)
-    # each round is the dominant, avoidable per-round stall.
+    # see `_worker_adjacency`.
     solver = GraspSolver(
         graph,
         worker_params,
@@ -439,8 +439,9 @@ def run_parallel_grasp(
 ) -> ParallelResult:
     """Fan `GraspSolver` across `workers` processes with island-model elite migration.
 
-    Only called for `workers > 1` — the CLI keeps the unchanged single-process path
-    at `workers == 1` so default output stays byte-identical.
+    Only called for `workers > 1`; the CLI takes the single-process path at
+    `workers == 1`, whose output this deliberately does not reproduce (see
+    Determinism in the module docstring).
 
     The `iter_budget` is split into migration *rounds* of ~`merge_interval` total
     iterations (`merge_interval <= 0` → one round = independent islands, single final
@@ -461,11 +462,11 @@ def run_parallel_grasp(
     dead worker (`BrokenProcessPool`) raises `ParallelGraspFailed` →
     single-process fallback.
 
-    Teardown never blocks the return: worker processes free their whole heap
-    (lean graph + adjacency table) at exit — a measured ~8 s wall at r20 — so the
-    pool is shut down `wait=False` and that teardown overlaps the caller's
-    validation/render. `concurrent.futures`' atexit hook still joins the workers
-    before the CLI process exits, so nothing is orphaned.
+    Teardown never blocks the return: the pool is shut down `wait=False`, so worker
+    exit overlaps the caller's validation/render (the `ProcessPoolExecutor`
+    construction below carries the measurement). Nothing is orphaned —
+    `concurrent.futures`' atexit hook still joins the workers before the process
+    exits.
     """
     rounds = round_count(params.iter_budget, merge_interval, workers)
     plan = round_plan(params.iter_budget, workers, rounds)
@@ -480,12 +481,11 @@ def run_parallel_grasp(
     # the BrokenProcessPool path below), rather than crashing with a raw traceback.
     # `pickle.dumps(...)` serializes the lean graph once for the pool initializer; it
     # can OOM on a large graph (the dominant setup cost at r20+) or raise
-    # `PicklingError`. A graph that already advertises the lean contract (everything
-    # from `contract_climbs` since Story 16.1) is serialized as-is; only a
-    # possibly-heavy graph from elsewhere pays the `solver_graph_view` rebuild, which
-    # cost a full ~327k-edge graph copy at r20. The progress queue is a plain
-    # `context.Queue()` (not a
-    # `Manager().Queue()`): it reaches the workers via the pool initializer below —
+    # `PicklingError`. A graph that already advertises the lean contract (anything
+    # from `contract_climbs`) is serialized as-is; only a possibly-heavy graph from
+    # elsewhere pays the `solver_graph_view` rebuild, which is a full graph copy
+    # (~327k edges at r20). The progress queue is a plain `context.Queue()`, not a
+    # `Manager().Queue()`: it reaches the workers via the pool initializer below —
     # the only channel through which a non-proxy queue can be shared — so we skip the
     # manager process a proxy queue would require; creating it can hit an OS
     # handle/semaphore limit. The budget math / `base_segment_id_map` above are shared
@@ -515,9 +515,9 @@ def run_parallel_grasp(
     # Deliberately NOT `with ProcessPoolExecutor(...)`: the context manager's
     # `__exit__` is `shutdown(wait=True)`, which blocks the parent on every worker
     # process freeing its whole heap (lean graph + adjacency table) at interpreter
-    # exit — a measured ~8 s dead tail at r20 between the last collected result and
-    # validate/render starting. The `finally` below shuts down `wait=False` instead,
-    # overlapping worker teardown with the caller's validation/render.
+    # exit — an ~8 s dead tail at r20 (2026-07-14) between the last collected result
+    # and validate/render starting. The `finally` below shuts down `wait=False`
+    # instead, overlapping worker teardown with the caller's validation/render.
     pool = ProcessPoolExecutor(
         max_workers=eff_workers,
         mp_context=context,
@@ -564,8 +564,8 @@ def run_parallel_grasp(
                 # elite survives untouched. Then stop launching rounds. The
                 # `finally` shuts the pool down without waiting, so the salvage
                 # renders immediately — in-flight workers finish their round in
-                # the background and their results are discarded (the documented
-                # degradation; previously the salvage *blocked* on them here).
+                # the background and their results are discarded (the degradation
+                # `ParallelGraspInterrupted` documents).
                 partial = [r for r in round_results if r is not None]
                 if partial:
                     elite, _status, convergence_iteration = _merge(segment_map, params, partial)
@@ -577,13 +577,10 @@ def run_parallel_grasp(
             for worker_id in range(eff_workers):
                 iteration_base[worker_id] += round_budgets[worker_id]
     finally:
-        # Signal the workers to exit but do NOT wait for their interpreter
-        # teardown (freeing the per-process graph + adjacency heaps, ~8 s at r20)
-        # — it overlaps the caller's validation/render instead.
-        # `concurrent.futures`' atexit hook still joins the worker processes
-        # before the CLI process exits, so nothing is orphaned. `cancel_futures`
-        # drops queued never-started tasks on the interrupt/failure paths (a
-        # no-op on the success path, where every future was already collected).
+        # Signal the workers to exit but do NOT wait for their interpreter teardown
+        # — see the `ProcessPoolExecutor` construction above. `cancel_futures` drops
+        # queued never-started tasks on the interrupt/failure paths (a no-op on the
+        # success path, where every future was already collected).
         pool.shutdown(wait=False, cancel_futures=True)
         stop.set()
         if drain_thread is not None:
