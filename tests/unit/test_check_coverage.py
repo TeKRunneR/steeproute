@@ -275,9 +275,10 @@ def test_select_smallest_containing_rejects_query_poking_out_of_rotated_entry() 
     # Sanity: the corner really is inside the envelope...
     assert south < corner_query.center[0] < north
     # ...and the envelope is strictly larger than the rotated box.
-    assert cache_mod._area_to_polygon(entry.area).area < shapely.box(
-        west, south, envelope[3], north
-    ).area
+    assert (
+        cache_mod._area_to_polygon(entry.area).area
+        < shapely.box(west, south, envelope[3], north).area
+    )
     # ...but coverage must still decline it.
     assert cache_mod._select_smallest_containing(corner_query, [entry]) is None
 

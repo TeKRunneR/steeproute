@@ -62,9 +62,7 @@ def test_bare_max_descent_slope_flag_resolves_to_0_4(
     omitting the flag entirely still means no cap (untouched by this test).
     """
     output_dir = tmp_path / "reports"
-    result = run_query(
-        seeded_cache, output_dir, seed=42, extra_args=["--max-descent-slope"]
-    )
+    result = run_query(seeded_cache, output_dir, seed=42, extra_args=["--max-descent-slope"])
 
     assert result.exit_code == 0, result.output
     json_files = sorted(output_dir.glob("route-*.json"))

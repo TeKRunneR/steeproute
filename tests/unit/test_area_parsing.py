@@ -37,6 +37,7 @@ def _resolve(
         center=center, radius_km=radius, width_km=width, height_km=height, angle_deg=angle
     )
 
+
 # --- LatLonParamType: range validation + BadCLIArgError surfacing (AC #1) ---
 
 

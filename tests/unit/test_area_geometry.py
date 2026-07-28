@@ -122,7 +122,9 @@ def test_rotated_square_becomes_a_diamond_with_known_vertices() -> None:
     `sqrt(2) km` from the center (each original corner swings onto an axis).
     """
     diamond = cache_mod._area_to_polygon(
-        Area(center=(0.0, 0.0), radius_km=0.0, half_width_km=1.0, half_height_km=1.0, angle_deg=45.0)
+        Area(
+            center=(0.0, 0.0), radius_km=0.0, half_width_km=1.0, half_height_km=1.0, angle_deg=45.0
+        )
     )
     corners = list(diamond.exterior.coords)[:-1]  # drop the closing repeat
     reach_deg = _ROOT2 / 111.0
@@ -134,9 +136,9 @@ def test_rotated_square_becomes_a_diamond_with_known_vertices() -> None:
     ]
 
     def _matches(corner: tuple[float, ...], vertex: tuple[float, float]) -> bool:
-        return corner[0] == pytest.approx(vertex[0], abs=1e-12) and corner[
-            1
-        ] == pytest.approx(vertex[1], abs=1e-12)
+        return corner[0] == pytest.approx(vertex[0], abs=1e-12) and corner[1] == pytest.approx(
+            vertex[1], abs=1e-12
+        )
 
     assert len(corners) == 4
     # Every generated corner matches exactly one expected diamond vertex.
@@ -154,7 +156,9 @@ def test_rotation_uses_cos_lat_frame_not_raw_degree_space() -> None:
     the two reaches would be equal).
     """
     diamond = cache_mod._area_to_polygon(
-        Area(center=(60.0, 0.0), radius_km=0.0, half_width_km=1.0, half_height_km=1.0, angle_deg=45.0)
+        Area(
+            center=(60.0, 0.0), radius_km=0.0, half_width_km=1.0, half_height_km=1.0, angle_deg=45.0
+        )
     )
     _minx, _miny, maxx, maxy = diamond.bounds
     lon_reach, lat_reach = maxx, maxy - 60.0
@@ -185,7 +189,9 @@ def test_envelope_of_rotated_box_is_strictly_larger_than_the_box() -> None:
     """
     center = (45.0, 6.0)
     square = Area(center=center, radius_km=2.0)
-    rotated = Area(center=center, radius_km=0.0, half_width_km=2.0, half_height_km=2.0, angle_deg=45.0)
+    rotated = Area(
+        center=center, radius_km=0.0, half_width_km=2.0, half_height_km=2.0, angle_deg=45.0
+    )
     s_south, s_west, s_north, s_east = cache_mod.area_bbox_wgs84(square)
     r_south, r_west, r_north, r_east = cache_mod.area_bbox_wgs84(rotated)
     assert (r_east - r_west) > (s_east - s_west)

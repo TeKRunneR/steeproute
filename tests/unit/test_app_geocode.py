@@ -47,9 +47,7 @@ def _json_body(payload: dict[str, Any]) -> bytes:
 
 
 def test_success_returns_most_specific_place(monkeypatch: pytest.MonkeyPatch) -> None:
-    body = _json_body(
-        {"address": {"town": "Chamrousse", "county": "Isère", "state": "Auvergne"}}
-    )
+    body = _json_body({"address": {"town": "Chamrousse", "county": "Isère", "state": "Auvergne"}})
     _patch_urlopen(monkeypatch, lambda *_a, **_k: _FakeResponse(body))
     # `city`/`town`/`village`… order: `town` wins over the broader `county`/`state`.
     assert geocode.reverse_geocode(45.12, 5.88) == "Chamrousse"

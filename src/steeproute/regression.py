@@ -343,8 +343,7 @@ def area_args(fixture: Fixture) -> list[str]:
         return ["--radius", str(fixture.radius_km)]
     if fixture.width_km is None or fixture.height_km is None:
         raise ValueError(
-            f"fixture {fixture.name!r} sets only one of width_km/height_km; "
-            f"a rectangle needs both"
+            f"fixture {fixture.name!r} sets only one of width_km/height_km; a rectangle needs both"
         )
     args = ["--width", str(fixture.width_km), "--height", str(fixture.height_km)]
     if fixture.angle_deg:

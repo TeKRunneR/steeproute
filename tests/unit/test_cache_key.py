@@ -78,9 +78,7 @@ def test_compute_cache_key_square_via_extents_matches_radius_shorthand() -> None
 
 def test_compute_cache_key_changes_with_rotation_angle() -> None:
     """AC #3: two areas differing only in bearing are different prepared areas."""
-    box = Area(
-        center=(45.0716, 6.1079), radius_km=0.0, half_width_km=8.0, half_height_km=3.0
-    )
+    box = Area(center=(45.0716, 6.1079), radius_km=0.0, half_width_km=8.0, half_height_km=3.0)
     rotated = dataclasses.replace(box, angle_deg=35.0)
     assert _key(area=box) != _key(area=rotated)
 

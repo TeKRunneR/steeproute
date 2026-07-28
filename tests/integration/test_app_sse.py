@@ -69,7 +69,9 @@ def _setup_body() -> dict[str, object]:
     return {"kind": "setup", "area": {"center": [45.26, 5.788], "radius_km": 2.0}}
 
 
-def _poll_until_terminal(client: TestClient, job_id: str, timeout: float = 15.0) -> dict[str, object]:
+def _poll_until_terminal(
+    client: TestClient, job_id: str, timeout: float = 15.0
+) -> dict[str, object]:
     deadline = time.monotonic() + timeout
     terminal = {"done", "failed", "stopped"}
     while time.monotonic() < deadline:
@@ -87,9 +89,9 @@ def _parse_events(sse_text: str) -> list[tuple[str, str]]:
     event_name = "message"
     for line in sse_text.splitlines():
         if line.startswith("event:"):
-            event_name = line[len("event:"):].strip()
+            event_name = line[len("event:") :].strip()
         elif line.startswith("data:"):
-            events.append((event_name, line[len("data:"):].strip()))
+            events.append((event_name, line[len("data:") :].strip()))
             event_name = "message"
     return events
 

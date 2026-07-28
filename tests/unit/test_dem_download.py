@@ -569,9 +569,7 @@ def test_padded_bbox_is_unchanged_for_a_square() -> None:
     lat, lon = _AREA.center
     half_side_m = _AREA.radius_km * 1000.0 + dem_download._PADDING_M
     half_lat_deg = half_side_m / dem_download._M_PER_DEG_LAT
-    half_lon_deg = half_side_m / (
-        dem_download._M_PER_DEG_LAT * math.cos(math.radians(lat))
-    )
+    half_lon_deg = half_side_m / (dem_download._M_PER_DEG_LAT * math.cos(math.radians(lat)))
 
     assert dem_download._padded_bbox(_AREA) == (
         lon - half_lon_deg,

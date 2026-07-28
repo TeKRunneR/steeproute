@@ -147,9 +147,7 @@ def query_params_schema() -> list[SchemaField]:
         if name is None or name in _EXCLUDED_FIELDS:
             continue
         choices = tuple(param.type.choices) if isinstance(param.type, click.Choice) else None
-        default = _QUALITY_DEFAULTS.get(
-            name, _UNSET_FLAG_FALLBACKS.get(name, param.default)
-        )
+        default = _QUALITY_DEFAULTS.get(name, _UNSET_FLAG_FALLBACKS.get(name, param.default))
         fields.append(
             SchemaField(
                 name=name,

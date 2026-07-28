@@ -413,9 +413,9 @@ def test_search_area_overlay_draws_the_true_rotated_box(tmp_path: pathlib.Path) 
         assert west <= lon <= east
     # An axis-aligned proxy would put all four corners ON the envelope; a rotated
     # box has no corner sitting at an envelope *corner*.
-    assert not any(
-        lat in (south, north) and lon in (west, east) for lat, lon in ring
-    ), "overlay collapsed to the axis-aligned envelope"
+    assert not any(lat in (south, north) and lon in (west, east) for lat, lon in ring), (
+        "overlay collapsed to the axis-aligned envelope"
+    )
 
 
 def test_slope_tooltip_and_diverging_coloring_wired(tmp_path: pathlib.Path) -> None:

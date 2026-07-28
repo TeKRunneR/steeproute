@@ -74,7 +74,9 @@ async def _await_terminal(store: JobStore, job_id: str, *, timeout: float = 10.0
         await asyncio.sleep(0.02)
 
 
-async def _await_status(store: JobStore, job_id: str, want: JobStatus, *, timeout: float = 5.0) -> None:
+async def _await_status(
+    store: JobStore, job_id: str, want: JobStatus, *, timeout: float = 5.0
+) -> None:
     """Poll the store until the job reaches a specific status."""
     deadline = asyncio.get_running_loop().time() + timeout
     while True:

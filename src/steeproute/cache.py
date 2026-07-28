@@ -1386,8 +1386,7 @@ def _partial_coverage_message(
     # to cover their target without composing the command themselves (UX parity
     # with the empty-cache message).
     widen_setup_cmd = (
-        f"steeproute-setup --center {_format_lat_lon(q_lat, q_lon)} "
-        f"{format_area_flags(query_area)}"
+        f"steeproute-setup --center {_format_lat_lon(q_lat, q_lon)} {format_area_flags(query_area)}"
     )
     if r_new is not None and r_new > 0:
         return (
