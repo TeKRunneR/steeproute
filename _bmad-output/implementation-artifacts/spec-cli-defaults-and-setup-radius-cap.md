@@ -149,6 +149,20 @@ CLI flag.
   field changed in all 7 golden JSON files — the `routes` arrays are byte-identical,
   so this is a pinning-coverage fix, not a behavior change requiring a route-level
   rationale.
+  **Follow-up correction (found 2026-07-28, fixed in commit `7e77e41`): those 7
+  goldens were not the whole set — 12 needed rebaking.** `_REALISTIC_PARAMS` spreads
+  `_PINNED_PARAMS`, so adding `"--workers": "1"` moved `params_hash` for the
+  **realistic tier too**, but only the 5 fast + 2 flag-on goldens were regenerated
+  here; the 5 `*.realistic.json` goldens were left stale and failed on `params_hash`
+  from this commit onward. They went unnoticed because that tier is `slow`-marked
+  (deselected by `addopts`) and CI runs a plain `uv run pytest --cov` that never
+  selects it — the `tests/e2e` result in Verification below reads "111 passed,
+  **5 deselected**", and those 5 deselected tests were exactly these. The fix was a
+  pure rebake: one `params_hash` line per file, route tuples and `seed`
+  byte-identical, same "pinning-coverage fix, not a behavior change" reasoning as
+  above. Nothing else in this spec is affected. The structural gap — an expensive
+  tier that no default run or hook ever selects — is captured under Misc in
+  `future-ideas.md`, alongside the CI→pre-commit-hooks item.
 - Also removed `_is_radius_shorthand` in `cli/_shared.py` (not named in the Code
   Map): it was `validate_setup_area`'s only caller, so deleting `validate_setup_area`
   left it fully dead code with no other reference.
