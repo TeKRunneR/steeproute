@@ -5,13 +5,16 @@ Atomic write + read + entry-overwrite paths are exercised in
 file covers the smaller primitives + recovery branches.
 """
 
-# pyright: reportPrivateUsage=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportMissingTypeArgument=false
+# pyright: reportPrivateUsage=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false
 # Reason: this tier is the intended consumer of `cache.py`'s module-private
 # geometry/parse helpers (`_area_to_polygon`, `_read_indexed_entries`) — they are
 # private so other call sites don't reach in, not so tests can't pin them. Same
 # rationale as `tests/unit/test_check_coverage.py`. The `reportUnknown*` /
 # `reportMissingTypeArgument` relaxations cover the networkx boundary in the
-# Story 16.2 payload tests, same pattern as `tests/unit/test_smoothing.py`.
+# Story 16.2/16.3 payload tests, same pattern as `tests/unit/test_smoothing.py`;
+# `reportUnknownParameterType` is the signature-level member of that same group,
+# needed once Story 16.3's helpers started taking/returning a bare
+# `nx.MultiDiGraph` (generic parameter unspecified upstream).
 
 from __future__ import annotations
 

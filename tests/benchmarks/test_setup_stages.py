@@ -1,7 +1,11 @@
-# pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false, reportImplicitRelativeImport=false, reportMissingTypeStubs=false, reportUnknownLambdaType=false
+# pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportMissingTypeArgument=false, reportImplicitRelativeImport=false, reportMissingTypeStubs=false, reportUnknownLambdaType=false, reportPrivateUsage=false
 # Reason: same osmnx/networkx boundary as the pipeline modules; pytest-benchmark
 # ships no type information; `reportImplicitRelativeImport` — `from conftest
-# import ...` is the shape that resolves under pytest's prepend import mode.
+# import ...` is the shape that resolves under pytest's prepend import mode;
+# `reportPrivateUsage` — benchmarking the cache-write path means calling
+# `cache._graph_to_payload` directly (Story 16.3): the point is to time that stage
+# in isolation rather than through `write_entry`. Same rationale as the sibling
+# `conftest.py`, which reaches for the orchestrator's private prunes.
 """Setup-stage wall-clock baselines on committed fixture data (Story 11.3 AC #3).
 
 One benchmark per CPU-bound setup stage, chained off the session-scoped
