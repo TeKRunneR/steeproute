@@ -353,15 +353,14 @@ def test_query_no_osm_age_warning_on_fresh_cache_hit(tmp_path: pathlib.Path) -> 
     assert "steeproute-setup --force-refresh" not in stderr
 
 
-# Setup-side radius/dimension ceiling removed.
-# Setup-radius-cap.md, 2026-07-28)
-def test_setup_accepts_a_radius_far_above_the_former_ceiling(tmp_path: pathlib.Path) -> None:
-    """The setup CLI's former 50 km `_SETUP_MAX_RADIUS_KM` ceiling is gone.
+# There is deliberately no size ceiling on either CLI.
+def test_setup_accepts_an_arbitrarily_large_radius(tmp_path: pathlib.Path) -> None:
+    """The setup CLI rejects no `--radius` on size grounds, however large.
 
-    `_osm_load_from_fixture`/`_resolve_dem_from_fixture` ignore the requested
-    area and always return the small committed fixture, so this only exercises
-    CLI-boundary validation, not a real 200 km fetch — exactly what's needed to
-    pin "not rejected on size grounds" (I/O matrix) without a real
+    A large area is slow, not invalid. `_osm_load_from_fixture` /
+    `_resolve_dem_from_fixture` ignore the requested area and always return the small
+    committed fixture, so this exercises CLI-boundary validation only — which is the
+    point: it pins "not rejected on size grounds" without a real 200 km
     Overpass/DEM request.
     """
     seed = _seed_setup(tmp_path, radius_km=200.0)

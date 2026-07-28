@@ -310,8 +310,8 @@ def test_setup_re_prepares_legacy_schema_entry_once(
 
     Each format bump invalidates older entries via the manifest schema version —
     the cache key deliberately does not shift for these, since `cache.py` is
-    excluded from the pipeline content hash. v1 → v2 was the graph payload
-; v2 → v3 was the rotated `area` block. Setup's
+    excluded from the pipeline content hash. v1 → v2 was the graph payload; v2 → v3
+    was the rotated `area` block. Setup's
     `CacheCorruptedError` branch treats the stale entry as a miss and rebuilds it
     in place; the second run leaves a valid current-schema entry behind. This is
     the "pre-existing entries re-prepare once, no compat shim" contract.
