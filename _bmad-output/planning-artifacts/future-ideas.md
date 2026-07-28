@@ -166,25 +166,28 @@ territory (noted there).
 # Misc
 * Fix CI ==> actually it's pretty much pointless for a personal tool with no build nor deployment, it should probably just be replaced by pre-commit hooks.
   **Design input (2026-07-28):** the stale-realistic-goldens incident (commit
-  `7e77e41`) is a concrete motivating case, and it constrains the split. The
-  realistic regression tier is `slow`-marked, so it was deselected by the default
-  suite *and* never ran in CI at all (`ci.yml` runs a plain `uv run pytest --cov`),
-  which is how 5 goldens sat stale from the 2026-07-28 `--workers` pinning until
-  someone happened to run `-m slow`. Lesson: a per-commit hook can't be the place
-  the expensive tiers run — the full suite is ~4m15s and `-m slow` another ~23s, and
-  anything that slow just gets `--no-verify`'d. So:
-  - **pre-commit (must stay seconds):** `ruff check`, `ruff format --check`, and
-    *cheap metadata consistency checks* — notably asserting every committed golden's
-    `params_hash` equals `regression.params_hash(fixture.pinned_params)` across all
-    three tiers (fast / realistic / flag-on). That check needs no solver run at all
-    and would have caught this exact bug in milliseconds.
-  - **pre-push or manual:** `basedpyright`, the full `pytest --cov`, and `-m slow`.
-  The metadata guard is the load-bearing piece and is *harness-independent* — worth
-  adding as a plain default-suite test whether or not the hooks migration happens,
-  since it's the only part of the gate that catches this class without paying the
-  200k-iteration cost. Also: the `slow` marker's advertised cost in
-  `pyproject.toml` is stale (says `~65s`, actually ~23s for five fixtures after the
-  Epic 13/14 perf work).
+  `7e77e41`) is a concrete motivating case. The realistic regression tier is
+  `slow`-marked, so it was deselected by the default suite *and* never ran in CI at
+  all (`ci.yml` runs a plain `uv run pytest --cov`), which is how 5 goldens sat stale
+  from the 2026-07-28 `--workers` pinning until someone happened to run `-m slow`.
+  **Decision: the hook should run the full gate, expensive tiers included** —
+  `ruff check`, `ruff format --check`, `basedpyright`, `pytest --cov`, *and* `-m slow`
+  (~4m15s + ~23s). The usual objection is that a multi-minute pre-commit hook gets
+  `--no-verify`'d, but that's a human-impatience failure mode and this repo is
+  committed to by AI agents, which don't have it. Splitting cheap-vs-expensive across
+  pre-commit/pre-push would just recreate the exact hole above: a tier that some
+  common path never selects.
+  Independently of the hook, the cheapest guard is worth having in the default suite
+  because it is *harness-independent* — asserting every committed golden's
+  `params_hash` equals `regression.params_hash(fixture.pinned_params)` across all
+  three tiers (fast / realistic / flag-on) needs no solver run and catches this whole
+  class in microseconds. **Done 2026-07-28:**
+  `tests/unit/test_canonical_edge_hash.py::test_committed_golden_metadata_matches_its_fixture`
+  (verified against the stale goldens: 5 failed, named individually, in 0.41s). Note
+  it catches stale golden *metadata*, not realistic-tier *route drift* — that still
+  needs the tier to actually run, which is the hook's job.
+  Also: the `slow` marker's advertised cost in `pyproject.toml` is stale (says
+  `~65s`, actually ~23s for five fixtures after the Epic 13/14 perf work).
 * ~~Remove area cap: I don't use that for anything, I typically just set it to a very high value so that it doesn't bother me~~
   **Done 2026-07-27:** `--area-cap` removed entirely from the query CLI (spec-remove-area-cap.md, quick-dev). The setup CLI's separate 50 km radius ceiling is unaffected.
   **Done 2026-07-28:** the setup CLI's separate 50 km radius/dimension ceiling (`_SETUP_MAX_RADIUS_KM`/`validate_setup_area`) is now also removed entirely (spec-cli-defaults-and-setup-radius-cap.md), for the same reason — same treatment, one epic later.

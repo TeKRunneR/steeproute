@@ -15,13 +15,21 @@ from steeproute.regression import (
     FIXTURES,
     FLAG_ON_FIXTURES,
     REALISTIC_FIXTURES,
+    Fixture,
     area_args,
     canonical_edge_sequence_hash,
     golden_path,
+    params_hash,
+    read_golden,
 )
 
 # A route's edges as (node_u, node_v, key) triples.
 _EDGES = [(1, 2, 0), (2, 3, 0), (3, 1, 1)]
+
+# Every registered fixture across all three tiers (fast / realistic / flag-on).
+# `name` alone is not unique — a fast and a realistic fixture share it — so tests
+# that parametrize over this must include `tier` in their ids.
+_ALL_FIXTURES: tuple[Fixture, ...] = (*FIXTURES, *REALISTIC_FIXTURES, *FLAG_ON_FIXTURES)
 
 
 def test_hash_is_stable_across_runs() -> None:
@@ -97,5 +105,45 @@ def test_half_specified_rectangle_fails_loud() -> None:
 
 def test_every_fixture_has_a_distinct_golden_path() -> None:
     """Two fixtures sharing a golden file would silently overwrite each other."""
-    paths = [golden_path(f) for f in (*FIXTURES, *REALISTIC_FIXTURES, *FLAG_ON_FIXTURES)]
+    paths = [golden_path(f) for f in _ALL_FIXTURES]
     assert len(set(paths)) == len(paths)
+
+
+# --- Committed goldens agree with their fixture definitions ----------------
+
+
+@pytest.mark.parametrize("fixture", _ALL_FIXTURES, ids=lambda f: f"{f.name}-{f.tier}")
+def test_committed_golden_metadata_matches_its_fixture(fixture: Fixture) -> None:
+    """A committed golden's non-route metadata must still describe its fixture.
+
+    Pure metadata: reads the committed JSON and re-hashes `pinned_params`, with no
+    solver run — so unlike `test_pinned_regressions.py` this is cheap enough to stay
+    in the default suite for *every* tier, including the `slow`-gated realistic one.
+
+    That gap is why this test exists. On 2026-07-28
+    (`spec-cli-defaults-and-setup-radius-cap.md`) `"--workers": "1"` was added to
+    `_PINNED_PARAMS`, which `_REALISTIC_PARAMS` spreads — so `params_hash` moved for
+    both tiers, but only the fast + flag-on goldens were rebaked. The five stale
+    `*.realistic.json` goldens then failed on `params_hash` alone, and nothing
+    noticed until someone ran `-m slow` by hand, because the realistic tier is
+    deselected by `addopts`. Re-deriving the hash costs microseconds, so the whole
+    class of "a pinned param moved and some tier's goldens weren't regenerated"
+    fails here immediately instead of lying dormant in a tier nobody selects.
+    """
+    golden = read_golden(fixture)
+    assert golden is not None, (
+        f"no committed golden at {golden_path(fixture)} for {fixture.name!r} ({fixture.tier} tier)"
+    )
+
+    assert golden["params_hash"] == params_hash(fixture.pinned_params), (
+        f"{golden_path(fixture).name} is stale: its params_hash predates the current "
+        f"pinned param set. If a pinned param changed deliberately, rebake with "
+        f"`uv run update-regression --fixture {fixture.name}"
+        f"{'' if fixture.tier == 'fast' else f' --tier {fixture.tier}'}` and commit "
+        f"with a rationale - checking the route tuples are unchanged if only the "
+        f"hash's input set moved."
+    )
+    # Cheap identity checks alongside: a golden copied to the wrong path, or a
+    # fixture's seed edited without a rebake, are the same class of staleness.
+    assert golden["fixture_name"] == fixture.name
+    assert golden["seed"] == fixture.seed
