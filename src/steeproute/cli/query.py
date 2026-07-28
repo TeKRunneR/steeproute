@@ -242,7 +242,6 @@ def cli(
     # Single space between tokens for downstream tooling that splits on whitespace.
     print(f"steeproute: cache-hit cache_key_hash: {prepared.manifest.cache_key_hash}")
 
-    # --- Journey 1 happy path: stages 8-9 → GRASP → validate → render --------
     params = SolverParams(
         theta=theta,
         min_climb_slope=min_climb_slope,

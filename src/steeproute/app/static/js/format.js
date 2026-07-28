@@ -1,5 +1,5 @@
-// Shared display-format helpers. Number grouping (App Story app-4-2); area
-// summaries (App Story 5.1) live here too so the four screens that name a run's
+// Shared display-format helpers. Number grouping; area
+// summaries live here too so the four screens that name a run's
 // area all describe a rotated box the same way.
 //
 // Long numeric values (iter
@@ -7,7 +7,7 @@
 // `1 000 000`, never commas (a comma is the French decimal separator, so it
 // would misread). Grouping is DISPLAY-ONLY: the value on the wire / in argv
 // stays a plain number. Factored out of config-form.js so the run-library
-// params view (Story 4.3) groups numbers the same way.
+// params view groups numbers the same way.
 
 // A no-break space (U+00A0) is used as the thousands separator so the grouped
 // text never wraps or collapses in an input/label.
@@ -37,9 +37,9 @@ function trimNumber(value) {
   return String(Math.round(n * 100) / 100);
 }
 
-/** Compact identity chip for a job's / region's area (App Story 5.1).
+/** Compact identity chip for a job's / region's area.
  *
- *  Since CLI Epic 15 an area is a possibly-rotated rectangle, so a run can have
+ *  An area is a possibly-rotated rectangle, so a run can have
  *  no radius at all: the centered-square spelling renders `r10`, any other box
  *  renders its full dimensions and bearing (`16×6 km @ 35°`). Never claims a
  *  radius for a shape that has none. Shape fields come straight off the wire

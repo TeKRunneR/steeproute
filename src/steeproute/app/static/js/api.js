@@ -53,7 +53,7 @@ export function getQuerySchema() {
  *  re-derives geometry.
  *
  *  Pass `radiusKm` for a centered square, or `null` plus `{widthKm, heightKm}` for
- *  a rectangle; `angleDeg` rotates either (App Story 5.1). Only the supplied
+ *  a rectangle; `angleDeg` rotates either. Only the supplied
  *  spelling is sent — the server rejects a body carrying both (422). */
 export function resolveArea(lat, lon, radiusKm, { widthKm, heightKm, angleDeg } = {}) {
   const q = new URLSearchParams({ lat, lon });
@@ -84,7 +84,7 @@ export function stopJob(jobId) {
   return _json(`/jobs/${jobId}/stop`, { method: "POST" });
 }
 
-/** Cancel a queued job (App Story 3.2): DELETE it from the store so it never
+/** Cancel a queued job: DELETE it from the store so it never
  *  runs. Resolves on 204; throws ApiError(409) if it is not queued (a running
  *  job is stopped, not cancelled), ApiError(404) for an unknown id. No JSON body
  *  to parse on success, so this doesn't go through `_json`. */
@@ -118,7 +118,7 @@ export function resultViewUrl(jobId) {
 }
 
 /** The Map-home URL that opens the query config form prefilled from a past run's
- *  stored area + params (App Story 3.2 — re-run with tweaks). `map-home.js` reads
+ *  stored area + params, for re-run-with-tweaks. `map-home.js` reads
  *  the `?rerun` id, fetches the job, and opens the form; a new job is enqueued on
  *  submit (the source run is untouched). */
 export function rerunConfigUrl(jobId) {

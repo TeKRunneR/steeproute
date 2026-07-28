@@ -1,4 +1,4 @@
-"""Best-effort reverse geocoding for run labels (App Story 4.3, FR13).
+"""Best-effort reverse geocoding for run labels (FR13).
 
 A NEW outbound seam — an external HTTP call to a geocoder (Nominatim), NOT CLI
 coupling — so it lives here, in its own module, and NOT under `cli_adapter/`,

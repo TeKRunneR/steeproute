@@ -5,7 +5,7 @@
 // stitched server-side). A Stop control hard-cancels a running job; on the
 // terminal `status` event the stream closes and a status-appropriate footer
 // replaces the controls. The GRASP best-cost/iteration line appears only when a
-// progress frame carries `grasp` (query solve phase, Story 2.2) — absent for
+// progress frame carries `grasp` (query solve phase) — absent for
 // setup, never reserved.
 
 import {
@@ -88,7 +88,7 @@ function showFooter(status, exitCode) {
   footerEl.hidden = false;
   footerEl.innerHTML = "";
   // A failed job shows its exit code + a Re-run affordance: for a query it opens
-  // the config form prefilled from this run's params (Story 3.2); a failed setup
+  // the config form prefilled from this run's params; a failed setup
   // has no query form to prefill, so it just links to the map to rebuild. A
   // stopped (hard-cancelled) job has no result (architecture-app.md §Category 7),
   // so no View-routes there.
@@ -103,7 +103,7 @@ function showFooter(status, exitCode) {
     footerEl.textContent = "stopped · no result";
   } else if (status === "done" && jobKind === "query") {
     // A done query produced the CLI route report(s) — offer the S5 iframe view
-    // (Story 2.3). A done setup job renders nothing, so it gets a plain marker.
+    //. A done setup job renders nothing, so it gets a plain marker.
     footerEl.append(document.createTextNode("done · "));
     const view = document.createElement("a");
     view.href = resultViewUrl(jobId);

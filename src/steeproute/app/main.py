@@ -1,12 +1,14 @@
 """FastAPI application factory + entry point for the steeproute web App.
 
-App Story 1.2 stood up the runnable skeleton (factory, static mounts, home page).
-App Story 1.3 hangs the job runner off it: a per-job JSON store and a single
-serial worker (concurrency = 1, architecture-app.md §Category 2) started in the
-`lifespan`, plus the `POST/GET /jobs` API. Story 1.4 added progress + SSE, 1.5 the
-run-watch UI + Stop, and 1.6 the map home + read-only `GET /regions` overlay. The
-run-library UI arrived in Epic 3; Story 3.3 adds boot reconciliation to the
-lifespan (interrupted `running` → `failed`, and the queue rebuilt from the store).
+The factory mounts the static frontend and the `/jobs` + `/regions` REST routes,
+and the `lifespan` owns everything with state: a per-job JSON store, the SSE hub,
+and a single serial worker (concurrency = 1, architecture-app.md §Category 2).
+
+The lifespan also reconciles on boot, before the worker starts: a job left
+`running` by a process that died is marked `failed` (nothing else can ever
+transition it, since the worker that owned it is gone), and the in-memory queue is
+rebuilt from the store's still-`queued` jobs — the queue is not persisted, so
+without this a restart would silently drop them.
 
 Run it with `uv run steeproute-app` (single-worker uvicorn) or, for hot reload,
 `uv run fastapi dev src/steeproute/app/main.py`.
@@ -79,7 +81,7 @@ def index() -> FileResponse:
 
 @router.get("/runs", include_in_schema=False)
 def run_library() -> FileResponse:
-    """Serve the S4 Run-library page (Story 3.1): one list of all jobs, ordered
+    """Serve the S4 Run-library page: one list of all jobs, ordered
     running → queued → history. No path param — distinct from `/runs/{job_id}`
     below, so no route conflict. The page's JS fetches `GET /jobs` and renders
     the cards; the backend adds no new list endpoint."""
@@ -88,7 +90,7 @@ def run_library() -> FileResponse:
 
 @router.get("/runs/{job_id}", include_in_schema=False)
 def run_watch() -> FileResponse:
-    """Serve the S3 Run-watch page (Story 1.5). UI lives under `/runs*`, the JSON
+    """Serve the S3 Run-watch page. UI lives under `/runs*`, the JSON
     API under `/jobs*`; the page's JS reads the `{job_id}` back out of the URL
     (the handler needs no param). The `/runs` run-library list (no id) is the
     route above — no conflict (a bare `/runs` never matches `/runs/{job_id}`)."""
@@ -97,7 +99,7 @@ def run_watch() -> FileResponse:
 
 @router.get("/runs/{job_id}/result", include_in_schema=False)
 def result_view() -> FileResponse:
-    """Serve the S5 Result-view page (Story 2.3): a shell that iframes the run's
+    """Serve the S5 Result-view page: a shell that iframes the run's
     existing CLI `route-<i>.html` report(s). Distinct extra path segment from
     `/runs/{job_id}` above — no route conflict; the page's JS reads the id from
     the URL and fetches `/jobs/{id}/routes` + `/jobs/{id}/result/<file>`."""
@@ -133,15 +135,15 @@ def _make_lifespan(
         app.state.job_store = store
         app.state.job_queue = queue
         app.state.progress_hub = hub
-        # Exposed so `POST /jobs/{id}/stop` can reach the running child (Story 1.5).
+        # Exposed so `POST /jobs/{id}/stop` can reach the running child.
         app.state.job_worker = worker
-        # Cache root for `GET /regions` (Story 1.6); `None` = the CLI default root.
+        # Cache root for `GET /regions`; `None` = the CLI default root.
         app.state.regions_cache_root = cache_root
-        # Reverse geocoder for run labels (Story 4.3); `None` = labelling disabled
+        # Reverse geocoder for run labels; `None` = labelling disabled
         # (no outbound call). `create_job` reads this off app.state.
         app.state.geocoder = geocode
 
-        # Boot reconciliation (Story 3.3), BEFORE the worker starts consuming the
+        # Boot reconciliation, BEFORE the worker starts consuming the
         # queue: (1) recovery — a job left `running` by an ungraceful kill is
         # flipped to `failed (interrupted)` so the library never lies; (2) queue
         # rebuild — the in-memory queue is empty on every boot, so re-enqueue the

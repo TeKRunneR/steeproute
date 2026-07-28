@@ -10,8 +10,8 @@ load-bearing rule"). This module classifies the three progress flavours of
 - **Flavour C** (GRASP solver events) → `QueryProgressParser`, phase `solve`,
   `grasp={iter, best_cost}` populated.
 
-Key finding pinned by the Story 1.1 spike: CLI stage lines carry a **name only,
-no `n/total`** — so `stage_index` is derived positionally (incremented per stage
+CLI stage lines carry a **name only, no `n/total`** — so `stage_index` is
+derived positionally here (incremented per stage
 start) and `stage_total` comes from the known ordered stage list per job kind.
 The A1/A3 (setup) and B1/B3 (query) stage-line shapes are byte-identical (both
 come from the same `StageProgress` seam), so the shared positional tracking
@@ -75,7 +75,7 @@ _GRASP_SINGLE = re.compile(
 # unlike the GRASP `progress:` frames' `best_worker_objective`, which understates
 # it for parallel runs. It has no `ProgressModel` field (it rides in `log_tail`
 # during streaming); `parse_summary_objective` recovers it from the persisted
-# stdout tail for the run-library card metric (App Story 3.1).
+# stdout tail for the run-library card metric.
 _SUMMARY_OBJECTIVE = re.compile(r"^total_objective: (?P<objective>-?\d+(?:\.\d+)?)$")
 
 # C2 parallel GRASP: `progress: workers=<r>/<t> iters=<int>
@@ -148,7 +148,7 @@ class _StageParser:
 
 @final
 class SetupProgressParser(_StageParser):
-    """Setup-flavour classifier (App Story 1.4).
+    """Setup-flavour classifier.
 
     Phase is always `setup`; `grasp` is always `null` (setup emits no `progress:`
     line). A setup **cache-hit** emits the summary block and zero stage lines, so
@@ -164,7 +164,7 @@ class SetupProgressParser(_StageParser):
 
 @final
 class QueryProgressParser(_StageParser):
-    """Query-flavour classifier (App Story 2.2).
+    """Query-flavour classifier.
 
     Query non-solve stages (Flavour B) advance `stage n/total` positionally over
     `QUERY_STAGES` with phase `query`, exactly like setup. Between the
@@ -177,7 +177,7 @@ class QueryProgressParser(_StageParser):
     `grasp` is present **only** during the solve, never reserved: every stage
     start resets it to `null` and returns the phase to `query`, so the
     Run-watch readout appears during the solve and disappears at
-    `validate-render` (epics-app.md §Story 2.2 AC2; UX spec §S3 / UX-DR3). A
+    `validate-render` (ux-spec.md §S3 Run-watch / UX-DR3). A
     `progress:` line never advances the stage index.
     """
 
@@ -222,8 +222,8 @@ def parse_summary_objective(lines: Iterable[str]) -> float | None:
     """The finished query's `total_objective` from its run summary, or `None`.
 
     The run summary is the last block a query prints (FR22), so the worker's
-    bounded stdout tail always contains it on a `done` query — the App Story 3.1
-    run-library card reads the objective from there rather than re-parsing route
+    bounded stdout tail always contains it on a `done` query — the run-library card
+    reads the objective from there rather than re-parsing route
     JSON sidecars. Returns `None` when no `total_objective:` line is present (a
     setup job, a query that produced no routes, or an older record), so the card
     can degrade gracefully. Scans last-to-first so a stray earlier match can't

@@ -2,10 +2,12 @@
 
 Thin by design: parse → store/enqueue → serialize. snake_case on the wire, no
 response envelope (the resource is returned directly; errors are FastAPI's
-default `{detail}` via `HTTPException`). Story 1.4 added the SSE progress stream
-(`GET /jobs/{id}/events`), Story 1.5 the hard-cancel `POST /jobs/{id}/stop`,
-Story 1.6 the read-only `GET /regions` map overlay, and Story 3.2 the cancel-queued
-`DELETE /jobs/{id}`.
+default `{detail}` via `HTTPException`).
+
+The surface: `POST/GET /jobs` to submit and list, `GET /jobs/{id}/events` for the
+SSE progress stream, `POST /jobs/{id}/stop` to hard-cancel a running job,
+`DELETE /jobs/{id}` to cancel a queued one, and the read-only `GET /regions` map
+overlay.
 
 The store, queue, and SSE hub are created in `main.lifespan` and read off
 `app.state`.
@@ -79,8 +81,7 @@ def _regions_cache_root(request: Request) -> pathlib.Path | None:
 
 
 def _geocoder(request: Request) -> GeocodeFn | None:
-    """The run-label reverse geocoder, or `None` when labelling is disabled (App
-    Story 4.3). Production wires the real `reverse_geocode`; tests inject a stub or
+    """The run-label reverse geocoder, or `None` when labelling is disabled. Production wires the real `reverse_geocode`; tests inject a stub or
     leave it unset. `getattr` default guards the case where the lifespan hasn't run."""
     return getattr(request.app.state, "geocoder", None)
 
@@ -122,12 +123,12 @@ def _status_payload(
 async def create_job(body: JobCreate, request: Request) -> JobRecord:
     """Enqueue a job. Returns the created record (status `queued`) with HTTP 201.
 
-    Both `setup` and `query` kinds are accepted (App Story 2.1); `body.params`
+    Both `setup` and `query` kinds are accepted; `body.params`
     is already validated against the kind-matching model (`SetupParams` or
     `QueryParams`) by `JobCreate`'s own kind-dispatch, so a malformed or
     mismatched body has already failed 422 before this handler runs.
 
-    A best-effort `area_label` is reverse-geocoded from the center (App Story 4.3)
+    A best-effort `area_label` is reverse-geocoded from the center
     and stamped on the record before it is persisted, so the run library shows a
     place name from the first render. The lookup is offline-safe and off-loop: a
     failure/absence leaves `area_label=None` and never blocks the 201/enqueue.
@@ -155,10 +156,10 @@ def list_jobs(request: Request) -> list[JobRecord]:
 
 @router.get("/params/query-schema")
 def get_query_params_schema() -> list[SchemaField]:
-    """The introspected query-form schema (App Story 2.1, architecture-app.md
+    """The introspected query-form schema (architecture-app.md
     §Category 9): field name/type/default/choices/help, derived from
     `steeproute.cli.query`'s click command — never hand-duplicated.
-    `config-form.js` renders the flat form directly from this (Story app-4-2); no
+    `config-form.js` renders the flat form directly from this; no
     other file hand-lists query flags.
     """
     return query_params_schema()
@@ -185,11 +186,11 @@ def resolve_region(
     height_km: float | None = None,
     angle_deg: float = 0.0,
 ) -> AreaResolution:
-    """Resolve a candidate selection to its geometry + green/grey coverage (Story 1.6).
+    """Resolve a candidate selection to its geometry + green/grey coverage.
 
     The map picker sends its picked area — `radius_km` (centered square) or
     `width_km` + `height_km` (full box dimensions), either optionally rotated by
-    `angle_deg` (App Story 5.1, CLI Epic 15). The server returns that area's true
+    `angle_deg`. The server returns that area's true
     polygon, its axis-aligned envelope, and the coverage decision, all computed by
     the CLI cache's own conversion + containment (`cli_adapter.resolve_area`).
     Keeps ALL km→deg and containment server-side so the overlay can't drift from
@@ -260,7 +261,7 @@ async def cancel_job(
 def _viewable_result_dir(job: JobRecord) -> pathlib.Path:
     """The job's on-disk result directory, or 404 if it has no viewable result.
 
-    Only a **done query** produces a route report (App Story 2.3): a hard-cancelled
+    Only a **done query** produces a route report: a hard-cancelled
     (`stopped`) or `failed` job has no result (architecture-app.md §Category 7), and
     `setup` jobs render nothing. The directory is read straight off `job.result_dir`
     — the value the worker already persisted before the query ran (queue.py) — so
@@ -273,8 +274,7 @@ def _viewable_result_dir(job: JobRecord) -> pathlib.Path:
 
 @router.get("/jobs/{job_id}/routes")
 def list_result_routes(job: Annotated[JobRecord, Depends(_require_job)]) -> list[RouteInfo]:
-    """The `route-<i>.html` files a done query produced, in numeric order (App
-    Story 2.3). 404 for a job with no viewable result; `[]` for a done query that
+    """The `route-<i>.html` files a done query produced, in numeric order. 404 for a job with no viewable result; `[]` for a done query that
     produced none (graceful degradation). Each entry carries the parsed route
     index so the S5 selector labels routes without re-parsing the filename. Only
     regular files are listed (never a directory/symlink that happens to match the
@@ -294,7 +294,7 @@ def list_result_routes(job: Annotated[JobRecord, Depends(_require_job)]) -> list
 def get_result_file(
     job: Annotated[JobRecord, Depends(_require_job)], filename: str
 ) -> FileResponse:
-    """Serve one file from the job's `result/` dir for the S5 iframe (App Story 2.3).
+    """Serve one file from the job's `result/` dir for the S5 iframe.
 
     Constrained to `<job>/result/` (architecture-app.md §Static-serve safety): the
     candidate is resolved (following symlinks) and must stay inside the result dir,
@@ -331,7 +331,7 @@ async def stop_job(job: Annotated[JobRecord, Depends(_require_job)], request: Re
         )
     # A 200 must mean the kill was actually dispatched. `stop()` returns False only
     # when the record reads `running` but the worker has no such active job — a
-    # stale record (e.g. left by a crash; reconciled on boot in Story 3.3), not a
+    # stale record (e.g. left by a crash; the lifespan reconciles those on boot), not a
     # live job — so surface that as 409 rather than a misleading success.
     if not _worker(request).stop(job.id):
         raise HTTPException(

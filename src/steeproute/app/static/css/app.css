@@ -1,6 +1,6 @@
 /* steeproute web App — minimal hand-rolled styling (no design system, per the
    UX spec's out-of-scope list). Only the global header needs styling in the
-   skeleton story. */
+   skeleton. */
 
 * {
   box-sizing: border-box;
@@ -67,8 +67,7 @@ body {
   max-width: 60rem;
 }
 
-/* --- S1 Map home (Story 1.6) -------------------------------------------- */
-
+/* S1 Map home */
 /* Full-bleed: the map + picker panel fill everything below the header. */
 .app-main.map-main {
   flex: 1;
@@ -110,7 +109,7 @@ body {
   margin: 0 0 1rem;
 }
 
-/* Selection-mode control (Story 4.1). */
+/* Selection-mode control. */
 .mode-control {
   border: 1px solid #cbd2d9;
   border-radius: 4px;
@@ -196,7 +195,7 @@ body {
   margin: 0;
 }
 
-/* Low-emphasis inline action (Story app-5-2 "Reset to square") — deliberately not
+/* Low-emphasis inline action ("Reset to square") — deliberately not
    a `.primary-btn`: it must not compete with Build / Configure query. */
 .link-btn {
   background: none;
@@ -224,13 +223,13 @@ body {
   cursor: ew-resize;
 }
 
-/* Second dimension handle (Story app-5-2): same chip as the width handle, with a
+/* Second dimension handle: same chip as the width handle, with a
    ns-resize cursor so the two read as "this axis" vs. "that axis". */
 .map-handle-height {
   cursor: ns-resize;
 }
 
-/* Rotation handle (Story app-5-2) — a distinct round amber grip outside the box's
+/* Rotation handle — a distinct round amber grip outside the box's
    height-axis edge (not necessarily the longer edge), so it doesn't read as
    another dimension. */
 .map-rotate-handle {
@@ -243,7 +242,7 @@ body {
   cursor: grab;
 }
 
-/* Draggable center handle for move-selection mode (Story 4.1) — a distinct
+/* Draggable center handle for move-selection mode — a distinct
    divIcon so it reads as "grab the whole box", present only in that mode. */
 .map-move-handle {
   width: 18px;
@@ -260,8 +259,7 @@ body {
   cursor: pointer;
 }
 
-/* --- S2 Config form (Story 2.1) ----------------------------------------- */
-
+/* S2 Config form */
 .config-form {
   position: absolute;
   /* Above Leaflet's stacking: its map pane is z-index 400 and its control
@@ -310,8 +308,7 @@ body {
   margin-top: 1rem;
 }
 
-/* --- S3 Run watch (Story 1.5) ------------------------------------------- */
-
+/* S3 Run watch */
 .run-head-row {
   display: flex;
   align-items: center;
@@ -391,8 +388,7 @@ body {
   font-size: 0.95rem;
 }
 
-/* --- S4 Run library (Story 3.1) ----------------------------------------- */
-
+/* S4 Run library */
 .runs-title {
   font-size: 1.4rem;
   margin: 0 0 1rem;
@@ -478,7 +474,7 @@ body {
   margin-top: 0.35rem;
 }
 
-/* Query-run params reveal (Story 4.3): a native <details> so the toggle needs no
+/* Query-run params reveal: a native <details> so the toggle needs no
    JS. Collapsed by default — the card stays scannable; the config is on demand. */
 .run-card-params {
   margin-top: 0.5rem;
@@ -525,7 +521,7 @@ body {
 }
 
 /* Cancel is a <button> (it calls DELETE, not a navigation) — strip the native
-   chrome so it reads like the sibling link actions (Story 3.2). */
+   chrome so it reads like the sibling link actions. */
 button.run-card-action {
   background: none;
   border: none;
@@ -551,8 +547,7 @@ button.run-card-action:disabled {
   font-size: 0.9rem;
 }
 
-/* --- S5 Result view (Story 2.3) ----------------------------------------- */
-
+/* S5 Result view */
 /* Full-bleed: the report iframe fills everything below the header + selector. */
 .app-main.result-main {
   flex: 1;

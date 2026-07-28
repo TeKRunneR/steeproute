@@ -4,12 +4,12 @@
 // first), rendered from the existing creation-ordered `GET /jobs` (no new
 // endpoint — the ordering is a display regrouping here, not a server change).
 // Each card LEADS with the run's human `area_label` (a reverse-geocoded town/
-// place name, Story 4.3), falling back to `kind · r{radius}` when unlabelled;
+// place name), falling back to `kind · r{radius}` when unlabelled;
 // center/radius/timestamp are secondary detail, plus a status-appropriate metric
 // (a done query's objective/cost, a failed job's exit code) and — for query runs
-// only — a click-to-reveal view of the stored params (Story 4.3). Actions are
+// only — a click-to-reveal view of the stored params. Actions are
 // status-gated: Watch (running), View routes (done query), Cancel (queued →
-// DELETE, Story 3.2), and Re-run with tweaks (done/failed query, Story 3.2).
+// DELETE), and Re-run with tweaks (done/failed query).
 
 import { listJobs, cancelJob, runWatchUrl, resultViewUrl, rerunConfigUrl, ApiError } from "./api.js";
 import { areaGeometry, areaSummary, groupThousands } from "./format.js";
@@ -30,7 +30,7 @@ function orderForLibrary(jobs) {
 }
 
 /** The card's lead identifier: the human town/place label when present, else
- *  today's `kind · r{radius}` fallback (Story 4.3 — a run with no `area_label`,
+ *  the `kind · r{radius}` fallback (a run with no `area_label`,
  *  i.e. geocoding disabled/offline/no place, is never worse off than before). */
 function cardTitle(job) {
   if (job.area_label) return `${job.kind} · ${job.area_label}`;
@@ -47,7 +47,7 @@ function metaText(job) {
 }
 
 /** Display a stored param value: booleans as on/off, long numbers space-grouped
- *  (Story 4.2's `format.js`, matching the config form), null/unset as an em dash. */
+ *  (via `format.js`, matching the config form), null/unset as an em dash. */
 function formatParamValue(value) {
   if (value === null || value === undefined) return "—";
   if (typeof value === "boolean") return value ? "on" : "off";
@@ -56,7 +56,7 @@ function formatParamValue(value) {
 }
 
 /** A click-to-reveal (native <details>) view of a query run's full stored params
- *  (Story 4.3). Data is already on the job record (`job.params`) — no new fetch. */
+ *. Data is already on the job record (`job.params`) — no new fetch. */
 function buildParamsView(job) {
   const details = document.createElement("details");
   details.className = "run-card-params";
@@ -83,7 +83,7 @@ function metricText(job) {
   }
   if (job.status === "failed") {
     const code = job.exit_code != null ? `exit code ${job.exit_code}` : "failed";
-    // A boot-interrupted job carries failure_reason="interrupted" (Story 3.3).
+    // A boot-interrupted job carries failure_reason="interrupted".
     return job.failure_reason ? `${code} · ${job.failure_reason}` : code;
   }
   return "";

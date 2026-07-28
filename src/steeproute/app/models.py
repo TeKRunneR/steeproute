@@ -1,4 +1,4 @@
-"""Job domain models for the web App (App Story 1.3).
+"""Job domain models for the web App.
 
 The wire contract and the persisted `job.json` share these shapes. Conventions
 (architecture-app.md §JSON & data-format conventions):
@@ -63,13 +63,13 @@ class AreaSpec(BaseModel):
     """Search area on the wire — a (optionally rotated) rectangle, kept as its own
     App-side model so nothing outside `cli_adapter` imports the CLI domain type.
 
-    Mirrors the **CLI flag surface** (Epic 15, `cli/_shared.resolve_area`) rather
-    than `steeproute.models.Area`: two mutually exclusive spellings, with
-    `angle_deg` (a bearing, clockwise from north) rotating either.
+    Mirrors the **CLI flag surface** (`cli/_shared.resolve_area`) rather than
+    `steeproute.models.Area`: two mutually exclusive spellings, with `angle_deg`
+    (a bearing, clockwise from north) rotating either.
 
     - `radius_km` — the centered-square shorthand (half-side, not a disk radius),
-      the pre-Story-5.1 shape and still the common case. A `job.json` written
-      before this story carries exactly `center` + `radius_km` and loads unchanged.
+      and the common case. A `job.json` carrying only `center` + `radius_km` is
+      valid, so this spelling must stay loadable on its own.
     - `width_km` + `height_km` — **full box dimensions** (what the user thinks in,
       and what `--width`/`--height` take). `Area` stores half-extents, so the
       halving happens once, at the single point that builds a CLI `Area`
@@ -129,7 +129,7 @@ class AreaSpec(BaseModel):
 
 class SetupParams(BaseModel):
     """Setup-job parameters beyond the area. Minimal by design for v1 — the full
-    click-introspected schema is Epic 2 (query). Field names map 1:1 onto
+    click-introspected schema is the query side's (`QueryParams`). Field names map 1:1 onto
     `steeproute-setup` flags in `cli_adapter.argv`.
 
     `extra="forbid"` so a body carrying `QueryParams`-shaped fields under
@@ -144,7 +144,7 @@ class SetupParams(BaseModel):
 
 
 class QueryParams(BaseModel):
-    """Query-job parameters beyond the area (App Story 2.1). Field names/types
+    """Query-job parameters beyond the area. Field names/types
     mirror the subset of `steeproute` CLI flags `cli_adapter.params_schema`
     exposes on the form (excludes area/output/verbosity, which the App owns).
 
@@ -224,7 +224,7 @@ class JobRecord(BaseModel):
     area: AreaSpec
     params: dict[str, Any] = Field(default_factory=dict)
     # A human place label for the run — a nearby town/place name best-effort
-    # reverse-geocoded from `area.center` at creation (App Story 4.3, `app.geocode`).
+    # reverse-geocoded from `area.center` at creation (`app.geocode`).
     # `None` when geocoding is disabled, offline, or found no place; the run
     # library then falls back to the coordinate display. Additive: a `job.json`
     # written before this field existed loads with `area_label=None`.
@@ -235,7 +235,7 @@ class JobRecord(BaseModel):
     finished_at: str | None = None
     exit_code: int | None = None
     result_dir: str | None = None
-    # The finished query's run-summary `total_objective` (App Story 3.1),
+    # The finished query's run-summary `total_objective`,
     # captured by the worker at completion so the run-library card shows a
     # done query's cost without re-parsing route JSON. `None` for setup jobs,
     # non-terminal jobs, and a query that produced no routes.
@@ -251,10 +251,10 @@ class RegionBounds(BaseModel):
 
     For a square (or any axis-aligned rectangle) the envelope coincides with the
     box; for a *rotated* rectangle it is strictly larger, so drawing it
-    over-reports the area and it must never be used for a containment test (App
-    Story 5.1 envelope-leak audit, mirroring `steeproute.cache.area_bbox_wgs84`
-    which computes it). The true shape rides alongside as `polygon`; coverage
-    decisions come from the CLI cache's orientation-aware containment.
+    over-reports the area and it must never be used for a containment test —
+    mirroring `steeproute.cache.area_bbox_wgs84`, which computes it and carries the
+    same warning. The true shape rides alongside as `polygon`; coverage decisions
+    come from the CLI cache's orientation-aware containment.
 
     Precomputed server-side from the CLI cache's shared km→deg conversion so the
     frontend renders exact geometry and never re-derives km→deg.
@@ -268,12 +268,12 @@ class RegionBounds(BaseModel):
 
 class AreaGeometry(BaseModel):
     """The server-computed geometry of an area — the shape fields `GET /regions`
-    and `GET /regions/resolve` both carry (App Story 5.1).
+    and `GET /regions/resolve` both carry.
 
     `polygon` is the **true** (possibly rotated) box as `[lat, lon]` vertices in
     ring order, derived from `steeproute.cache.area_polygon` (the very ring
     coverage is tested against); `bounds` is its axis-aligned envelope, kept for
-    the pre-5.1 overlay path and honest about being an over-approximation.
+    clients that only draw a box, and honest about being an over-approximation.
     `width_km`/`height_km` are the effective **full** dimensions and `angle_deg`
     the bearing, so a client can describe any shape without re-deriving it.
     `radius_km` is present only for a centered square — `None` for a rectangle,
@@ -313,7 +313,7 @@ class AreaResolution(AreaGeometry):
 
 
 class RouteInfo(BaseModel):
-    """One route report a done query produced (App Story 2.3): the CLI's
+    """One route report a done query produced: the CLI's
     `route-<index>.html` file. `index` is the 1-based route number parsed from
     the filename server-side, so the S5 selector labels routes without
     re-parsing the filename in JS."""
@@ -323,8 +323,7 @@ class RouteInfo(BaseModel):
 
 
 class GraspProgress(BaseModel):
-    """GRASP solver readout — populated only during a query's solve phase
-    (Story 2.2), `null` on the `ProgressModel` otherwise."""
+    """GRASP solver readout — populated only during a query's solve phase, `null` on the `ProgressModel` otherwise."""
 
     iter: int
     best_cost: float

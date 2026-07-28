@@ -4,7 +4,7 @@
 // native re-render (FR8). A query returns up to N routes as separate files, so a
 // small selector switches the iframe `src` between them; the file list comes from
 // the server (GET /jobs/{id}/routes), never an assumed count. Reached from the
-// S3 Run-watch "View routes" action (and, later, the Epic-3 run library).
+// S3 Run-watch "View routes" action and the S4 run library.
 
 import {
   getJob,

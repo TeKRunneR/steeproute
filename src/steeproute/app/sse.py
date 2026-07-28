@@ -1,4 +1,4 @@
-"""In-process SSE progress hub (App Story 1.4, architecture-app.md §Category 4).
+"""In-process SSE progress hub (architecture-app.md §Category 4).
 
 Single process, single worker: a per-job asyncio fan-out. The worker publishes
 progress + terminal-status events as they happen; the SSE endpoint subscribes

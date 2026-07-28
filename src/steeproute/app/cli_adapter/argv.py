@@ -7,8 +7,8 @@ The only place in the App that knows the CLI's flag names. A validated
 
 Deliberately does NOT pass `--cache-dir`: `steeproute-setup` writes to its own
 default cache root (`platformdirs.user_cache_dir("steeproute")`), which is the
-same on-disk cache the region overlay reads in Story 1.6. A private cache dir
-would make built regions invisible to the map (architecture-app.md §Category 6).
+same on-disk cache the region overlay reads. A private cache dir would make built
+regions invisible to the map (architecture-app.md §Category 6).
 """
 
 from __future__ import annotations
@@ -45,12 +45,12 @@ def resolve_query_executable() -> str:
 
 
 def _area_flags(area: AreaSpec) -> list[str]:
-    """The `--center` + shape flags for `area` — the CLI Epic 15 area surface.
+    """The `--center` + shape flags for `area` — the CLI's area surface.
 
     One spelling or the other, mirroring `cli/_shared.resolve_area`: a centered
-    square emits `--radius` (byte-identical to pre-Story-5.1, which is what keeps
-    every square job's command, cache key, and message unchanged), any other
-    rectangle emits `--width`/`--height` as **full box dimensions** — the CLI
+    square emits `--radius`, never an equivalent `--width`/`--height` pair, since
+    that would change its cache key and its every message; any other rectangle
+    emits `--width`/`--height` as **full box dimensions** — the CLI
     halves them into `Area` half-extents itself, so they pass through unhalved
     here. `--angle` rides on either spelling and is omitted at 0 (the CLI default)
     so a square command stays exactly what a user would type.
@@ -104,11 +104,10 @@ def build_query_argv(
 
     Every exposed field is always emitted explicitly (unlike
     `build_setup_argv`'s only-non-default style) — a "skip if default" rule
-    would have to know which default applies per-flag (most now match the
-    plain CLI default 1:1, but `max_descent_slope`/`start_at_junction` still
-    deliberately differ — the App's two quality-demo overrides, AGENTS.md) and
-    is a needless way to reintroduce the bug this story's
-    `resolve_query_defaults` seam exists to prevent. A `None` field
+    would have to know which default applies per-flag — most match the plain CLI
+    default 1:1, but `max_descent_slope`/`start_at_junction` deliberately differ
+    (the App's two quality-demo overrides, AGENTS.md §Solver / GRASP) — and that is
+    exactly the drift the `resolve_query_defaults` seam exists to prevent. A `None` field
     (unset) resolves to the App's actual default via
     `params_schema.resolve_query_defaults` — the single place that mapping
     lives — except `--seed`, `--max-descent-slope`, and `--start-at-junction`,

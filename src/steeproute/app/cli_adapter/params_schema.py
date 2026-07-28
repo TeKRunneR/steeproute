@@ -36,18 +36,16 @@ from steeproute.solver.grasp import STAGNATION_ITERS_DEFAULT_PLACEHOLDER
 FieldType = Literal["float", "int", "string", "bool", "choice"]
 
 # Flags the App owns instead of exposing on the form: the map selection
-# (center/radius, plus the Story 15.3 rotated-rectangle spelling
-# width/height/angle), server-controlled paths (output-dir, cache-dir),
-# CLI-operational flags that don't belong on a route-param form (verbose,
-# quiet), and click's own `--version` eager flag (added by
-# `@click.version_option`, present in `cli.params` like any other Option —
-# caught live in this story's browser drive-through, where it first showed up
-# as a bogus "version" checkbox on the rendered form).
+# (center/radius, and the rotated-rectangle spelling width/height/angle),
+# server-controlled paths (output-dir, cache-dir), CLI-operational flags that
+# don't belong on a route-param form (verbose, quiet), and click's own
+# `--version` eager flag — `@click.version_option` puts it in `cli.params` like
+# any other Option, so without excluding it the form renders a bogus "version"
+# checkbox.
 #
 # The schema is a live introspection of `cli.query`, so **every** area flag must
 # be listed here or it renders as a stray numeric field on the query form. The
-# map owns area selection end to end; App Story 5.1 is what teaches the picker
-# and the argv builder to emit the rotated spelling.
+# map owns area selection end to end.
 _EXCLUDED_FIELDS: frozenset[str] = frozenset(
     {
         "center",
@@ -64,19 +62,15 @@ _EXCLUDED_FIELDS: frozenset[str] = frozenset(
 )
 
 # App-only overrides (AGENTS.md §Solver / GRASP). Every field not listed here
-# keeps its CLI default unchanged. As of 2026-07-28 the plain query CLI's own
-# defaults were bumped to match these quality-demo numbers (`difficulty_cap`,
-# `elevation_deadband`, `j_max`, `workers` all dropped from here — they're
-# just the click-level CLI default now, read straight off `param.default`, no
-# override needed).
+# keeps its CLI default, read straight off `param.default` — keep this dict as
+# small as possible, since each entry is a place the App and CLI can disagree.
 #
-# `max_descent_slope` (0.4) and `start_at_junction` (on) are the two genuine,
-# intentional divergences left: steep-route-tool defaults from Story app-4-2.
-# The CLI still ships them off/None (opt-in flags with a real meaning when
-# absent), but the whole point of this tool is steep routes, so the App
-# defaults them on. These override the CLI's None/False through the same
-# `resolve_query_defaults` seam `build_query_argv` reads, so no argv.py change
-# is needed.
+# `max_descent_slope` (0.4) and `start_at_junction` (on) are the only genuine
+# divergences. The CLI ships them off/None because they are opt-in flags with a
+# real meaning when absent, but the whole point of this tool is steep routes, so
+# the App defaults them on. They override the CLI's None/False through the same
+# `resolve_query_defaults` seam `build_query_argv` reads, so `argv.py` needs no
+# knowledge of them.
 _QUALITY_DEFAULTS: dict[str, Any] = {
     "max_descent_slope": 0.4,
     "start_at_junction": True,
@@ -107,9 +101,10 @@ _UNSET_FLAG_FALLBACKS: dict[str, Any] = {
 class SchemaField:
     """One form field, derived from a click.Option — never hand-duplicated.
 
-    The form is flat (Story app-4-2): every field renders in one always-visible
-    list, so there is no basic/advanced grouping metadata — the schema stays a
-    pure introspection of the CLI's click options.
+    The form is flat by design: every field renders in one always-visible list, so
+    there is deliberately no basic/advanced grouping metadata — that would be
+    App-side taxonomy the schema would have to carry, and the schema stays a pure
+    introspection of the CLI's click options.
     """
 
     name: str

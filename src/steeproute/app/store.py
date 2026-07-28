@@ -5,7 +5,7 @@ One directory per job under the store root: `<root>/<job_id>/job.json`. Writes
 are atomic (temp-file in the same dir + `os.replace`), mirroring the CLI cache's
 discipline so a crash mid-write never surfaces a partial record. Alongside it,
 `progress.ndjson` is an **append-only** progress log (one `ProgressModel` per
-line) that powers the SSE snapshot-then-tail (Story 1.4). Story app-3-3 adds
+line) that powers the SSE snapshot-then-tail. It also owns
 boot-time restart recovery (`recover_interrupted`): a job left `running` by an
 ungraceful kill is reconciled to `failed (interrupted)` on the next boot.
 """
@@ -47,7 +47,7 @@ class JobStore:
         return self._root / job_id
 
     def job_dir(self, job_id: str) -> pathlib.Path:
-        """The job's own directory (public accessor; App Story 2.1).
+        """The job's own directory (public accessor).
 
         A query job's `--output-dir` must be a per-job path (the CLI's own
         `./results` default is relative to the server's cwd and would collide
@@ -66,7 +66,7 @@ class JobStore:
         self._write_atomic(record)
 
     def delete(self, job_id: str) -> None:
-        """Remove a job's entire directory (App Story 3.2 — cancel queued).
+        """Remove a job's entire directory — the cancel-queued path.
 
         Deleting the record is what makes a cancelled job disappear from `list()`
         (hence `GET /jobs` and the run library) and from any result serving. The
@@ -77,7 +77,7 @@ class JobStore:
         shutil.rmtree(self._job_dir(job_id), ignore_errors=True)
 
     def recover_interrupted(self) -> list[str]:
-        """Reconcile crash-interrupted jobs on boot (App Story 3.3 — FR10).
+        """Reconcile crash-interrupted jobs on boot (FR10).
 
         An ungraceful kill (crash / OS shutdown / `kill -9`) leaves a job
         persisted as `running` because the process died without running the

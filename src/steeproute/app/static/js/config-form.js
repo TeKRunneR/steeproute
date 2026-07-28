@@ -1,4 +1,4 @@
-// S2 Config form (App Story 2.1; flat layout in Story app-4-2) — a schema-driven
+// S2 Config form (flat layout) — a schema-driven
 // panel over the map, opened from map-home when "Configure query" is enabled.
 // Rendered entirely from `GET /params/query-schema` (architecture-app.md
 // §Category 9): this file hand-lists no query flag names, types, or defaults —
@@ -18,7 +18,7 @@ const statusEl = document.getElementById("config-status");
 
 let schemaCache = null;
 let currentArea = null;
-// Re-run-with-tweaks prefill (Story 3.2): a prior run's stored `params` dict, or
+// Re-run-with-tweaks prefill: a prior run's stored `params` dict, or
 // null for a fresh "Configure query" open. A field takes its stored value when
 // that value is non-null, otherwise the schema (quality-demo) default — so a
 // re-run reproduces the run's effective config plus the user's explicit tweaks.
@@ -34,14 +34,14 @@ function fieldInputId(field) {
 }
 
 /** The value a field should show: the prefill's stored value when non-null,
- *  otherwise the schema default (Story 3.2 re-run-with-tweaks). */
+ *  otherwise the schema default (the re-run-with-tweaks path). */
 function effectiveValue(field) {
   const pv = currentPrefill?.[field.name];
   return pv !== null && pv !== undefined ? pv : field.default;
 }
 
 /** Long numeric fields (iter budget, stagnation iters) get space
- *  thousands separators for readability (Story app-4-2 / FR14). A default with
+ *  thousands separators for readability. A default with
  *  magnitude >= 1000 is the "long" signal — a self-contained display heuristic,
  *  not a hand-listed flag set, so it tracks the schema. Small numbers (theta, n,
  *  workers…) stay ordinary number inputs with their native spinner. */
@@ -114,7 +114,7 @@ function buildGroup(fields) {
 async function renderForm() {
   fieldsFormEl.innerHTML = "";
   const schema = await loadSchema();
-  // Flat form (Story app-4-2): every field in one always-visible list, in the
+  // Flat form: every field in one always-visible list, in the
   // schema's introspection order (i.e. the CLI's option declaration order).
   fieldsFormEl.appendChild(buildGroup(schema));
 }
@@ -153,7 +153,7 @@ function readParams(schema) {
 
 /** Open the panel for an area (`{center: [lat, lon], radius_km}`, matching
  *  `AreaSpec`). `prefill` is optional: a prior run's stored `params` dict for
- *  re-run-with-tweaks (Story 3.2), or omitted for a fresh "Configure query"
+ *  re-run-with-tweaks, or omitted for a fresh "Configure query"
  *  (all fields show their quality-demo defaults). Re-renders the form from the
  *  schema every time (cheap; keeps prefill logic in one place).
  *

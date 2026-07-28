@@ -9,7 +9,7 @@
 // This file re-derives NEITHER — it passes the picked shape through and draws the
 // polygon the server returns, so the overlay can't drift from query-side coverage.
 // The axis-aligned `bounds` envelope the responses also carry is deliberately
-// never read: it is strictly larger than a rotated box (Story app-5-2 closes that
+// never read: it is strictly larger than a rotated box (which is exactly the
 // envelope leak).
 //
 // The only geometry computed here turns a dragged handle into an INPUT scalar: a
@@ -24,12 +24,11 @@ const DEFAULT_RADIUS_KM = 10;
 const MIN_HALF_KM = 0.5; // floor on a half-extent, as the radius handle has always had
 // How far outside the height-axis edge the rotation grip sits. Kept close to 1
 // (code review, app-5-2) so the grip stays reachable on a large or
-// height-dominant box — exactly the diagonal-range case this epic targets —
+// height-dominant box — the diagonal-range case this picker exists for —
 // rather than drifting off-screen at typical zoom.
 const ROTATE_HANDLE_OFFSET = 1.1;
 const GRENOBLE = [45.19, 5.72];
 
-// --- DOM ---------------------------------------------------------------------
 const readoutEl = document.getElementById("selection-readout");
 const centerEl = document.getElementById("sel-center");
 const shapeEl = document.getElementById("sel-shape");
@@ -41,7 +40,7 @@ const statusEl = document.getElementById("picker-status");
 const hintEl = document.getElementById("picker-hint");
 const modeControlEl = document.getElementById("mode-control");
 
-// Selection modes (Story 4.1 / FR11). Exclusive: the map click only drops a
+// Selection modes. Exclusive: the map click only drops a
 // center in area-pick; only in move-selection is the whole box draggable; only
 // in select-region are the green overlays clickable. Per-mode hint copy too.
 const MODE_HINTS = {
@@ -53,7 +52,6 @@ const MODE_HINTS = {
 const COVERED_STYLE = { color: "#3a923f", weight: 2, fillOpacity: 0.05 };
 const UNCOVERED_STYLE = { color: "#8a94a6", weight: 2, dashArray: "6 4", fillOpacity: 0.05 };
 
-// --- Map ---------------------------------------------------------------------
 const map = L.map("map").setView(GRENOBLE, 11);
 // OSM-derived OpenTopoMap basemap — topographic, key-free and referer-tolerant,
 // same tiles the CLI HTML report uses (map tiles are a tile-server fetch, not a
@@ -69,7 +67,6 @@ L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
 // (otherwise a stale size offsets the dropped center).
 requestAnimationFrame(() => map.invalidateSize());
 
-// --- State -------------------------------------------------------------------
 let center = null; // {lat, lon}
 // The picked shape, and the single source of truth for what goes on the wire —
 // NOT re-derived from the resolve response, so the spelling can't flip-flop under
@@ -77,7 +74,7 @@ let center = null; // {lat, lon}
 //   {kind: "radius", radiusKm}                    → `radius_km` (centered square)
 //   {kind: "box", widthKm, heightKm, angleDeg}    → `width_km`/`height_km`/`angle_deg`
 // A fresh drop is the square spelling, so the shipped square path (argv, cache
-// key, coverage) is bit-for-bit what it was before this story.
+// key, coverage) is unchanged by the rotated spelling.
 let shape = { kind: "radius", radiusKm: DEFAULT_RADIUS_KM };
 let selectionPoly = null;
 let widthHandle = null;
@@ -93,8 +90,6 @@ const widthIcon = L.divIcon({ className: "map-handle", iconSize: [16, 16] });
 const heightIcon = L.divIcon({ className: "map-handle map-handle-height", iconSize: [16, 16] });
 const rotateIcon = L.divIcon({ className: "map-rotate-handle", iconSize: [18, 18] });
 const moveIcon = L.divIcon({ className: "map-move-handle", iconSize: [18, 18] });
-
-// --- Shape helpers -----------------------------------------------------------
 
 /** The wire `area` body for the current selection — exactly ONE spelling, since
  *  the server rejects a body carrying both radius and dimensions (422). */
@@ -154,8 +149,6 @@ function bearingDeg(pos) {
   const deg = (Math.atan2(east, north) * 180) / Math.PI;
   return ((deg % 180) + 180) % 180;
 }
-
-// --- Rendering ---------------------------------------------------------------
 
 function midpoint(a, b) {
   return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
@@ -231,8 +224,6 @@ async function resolveAndRender({ snapHandles }) {
     if (seq === resolveSeq) statusEl.textContent = `Could not resolve area: ${err.message ?? err}`;
   }
 }
-
-// --- Handles -----------------------------------------------------------------
 
 function makeHandle(icon, onDragEnd) {
   const marker = L.marker([center.lat, center.lon], { icon, draggable: true }).addTo(map);
@@ -334,8 +325,6 @@ function applyModeInteractivity() {
   hintEl.textContent = MODE_HINTS[mode];
 }
 
-// --- Regions -----------------------------------------------------------------
-
 function drawRegions(regions) {
   for (const r of regions) {
     // The region's TRUE (possibly rotated) polygon — not its axis-aligned
@@ -364,8 +353,7 @@ function drawRegions(regions) {
   }
 }
 
-// --- Interactions ------------------------------------------------------------
-
+// Interactions
 map.on("click", (ev) => {
   if (mode !== "area-pick") return; // only area-pick drops a new center
   center = { lat: ev.latlng.lat, lon: ev.latlng.lng };
@@ -415,7 +403,7 @@ async function loadRegions() {
   }
 }
 
-// Re-run with tweaks (Story 3.2): arriving as `/?rerun=<job_id>` opens the query
+// Re-run with tweaks: arriving as `/?rerun=<job_id>` opens the query
 // config form directly on the source run's stored area + params — bypassing the
 // map picker (the area is taken verbatim from the record, whatever its shape;
 // coverage isn't re-checked here — a since-cleared cache just fails the query

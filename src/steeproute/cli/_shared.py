@@ -738,7 +738,6 @@ osm_age_warn_days_option = click.option(
 )
 
 
-# --- OSM-age warning (Architecture §Cat 4f) ---------------------------------
 
 # Shared "what to re-run" suggestion. Both CLIs land on cache-hit paths
 # (`steeproute-setup` re-prepares; `steeproute` queries an existing entry);

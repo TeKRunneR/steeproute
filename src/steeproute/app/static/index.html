@@ -25,8 +25,8 @@
       <div id="map" class="map"></div>
       <aside class="picker-panel">
         <h1 class="picker-title">Pick an area</h1>
-        <!-- Selection modes (Story 4.1 / FR11): area-pick is the default and
-             behaves exactly as Epic 1; move-selection drags the whole box;
+        <!-- Selection modes: area-pick is the default and
+             drops/resizes the box; move-selection drags the whole box;
              select-region snaps to a built (green) region. Modes are exclusive
              so no interaction does double duty. -->
         <fieldset id="mode-control" class="mode-control">
@@ -51,15 +51,15 @@
         <dl id="selection-readout" class="selection-readout" hidden>
           <dt>Center</dt>
           <dd id="sel-center">—</dd>
-          <!-- Shape, not "radius": since CLI Epic 15 the area is a possibly
-               rotated rectangle, which has no single radius (Story app-5-2). -->
+          <!-- Shape, not "radius": the area is a possibly
+               rotated rectangle, which has no single radius. -->
           <dt>Shape</dt>
           <dd id="sel-shape">—</dd>
           <dt>Coverage</dt>
           <dd id="sel-coverage">—</dd>
         </dl>
         <!-- Only shown once the selection is a rectangle/rotated box: returns it
-             to the centered-square spelling (Story app-5-2). -->
+             to the centered-square spelling. -->
         <button id="reset-square-btn" class="link-btn" type="button" hidden>
           Reset to square
         </button>
@@ -74,7 +74,7 @@
         <p id="picker-status" class="picker-status" role="status"></p>
       </aside>
 
-      <!-- S2 Config form (Story 2.1; flat layout Story app-4-2): a panel over the
+      <!-- S2 Config form (flat layout): a panel over the
            map, opened by "Configure query" over a green (built) selection.
            Rendered from the introspected `GET /params/query-schema` —
            config-form.js hand-lists no flags; all flags show at once. -->

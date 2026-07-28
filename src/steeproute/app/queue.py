@@ -7,17 +7,17 @@ a time: pop → mark running → spawn the CLI as a subprocess → drain its std
 (keeping a bounded tail) → record the exit code → set the terminal status.
 
 The worker NEVER dies on a bad job: any per-job failure marks that job `failed`
-and moves on (architecture-app.md §Process patterns). As of Story 1.4 the worker
-also classifies each stdout line into the unified `ProgressModel`, appends it to
-the job's append-only `progress.ndjson`, and publishes it (plus a terminal
-status) to the SSE hub. A bounded stdout/stderr tail is still kept on the record
-for the failed-job diagnostic.
+and moves on (architecture-app.md §Process patterns). Each stdout line is also
+classified into the unified `ProgressModel`, appended to the job's append-only
+`progress.ndjson`, and published (with the terminal status) to the SSE hub; the
+bounded stdout/stderr tail is kept on the record for the failed-job diagnostic.
 
-Story 1.5 adds the hard-cancel Stop seam (architecture-app.md §Category 7): the
-worker tracks the single running `(job_id, proc)` and exposes `stop(job_id)`,
-which kills the child. The worker stays the SOLE writer of the terminal status —
-`stop` only requests the kill and records the intent; the normal reap path then
-turns it into a `stopped`/exit-130 transition. A stopped job has no result.
+The hard-cancel Stop seam (architecture-app.md §Category 7): the worker tracks the
+single running `(job_id, proc)` and exposes `stop(job_id)`, which kills the child.
+The worker stays the **sole** writer of the terminal status — `stop` only requests
+the kill and records the intent, and the normal reap path turns that into a
+`stopped`/exit-130 transition. Two writers here would race a `stopped` against the
+reap path's own verdict. A stopped job has no result.
 """
 
 from __future__ import annotations
@@ -56,8 +56,8 @@ STDOUT_TAIL_LINES = 50
 # driving the real spawn/drain/exit path.
 BuildArgv = Callable[[JobRecord], list[str]]
 
-# Per-job output subdir name under the job store's own directory (App Story
-# 2.1): `<store_root>/<job_id>/result/`, passed to `steeproute --output-dir`.
+# Per-job output subdir name under the job store's own directory:
+# `<store_root>/<job_id>/result/`, passed to `steeproute --output-dir`.
 RESULT_DIR_NAME = "result"
 
 
@@ -159,7 +159,7 @@ class Worker:
         # A hub with no subscribers is a harmless no-op, so a caller that doesn't
         # care about live streaming (e.g. some unit tests) can omit it.
         self._hub = hub if hub is not None else ProgressHub()
-        # Stop seam (Story 1.5). Concurrency = 1, so at most one child runs. The
+        # Stop seam. Concurrency = 1, so at most one child runs. The
         # active job id is tracked separately from its process handle: the id is
         # set the instant the record flips to RUNNING (before the child spawns),
         # the proc handle only once it exists. `_stop_requested` remembers ids
@@ -179,7 +179,7 @@ class Worker:
         `status=running` always matches here — including during the brief spawn
         window, where the worker honors the recorded intent as soon as the child
         exists. Returns False only when `job_id` is not the active job (e.g. a
-        stale RUNNING record left by a crash, reconciled on boot in Story 3.3);
+        stale RUNNING record left by a crash, which the lifespan reconciles on boot);
         the caller turns that into a 409.
         """
         if job_id != self._current_job_id:
@@ -219,7 +219,7 @@ class Worker:
             # CLI's own `--output-dir` default is a relative `./results`, which
             # would collide across jobs run from the same server cwd) — set it
             # here, before argv is built, so `default_build_argv` can pass it as
-            # `--output-dir` and Story 2.3 can later serve it statically.
+            # `--output-dir`, so the result-view route can serve it statically.
             record.result_dir = str(self._store.job_dir(record.id) / RESULT_DIR_NAME)
         self._store.update(record)
         # Claim this as the active job SYNCHRONOUSLY — no `await` between the
@@ -274,7 +274,7 @@ class Worker:
             if record.kind is JobKind.QUERY and record.status is JobStatus.DONE:
                 # A done query's run summary (FR22) is its last stdout block, so
                 # the bounded tail carries `total_objective` — capture it once
-                # here for the run-library card (App Story 3.1); `None` if the
+                # here for the run-library card; `None` if the
                 # query returned no routes. Only cli_adapter parses stdout.
                 record.result_objective = parse_summary_objective(stdout_tail)
             self._store.update(record)
@@ -285,7 +285,7 @@ class Worker:
             # and record the interrupted terminal state (status=failed +
             # failure_reason, per architecture-app.md §data-format) so the record
             # never lies "running" forever. This is the same state restart
-            # recovery (Story app-3-3) would set on the next boot.
+            # recovery would set on the next boot.
             if proc is not None and proc.returncode is None:
                 proc.kill()
             record.finished_at = utcnow_iso()

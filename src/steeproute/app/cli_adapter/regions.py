@@ -38,7 +38,7 @@ class _GeometryFields(TypedDict):
 
 
 def to_cli_area(area: AreaSpec) -> Area:
-    """Convert the App's wire area into the CLI domain `Area` (App Story 5.1).
+    """Convert the App's wire area into the CLI domain `Area`.
 
     Delegates to the CLI's own `cli/_shared.resolve_area` — the authoritative
     owner of the area surface — so the App cannot drift from it on any of the
@@ -74,7 +74,7 @@ def _geometry_fields(area: Area) -> _GeometryFields:
     for a centered square (`Area.is_square`), never as the inert `0.0` a rotated
     `Area` carries; a client that needs a size for any shape reads
     `width_km`/`height_km` instead. Note a *rotated square* therefore reports
-    dimensions rather than a radius — the cache no longer records which spelling
+    dimensions rather than a radius: the cache does not record which spelling
     prepared an entry (see `cache.format_area_flags`).
     """
     lat, lon = area.center
@@ -149,9 +149,8 @@ def _to_region_info(entry: cache.CoverageEntry) -> RegionInfo:
     """Project one prepared cache entry into the App's overlay shape.
 
     Carries the entry's **true** (possibly rotated) polygon alongside its
-    axis-aligned envelope — the App-side half of Epic 15's envelope-leak audit,
-    deferred here from Story 15.2. Before this, the envelope *was* the reported
-    region (drawn too large for a rotated entry) and `radius_km` read as the inert
-    `0.0`; both are fixed in `_geometry_fields`.
+    axis-aligned envelope, never the envelope alone: an envelope-only overlay draws
+    a rotated entry too large, and its `radius_km` reads as the inert `0.0`.
+    `_geometry_fields` is what keeps both honest.
     """
     return RegionInfo(cache_key_hash=entry.cache_key_hash, **_geometry_fields(entry.area))
