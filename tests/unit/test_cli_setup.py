@@ -19,9 +19,12 @@ from collections.abc import Iterator
 import osmnx
 import pytest
 
-# The drift canary below drives osmnx's real cache read; `_http` is private and not
-# re-exported, so it must be imported as a submodule rather than off the package.
+# The drift canary below drives osmnx's real cache read and response loop; neither
+# `_http` nor `graph._create_graph` is re-exported, so both are reached as
+# submodules rather than off the package.
 from osmnx import _http as osmnx_http
+from osmnx import graph as osmnx_graph
+from osmnx._errors import InsufficientResponseError
 
 from steeproute.cache import Manifest
 from steeproute.cli._shared import emit_osm_age_warning
@@ -248,12 +251,22 @@ def test_configure_osmnx_logging_is_idempotent(
     assert len(isolated_osmnx_logging.handlers) == 1
 
 
-# `_OsmnxFetchReporter` (cache-hit visibility without --verbose)
-def _reporting_progress(*, quiet: bool = False) -> list[str]:
-    """Install a reporter writing into a fresh line list; return the list."""
+# `_OsmnxFetchReporter` (fetch/build split, visible without --verbose)
+def _reporting_progress(
+    *, quiet: bool = False, ticks: tuple[float, ...] = (0.0, 1.5, 12.0)
+) -> list[str]:
+    """Install a reporter writing into a fresh line list; return the list.
+
+    `ticks` feeds the injected clock in call order: construction (the stage start),
+    then one reading per fetch response, then one at assembly. Fixed values keep the
+    rendered durations assertable.
+    """
     lines: list[str] = []
+    readings = iter(ticks)
     _configure_osmnx_logging(verbose=False)
-    _install_osmnx_fetch_reporter(StageProgress(on_line=None if quiet else lines.append))
+    _install_osmnx_fetch_reporter(
+        StageProgress(on_line=None if quiet else lines.append), clock=lambda: next(readings)
+    )
     return lines
 
 
@@ -263,8 +276,9 @@ def test_fetch_reporter_announces_a_cache_hit_on_the_progress_sink() -> None:
     lines = _reporting_progress()
 
     osmnx.utils.log("Retrieved response from cache file 'abc.json'", logging.INFO)
+    osmnx.utils.log("Retrieved all data from API in 1 request(s)", logging.INFO)
 
-    assert lines == ["  osm: Overpass response served from cache (no download)"]
+    assert lines == ["  osm: Overpass fetch 1.50 s (served from cache, no download)"]
 
 
 @pytest.mark.usefixtures("isolated_osmnx_logging")
@@ -273,22 +287,32 @@ def test_fetch_reporter_forwards_a_real_download_verbatim() -> None:
     lines = _reporting_progress()
 
     osmnx.utils.log("Downloaded 516.2kB from 'overpass-api.de' with status 200", logging.INFO)
+    osmnx.utils.log("Retrieved all data from API in 1 request(s)", logging.INFO)
 
-    assert lines == ["  osm: Downloaded 516.2kB from 'overpass-api.de' with status 200"]
+    assert lines == [
+        "  osm: Overpass fetch 1.50 s (Downloaded 516.2kB from 'overpass-api.de' with status 200)"
+    ]
 
 
 @pytest.mark.usefixtures("isolated_osmnx_logging")
-def test_fetch_reporter_reports_each_outcome_once() -> None:
-    """A multi-request fetch must not repeat itself; both kinds may still appear."""
-    lines = _reporting_progress()
+def test_fetch_reporter_times_a_subdivided_fetch_to_its_last_response() -> None:
+    """The fetch clock must stop at the last response, not the first of its kind.
+
+    A query osmnx subdivides logs one outcome per response. Stopping at the first
+    would charge every later response to the build half — the half whose whole
+    purpose is to show how much of the stage was CPU.
+    """
+    lines = _reporting_progress(ticks=(0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 20.0))
 
     for _ in range(3):
         osmnx.utils.log("Retrieved response from cache file 'a.json'", logging.INFO)
         osmnx.utils.log("Downloaded 1.0kB from 'overpass-api.de' with status 200", logging.INFO)
+    osmnx.utils.log("Retrieved all data from API in 6 request(s)", logging.INFO)
+    osmnx.utils.log("graph_from_polygon returned graph with 10 nodes and 20 edges", logging.INFO)
 
     assert lines == [
-        "  osm: Overpass response served from cache (no download)",
-        "  osm: Downloaded 1.0kB from 'overpass-api.de' with status 200",
+        "  osm: Overpass fetch 6.00 s (6 responses, 3 downloaded)",
+        "  osm: graph build 14.00 s (10 nodes and 20 edges)",
     ]
 
 
@@ -298,18 +322,88 @@ def test_fetch_reporter_is_silent_under_quiet() -> None:
     lines = _reporting_progress(quiet=True)
 
     osmnx.utils.log("Retrieved response from cache file 'abc.json'", logging.INFO)
+    osmnx.utils.log("Retrieved all data from API in 1 request(s)", logging.INFO)
 
     assert lines == []
 
 
 @pytest.mark.usefixtures("isolated_osmnx_logging")
 def test_fetch_reporter_ignores_osmnx_chatter() -> None:
-    """Only the two fetch-outcome messages are progress-worthy; the other ~30 are not."""
+    """Only the fetch-outcome, fetch-done and assembly-complete messages count.
+
+    The fetch-done marker on its own reports nothing: with no response record there
+    is no boundary to time, and a fetch half of 0.00 s would read as a cache hit.
+    """
     lines = _reporting_progress()
 
     osmnx.utils.log("Requesting data from API in 1 request(s)", logging.INFO)
     osmnx.utils.log("Created graph with 4,963 nodes and 10,069 edges", logging.INFO)
     osmnx.utils.log("Retrieved all data from API in 1 request(s)", logging.INFO)
+
+    assert lines == []
+
+
+@pytest.mark.usefixtures("isolated_osmnx_logging")
+def test_fetch_reporter_splits_the_stage_into_fetch_and_build() -> None:
+    """The AC's headline: a warm stage reports how little of it was the fetch."""
+    lines = _reporting_progress(ticks=(0.0, 1.5, 112.0))
+
+    osmnx.utils.log("Retrieved response from cache file 'abc.json'", logging.INFO)
+    osmnx.utils.log("Retrieved all data from API in 1 request(s)", logging.INFO)
+    osmnx.utils.log(
+        "graph_from_polygon returned graph with 130,315 nodes and 323,192 edges", logging.INFO
+    )
+
+    assert lines == [
+        "  osm: Overpass fetch 1.50 s (served from cache, no download)",
+        "  osm: graph build 110.50 s (130,315 nodes and 323,192 edges)",
+    ]
+
+
+@pytest.mark.usefixtures("isolated_osmnx_logging")
+def test_fetch_reporter_still_reports_both_halves_without_the_fetch_done_marker() -> None:
+    """A reworded fetch-done marker delays the fetch half; it must not drop it.
+
+    The response records alone carry the boundary, so the build half would still be
+    computable — and a build time printed with no fetch half to be half of is the
+    confusing outcome this guards against.
+    """
+    lines = _reporting_progress(ticks=(0.0, 1.5, 112.0))
+
+    osmnx.utils.log("Retrieved response from cache file 'abc.json'", logging.INFO)
+    osmnx.utils.log(
+        "graph_from_polygon returned graph with 130,315 nodes and 323,192 edges", logging.INFO
+    )
+
+    assert lines == [
+        "  osm: Overpass fetch 1.50 s (served from cache, no download)",
+        "  osm: graph build 110.50 s (130,315 nodes and 323,192 edges)",
+    ]
+
+
+@pytest.mark.usefixtures("isolated_osmnx_logging")
+def test_fetch_reporter_reports_the_build_half_once() -> None:
+    """`graph_from_point` and `graph_from_bbox` log the same shape after the inner call."""
+    lines = _reporting_progress(ticks=(0.0, 1.0, 50.0))
+
+    osmnx.utils.log("Retrieved response from cache file 'abc.json'", logging.INFO)
+    osmnx.utils.log("Retrieved all data from API in 1 request(s)", logging.INFO)
+    for wrapper in ("graph_from_polygon", "graph_from_bbox", "graph_from_point"):
+        osmnx.utils.log(f"{wrapper} returned graph with 10 nodes and 20 edges", logging.INFO)
+
+    assert lines[1:] == ["  osm: graph build 49.00 s (10 nodes and 20 edges)"]
+
+
+@pytest.mark.usefixtures("isolated_osmnx_logging")
+def test_fetch_reporter_omits_the_build_half_when_no_fetch_boundary_was_seen() -> None:
+    """A reworded fetch marker must not turn into a build number that looks like a split.
+
+    Without the fetch boundary the elapsed time to assembly is the *whole* stage,
+    not the build half; reporting it as "graph build" would be a plausible lie.
+    """
+    lines = _reporting_progress()
+
+    osmnx.utils.log("graph_from_polygon returned graph with 10 nodes and 20 edges", logging.INFO)
 
     assert lines == []
 
@@ -321,9 +415,10 @@ def test_fetch_reporter_reinstall_drops_the_previous_runs_sink() -> None:
     second = _reporting_progress()
 
     osmnx.utils.log("Retrieved response from cache file 'abc.json'", logging.INFO)
+    osmnx.utils.log("Retrieved all data from API in 1 request(s)", logging.INFO)
 
     assert first == []
-    assert second == ["  osm: Overpass response served from cache (no download)"]
+    assert second == ["  osm: Overpass fetch 1.50 s (served from cache, no download)"]
 
 
 @pytest.mark.usefixtures("isolated_osmnx_logging")
@@ -331,13 +426,15 @@ def test_fetch_reporter_matches_osmnxs_real_cache_read_path(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: pathlib.Path,
 ) -> None:
-    """Drift canary: drive osmnx's OWN cache read, not a hand-written message.
+    """Drift canary: drive osmnx's OWN code, not hand-written messages.
 
-    `_OSMNX_CACHE_HIT_MARKER` is a substring of a private, undocumented log line. If
-    an osmnx upgrade rewords it, the reporter would silently go quiet — the failure
-    mode this whole change exists to remove. Writing a cache file through osmnx's own
-    `_save_to_cache` and reading it back through `_retrieve_from_cache` keeps that
-    honest, offline (both touch only the filesystem).
+    Both markers this asserts on are substrings of private, undocumented log lines.
+    If an osmnx upgrade rewords either, the reporter would silently go quiet — the
+    failure mode this whole change exists to remove. Writing a cache file through
+    `_save_to_cache` and reading it back through `_retrieve_from_cache` covers the
+    outcome record; `_create_graph` over an empty response list covers the
+    fetch-done record that ends the response loop (it logs the count, then rejects
+    the empty data). Both stay offline: filesystem only, no request is made.
     """
     monkeypatch.setattr(osmnx.settings, "use_cache", True)
     monkeypatch.setattr(osmnx.settings, "cache_folder", str(tmp_path / "osmnx"))
@@ -346,5 +443,7 @@ def test_fetch_reporter_matches_osmnxs_real_cache_read_path(
     url = "http://overpass-api.de/api/interpreter?data=fixture"
     osmnx_http._save_to_cache(url, {"elements": []}, ok=True)
     assert osmnx_http._retrieve_from_cache(url) == {"elements": []}, "cache write/read failed"
+    with pytest.raises(InsufficientResponseError):
+        osmnx_graph._create_graph([], bidirectional=False)  # pyright: ignore[reportUnknownMemberType]
 
-    assert lines == ["  osm: Overpass response served from cache (no download)"]
+    assert lines == ["  osm: Overpass fetch 1.50 s (served from cache, no download)"]

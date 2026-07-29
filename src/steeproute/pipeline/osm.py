@@ -25,6 +25,7 @@ import shapely
 from steeproute.errors import BadCLIArgError, DataSourceUnavailableError
 from steeproute.models import Area
 from steeproute.pipeline._common import empty_like
+from steeproute.pipeline._osmnx_adapter import osmnx_owned_intermediates
 
 # OSM sac_scale tag values mapped to numeric T-rank for difficulty-cap filtering.
 # https://wiki.openstreetmap.org/wiki/Key:sac_scale
@@ -111,26 +112,33 @@ def osm_load(area: Area) -> nx.MultiDiGraph:
     truststore.inject_into_ssl()
     fetch_call = "graph_from_point" if area.is_square else "graph_from_polygon"
     try:
-        if area.is_square:
-            # `half_extents_km[0]` (not `radius_km`) so a square expressed as
-            # explicit equal extents fetches its real size. For the shorthand
-            # `Area(center=..., radius_km=r)` the two are the same float, so this
-            # never perturbs a square area's fetch.
-            raw = osmnx.graph_from_point(
-                center_point=area.center,
-                dist=area.half_extents_km[0] * 1000.0,
-                dist_type="bbox",
-                custom_filter=_OSM_CUSTOM_FILTER,
-                retain_all=False,
-                simplify=True,
-            )
-        else:
-            raw = osmnx.graph_from_polygon(
-                area_polygon(area),
-                custom_filter=_OSM_CUSTOM_FILTER,
-                retain_all=False,
-                simplify=True,
-            )
+        # Inside the adapter osmnx assembles the graph without copying the
+        # intermediates it has finished with (`pipeline._osmnx_adapter`). Graph
+        # content and iteration order are unchanged — proven by an old/new diff over
+        # a real r20 response, not by inspection; two of osmnx's `--verbose` lines
+        # about spatial-index internals go away. On an osmnx version the adapter
+        # hasn't been verified against it steps aside and stock osmnx runs.
+        with osmnx_owned_intermediates():
+            if area.is_square:
+                # `half_extents_km[0]` (not `radius_km`) so a square expressed as
+                # explicit equal extents fetches its real size. For the shorthand
+                # `Area(center=..., radius_km=r)` the two are the same float, so this
+                # never perturbs a square area's fetch.
+                raw = osmnx.graph_from_point(
+                    center_point=area.center,
+                    dist=area.half_extents_km[0] * 1000.0,
+                    dist_type="bbox",
+                    custom_filter=_OSM_CUSTOM_FILTER,
+                    retain_all=False,
+                    simplify=True,
+                )
+            else:
+                raw = osmnx.graph_from_polygon(
+                    area_polygon(area),
+                    custom_filter=_OSM_CUSTOM_FILTER,
+                    retain_all=False,
+                    simplify=True,
+                )
     except (requests.exceptions.RequestException, OSError, ValueError) as exc:
         # `RequestException` is the base of every `requests` failure (ConnectionError,
         # Timeout, HTTPError, ...) — the documented network-failure modes osmnx propagates

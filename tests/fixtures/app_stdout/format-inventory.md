@@ -96,7 +96,8 @@ stage: trail-filter ...
 
 **A2 — within-stage line** (indented 2 spaces)
 ```
-  osm: Overpass response served from cache (no download)
+  osm: Overpass fetch 1.91 s (served from cache, no download)
+  osm: graph build 124.75 s (130,315 nodes and 323,192 edges)
   tile 0/1
   tile 1/1
 ```
@@ -104,10 +105,14 @@ stage: trail-filter ...
   - the DEM fetch loop's `  tile <done>/<total>`
     (`src/steeproute/pipeline/dem_download.py`). Counter **starts at 0** then
     increments.
-  - the Overpass fetch outcome inside `osm-load`, `  osm: <outcome>`
-    (`cli/setup.py::_OsmnxFetchReporter`) — either the cache-hit wording above or
-    osmnx's own `Downloaded <n>kB from '<host>' with status <code>` on a live fetch.
-    At most one line per outcome kind per run; absent if osmnx logged neither.
+  - the `osm-load` fetch/build split, `  osm: <half> <seconds> s (<detail>)`
+    (`cli/setup.py::_OsmnxFetchReporter`). Exactly one line per half per run.
+    The fetch half's detail is the cache-hit wording above or osmnx's own
+    `Downloaded <n>kB from '<host>' with status <code>` for a single-response
+    fetch, and `<n> responses, <m> downloaded` when osmnx subdivided the query;
+    the build half's is the assembled node/edge count. Both are absent if osmnx
+    logged nothing recognizable — there is no split to report then, and the
+    stage's own total still covers the whole thing.
 - Neither is a stage boundary.
 - → append to `log_tail` (optionally surface as sub-progress of the current
   stage). Does **not** change `stage_index`.

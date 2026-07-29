@@ -243,7 +243,7 @@ Exact file names within `pipeline/` and `solver/` are placeholders; adjust durin
 
 | # | Stage | Module |
 |---|---|---|
-| 1 | OSM load via `osmnx` | `pipeline/osm.py` |
+| 1 | OSM load via `osmnx`, driven through a scoped ownership adapter (see 3a-quater) | `pipeline/osm.py` + `pipeline/_osmnx_adapter.py` |
 | 2 | Trail filter (sac_scale, highway types, untagged-policy); admits a curated minor-road set as connectors (no SAC grade, never climbs; tightened multi-tag handling so major roads don't leak in) | `pipeline/osm.py` |
 | 3 | 2D polyline smoothing per edge (fused with stage 4 in the setup orchestrator — see 3a-ter) | `pipeline/smoothing.py` |
 | 4 | Resample each edge to ~10m vertex spacing | `pipeline/smoothing.py` |
@@ -258,6 +258,73 @@ Exact file names within `pipeline/` and `solver/` are placeholders; adjust durin
 **Ownership opt-ins on the pure boundary (3a-bis).** A stage may offer a keyword-only opt-in that mutates the caller's graph instead of building a new one, for the case where the caller provably owns its input and never reads the pre-stage version again. The **default is always the pure path**, so the "input is never mutated" contract and its purity tests stand for every other caller. Two names, by what is forfeited: `inplace=True` where the stage only *adds* attributes to the same object (`compute_edge_metrics`, `graph_smooth_elevation`, `graph_deadband_elevation`; `sample_elevation` since Story 16.2, saving ~5.4 s of r20 setup — `attach_elevation` opts in), and `consume=True` where the caller forfeits the pre-stage *content* (`operationalize_graph`; `filter_trails` since Story 16.1, where it removes rejected edges rather than rebuilding — ~4.6 s → ~0.5 s at r20; `write_entry`/`_graph_to_payload` since Story 16.2, popping `geometry` off the owned graph instead of copying it — see 4c). Each opt-in call site carries a comment naming why ownership is exclusive. Both paths must decide identically: `filter_trails` shares one `keep(data)` predicate between them so they cannot drift on filter semantics.
 
 **Fused stage pairs (3a-ter, Story 16.2).** Where two consecutive stages both work internally in flat coordinate arrays, the orchestrator may run them as one fused pass that carries the arrays across the boundary (`smoothing.FlatPolylines`) and builds the output graph **once**, instead of stage N materializing a graph that stage N+1 immediately flattens again. Setup stages 3→4 are the first such pair: measured 9.66 s + 34.87 s → 3.66 s + 29.04 s on a real warm r20 setup (−26.6% across the pair), with byte-identical output. Three rules keep this from eroding the stage model: (1) the public stage functions (`smooth_polylines`, `resample_edges`) remain pure graph-in/graph-out and are *thin wrappers over the same internals*, so the fused path cannot drift from them; (2) the per-stage `StageProgress` seams are **preserved** — the fused pass is split at the same boundary, so the stdout timeline, the App's `SETUP_STAGES` list (Cat 8), and the e2e stage assertions are unchanged; (3) degenerate edges are dropped at the collect step rather than masked at the rebuild — resampling accumulates arc length in one global `cumsum`, so a non-finite coordinate carried along "for later masking" would silently poison every subsequent edge.
+
+**Ownership inside a third party's pipeline (3a-quater, Story 16.4).** 3a-bis covers
+ownership opt-ins on *our* stage boundaries. Stage 1's cost is mostly not ours: osmnx's
+`graph_from_polygon` assembles the graph in six steps and hands each its input by
+value, so every step opens with a full copy of a graph the previous one will never
+read again. `pipeline/_osmnx_adapter.py` supplies consuming replacements for two of
+them and installs them by **rebinding `osmnx.truncate.largest_component` and
+`osmnx.truncate.truncate_graph_polygon` for exactly the duration of one fetch**.
+
+Rebinding rather than re-implementing `graph_from_polygon` is the safety argument:
+osmnx keeps driving its own pipeline, so the 500 m buffer, both truncation passes,
+both component passes, the deliberate no-re-simplify between them and the
+buffered-graph street count all keep their original order by construction. Both
+rebound names are public (`truncate`, `utils`); **no private osmnx symbol is used in
+production**. The cost is a version pin — that `graph_from_polygon` resolves these
+through the module attribute at call time, and which of its intermediates are dead,
+are read off its body — so `_ADAPTED_OSMNX_VERSIONS` records where that reading was
+done and the adapter declines to engage (logging a warning, running stock osmnx) on
+any other version. The dependency constraint stays `osmnx>=2.0,<3`.
+
+Three facts worth keeping:
+
+- **Ownership is not uniform across the passes.** `count_streets_per_node` reads the
+  *post-simplify buffered* graph **after** the second truncation returns, so
+  truncation must copy on that pass and may consume only on the first. The
+  discriminator is the `simplified` flag `simplify_graph` stamps — semantic, not a
+  call counter, so it cannot invert if osmnx reorders. Getting this wrong is
+  invisible in graph structure and shows up only as shifted `street_count` values;
+  a test pins it.
+- **Not copying matters more than it looks, because a `MultiDiGraph` is a reference
+  cycle.** An intermediate osmnx drops is not reclaimed by refcounting; it stays
+  resident until a cyclic-GC pass, while the next step allocates. Measured at r20
+  (2026-07-29): 3.26 M objects and ~0.95 GB still held at the point the next stage
+  began.
+- **Node selection is answered directly instead of through a spatial index.** osmnx
+  materializes a GeoDataFrame of every node, builds an r-tree, and cuts the polygon
+  into quadrats to accelerate it. That earns its keep against a complex boundary;
+  against the 5-vertex rectangle this pipeline fetches it is overhead, and one
+  `shapely.intersects_xy` over the raw coordinates gives the same set (the quadrats
+  tile the polygon, and `intersects` is the predicate on both sides). This is the
+  single largest win in the change: 27.65 s → 0.63 s on the 806k-node pass.
+
+**Measured on a real warm r20 setup replay (2026-07-29), back-to-back across a
+`git stash` boundary:** `osm-load` 191.39 s → 129.93 s (−32.1%); CLI-reported total
+250.94 s → 190.47 s (−24.1%); every other stage inside its noise band. The assembly
+steps this replaces went 42.2 s → 2.8 s (largest component, both passes) and 36.9 s →
+7.7 s (truncation, both passes). Graph identity was gated by an old/new diff over the
+real cached r20 Overpass response — 130,315 nodes and 323,192 edges with identical
+iteration order, node/edge attributes and geometry coordinate sequences — and no
+golden moved. **On-disk content is unchanged, so Cat 4c is untouched**; the
+`pipeline/**` content hash does shift, so the next `steeproute-setup` for an area
+re-prepares once (Cat 4b).
+
+**Peak RSS did not improve end-to-end, and that is a finding.** The ingestion phase's
+own peak fell 3.50 → 3.13 GB, but whole-setup peak went 3.504 → 3.55 GB: with the
+per-stage probe, the high-water mark is now set by `elevation-sampling` (3.551 GB)
+rather than by ingestion. Peak working set is a high-water mark of resident pages, so
+once ingestion had grown the heap the later stages reused those pages instead of
+growing further; removing the ingestion spike just relocates which stage sets the
+mark. Consequence for any future memory work at larger radii: setup's ceiling is
+`elevation-sampling`, not stage 1.
+
+**Two `--verbose` lines disappear.** osmnx's INFO records about the r-tree and quadrat
+machinery the truncation replacement no longer builds are gone. Graph content,
+iteration order, and every osmnx log line that reports an outcome rather than a
+mechanism are unaffected — the component step's own "Got largest ... component" line
+is reproduced verbatim.
 
 **CLI split (3b):** stages 1–5 are parameter-independent (depend only on area + DEM version + OSM extract date + untagged-trails-policy) — these run in `steeproute-setup` and their output is cached; the cached `vertices_resampled` hold **raw** sampled elevations. Stages 6–9 run in `steeproute` on every query: stage 6 (elevation smoothing + optional deadband) and stage 7 (per-edge metrics) depend on `--elevation-smoothing` / `--elevation-deadband`; stages 8–9 depend on `min_climb_slope`, `min_climb_ground_length`, `L_connector` — all fast enough to not need caching. The route-level slope floor `θ` is applied later still, at solve/validate time. Because smoothing is recomputed query-side from the cached raw elevations, the cache stays **smoothing-independent**: sweeping `--elevation-smoothing` re-does stages 6–9 + solve only and never re-prepares. (Moving stages 6–7 query-side changes `pipeline_content_hash`, so existing caches re-prepare once when this ships — a one-time cost.)
 

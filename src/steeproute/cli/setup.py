@@ -31,10 +31,10 @@ stderr so the pipeline's `logger.debug(...)` and the cache's
 `logger.warning(...)` calls become visible — as does osmnx's own INFO chatter
 (`_configure_osmnx_logging`).
 
-Independently of `--verbose`, a cache-miss run reports the Overpass fetch outcome
-as a within-stage line under `osm-load` (`_OsmnxFetchReporter`), because "did this
-actually download anything?" is not otherwise recoverable from a stage whose timing
-is dominated by graph-build CPU.
+Independently of `--verbose`, a cache-miss run splits the `osm-load` stage into its
+fetch and graph-build halves as within-stage lines (`_OsmnxFetchReporter`), because
+neither "did this actually download anything?" nor "how much of this was CPU?" is
+recoverable from a single stage total dominated by graph-build work.
 """
 
 from __future__ import annotations
@@ -44,6 +44,7 @@ import importlib.metadata
 import logging
 import pathlib
 import time
+from collections.abc import Callable
 from typing import NoReturn, final, override
 
 import click
@@ -312,61 +313,132 @@ def _configure_osmnx_logging(*, verbose: bool) -> None:
     osmnx.settings.log_file = True
 
 
-# osmnx's two Overpass-outcome messages, matched as substrings of the rendered
-# record: `_http._retrieve_from_cache` logs the first on a cache hit, and
-# `_http._parse_response` the second after a live download. Both are INFO and
-# neither is a public API, so `test_cli_setup.py` drives osmnx's real cache-read
-# path to catch the day an upgrade reworks the wording.
+# osmnx log messages, matched as substrings of the rendered record.
+# `_http._retrieve_from_cache` logs the cache hit and `_http._parse_response` the
+# download, one or the other per response inside `_create_graph`'s response loop;
+# `_create_graph` logs the "all data" line immediately after that loop, which is
+# therefore where the fetch ends; `graph_from_polygon` logs the "returned graph"
+# line as the last thing it does, which is where assembly ends. None is a public
+# API, so `test_cli_setup.py` drives osmnx's real cache-read and response-loop
+# paths to catch the day an upgrade reworks the wording.
 _OSMNX_CACHE_HIT_MARKER = "Retrieved response from cache file"
 _OSMNX_DOWNLOAD_MARKER = "Downloaded "
+_OSMNX_FETCH_DONE_MARKER = "Retrieved all data from API in "
+_OSMNX_ASSEMBLED_MARKER = " returned graph with "
 
 
 @final
 class _OsmnxFetchReporter(logging.Handler):
-    """Report the Overpass fetch outcome as a within-stage progress line on stdout.
+    """Split the `osm-load` stage into its fetch and graph-build halves on stdout.
 
-    The `osm-load` stage covers a (possibly cached) Overpass fetch *plus* osmnx's
-    graph build, and on a warm run the fetch is a no-op while the stage still
-    reports minutes — so "did this download anything?" is the one fact the timeline
-    can't otherwise convey. Reading it out of osmnx's own log records is what makes
-    it available without driving osmnx's private request API.
+    The stage covers a (possibly cached) Overpass fetch *plus* osmnx's graph
+    build, and on a warm run the fetch is a no-op while the stage still reports
+    minutes — so one opaque total actively misleads. Both halves are recovered
+    from osmnx's own log records: the per-response outcome marks the end of the
+    fetch, and `graph_from_polygon`'s closing line marks the end of assembly.
 
-    Emitted through `StageProgress.line`, so it lands indented inside the open
-    `osm-load` stage (the `  tile i/N` shape the App already tolerates) and
-    disappears under `--quiet` like every other progress line. At most one line per
-    outcome kind: a multi-request fetch would otherwise repeat itself.
+    Reading the boundary out of the log stream rather than driving osmnx's request
+    API is what keeps this out of `pipeline/**` entirely — no lower-level access,
+    no cache re-key. The cost is a documented coupling to osmnx's wording, which
+    this handler already carried for the outcome line.
+
+    Emitted through `StageProgress.line`, so lines land indented inside the open
+    stage (the `  tile i/N` shape the App already tolerates) and disappear under
+    `--quiet`. One line per half, and the fetch half is timed to the **last**
+    response, not the first: an area large enough for osmnx to subdivide its
+    query produces one outcome record per response, and stopping the fetch clock
+    at any but the last would charge the remaining responses to the build half.
+    Recording every response but printing once is what keeps those two apart.
+
+    The boundary sits at the last response's outcome record, which osmnx logs
+    before parsing that response's JSON — so the fetch half is pure
+    network-or-cache-read time and each response's parse falls in the build half.
     """
 
-    def __init__(self, progress: StageProgress) -> None:
+    def __init__(self, progress: StageProgress, *, clock: Callable[[], float] = time.perf_counter):
         super().__init__(level=logging.INFO)
         self._progress = progress
-        self._reported: set[str] = set()
+        self._clock = clock
+        # Installed immediately before the stage opens, so this is the stage start
+        # to within the few ms of argument validation that precede the fetch.
+        self._armed_at = clock()
+        self._fetch_ended_at: float | None = None
+        self._responses = 0
+        self._downloads = 0
+        self._last_outcome = ""
+        self._fetch_reported = False
+        self._build_reported = False
 
     @override
     def emit(self, record: logging.LogRecord) -> None:
         message = record.getMessage()
         if _OSMNX_CACHE_HIT_MARKER in message:
-            self._report("cache-hit", "osm: Overpass response served from cache (no download)")
-        elif _OSMNX_DOWNLOAD_MARKER in message:
-            self._report("download", f"osm: {message}")
+            self._record_response("served from cache, no download")
+        elif message.startswith(_OSMNX_DOWNLOAD_MARKER):
+            self._downloads += 1
+            self._record_response(message)
+        elif message.startswith(_OSMNX_FETCH_DONE_MARKER):
+            self._report_fetch()
+        elif _OSMNX_ASSEMBLED_MARKER in message:
+            self._report_build(message)
 
-    def _report(self, kind: str, line: str) -> None:
-        if kind in self._reported:
+    def _record_response(self, outcome: str) -> None:
+        self._responses += 1
+        self._last_outcome = outcome
+        self._fetch_ended_at = self._clock()
+
+    def _report_fetch(self) -> None:
+        # No response record means no boundary was seen, so there is nothing to
+        # time — an unrecognized outcome wording must not become a fetch half of
+        # zero, which would read as a cache hit.
+        if self._fetch_reported or self._fetch_ended_at is None:
             return
-        self._reported.add(kind)
-        self._progress.line(line)
+        self._fetch_reported = True
+        # A single response can report its own outcome verbatim (osmnx's size and
+        # host are the useful detail); across several, that one response's size
+        # would misrepresent the whole fetch, so report the shape instead.
+        detail = (
+            self._last_outcome
+            if self._responses == 1
+            else f"{self._responses} responses, {self._downloads} downloaded"
+        )
+        # ASCII only: stdout is cp1252 on Windows, and a character the codepage
+        # can't encode raises UnicodeEncodeError mid-progress-line.
+        self._progress.line(
+            f"osm: Overpass fetch {self._fetch_ended_at - self._armed_at:.2f} s ({detail})"
+        )
+
+    def _report_build(self, message: str) -> None:
+        # Without a fetch boundary there is no split to report, only a number that
+        # would look like one. The stage's own total still covers the whole thing.
+        if self._fetch_ended_at is None or self._build_reported:
+            return
+        # Fallback emission: a reworded fetch-done marker would otherwise drop the
+        # fetch half while the build half — which needs only the response records —
+        # still printed, leaving a build time with nothing to be half of.
+        self._report_fetch()
+        self._build_reported = True
+        _, _, shape = message.partition(_OSMNX_ASSEMBLED_MARKER)
+        self._progress.line(
+            f"osm: graph build {self._clock() - self._fetch_ended_at:.2f} s ({shape})"
+        )
 
 
-def _install_osmnx_fetch_reporter(progress: StageProgress) -> None:
+def _install_osmnx_fetch_reporter(
+    progress: StageProgress, *, clock: Callable[[], float] = time.perf_counter
+) -> None:
     """Attach a fresh `_OsmnxFetchReporter` for this run's progress seam.
 
     Any reporter from an earlier run in the same process (repeated `CliRunner`
     invocations in one test) is dropped first, so lines never go to a stale sink.
+    Call this immediately before the stage opens — the reporter times the fetch
+    half from its own construction. `clock` is injectable for deterministic tests,
+    mirroring `StageProgress` and `throttle`.
     """
     osmnx_logger = logging.getLogger(osmnx.settings.log_name)
     for handler in [h for h in osmnx_logger.handlers if isinstance(h, _OsmnxFetchReporter)]:
         osmnx_logger.removeHandler(handler)
-    osmnx_logger.addHandler(_OsmnxFetchReporter(progress))
+    osmnx_logger.addHandler(_OsmnxFetchReporter(progress, clock=clock))
 
 
 def _print_summary(
