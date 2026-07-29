@@ -33,6 +33,70 @@ Planning lives under `_bmad-output/planning-artifacts/`:
   describe one capability from multiple angles; don't split one capability
   into per-edge-case FRs.
 
+## Comments
+
+A comment is an unverifiable claim: nothing type-checks it, nothing tests it,
+and it drifts away from truth silently. So the bar isn't "true and mildly
+helpful" — it's **does this carry information not recoverable from the code,
+and is that worth the risk of it becoming a lie**.
+
+Worth writing, roughly in descending value:
+- **Refuted alternatives / negative knowledge** — "don't hoist this into a
+  comprehension, that's what caused the per-round stall." Unrecoverable from
+  the code and only findable in git if you already know to look.
+- **Rationale for a non-obvious choice**, especially where the obvious
+  alternative is wrong. The reader's real question is "why not the simpler
+  thing?"
+- **Non-local invariants and coupling** — "must stay in sync with X,"
+  "callers assume this is already normalized." The reader can't see X.
+- **Empirical facts with provenance** — the number, the conditions it was
+  measured under, roughly when. A bare number can't be re-validated, so it
+  rots invisibly.
+- **Contracts the types don't carry** — units, coordinate frames, valid
+  ranges, mutation/ownership, concurrency safety.
+- **Deliberate deviations from local convention**, so the next reader doesn't
+  "fix" them.
+
+Cut on sight: restatement of the following line; docstrings that paraphrase
+the signature; banner/section separators (usually a sign the file wants
+splitting); changelog or attribution comments and commented-out code (git owns
+both); TODOs with no owner and no trigger condition; and any comment whose
+content a better name would obviate — spend the edit on the name instead.
+
+Two mechanics that matter more than the wording:
+- **Locality.** The fact sits on the code it constrains. A caveat three
+  functions up is a caveat that gets missed when the code moves.
+- **Encode instead of narrate.** An assertion, a named constant, or a
+  well-named test *enforces* the claim; a comment only asserts it. Comments
+  are the fallback for facts that can't be encoded.
+
+Because this code is agent-authored, one rule carries extra weight: write in
+**file-voice, not diff-voice**. Agents habitually write for the reviewer of
+the current change — "now we also handle the empty case," "this was moved out
+of the loop," "per the new approach." Six months on that's noise at best,
+misleading at worst. Test: does it read correctly to someone opening the file
+cold, with no knowledge of the change that introduced it?
+
+### Story references: default no
+
+A story ID is diff-voice by construction — it names the change, not the code.
+It doesn't answer the reader's question either; it's an indirection to a
+snapshot of intent, not a statement of current behavior. And in this repo
+epics get renumbered and folded into archive files that get renamed, so a
+`# Story 16.3` in source has a scheduled expiry date. Story references belong
+in the commit message and PR, which are permanently correct because they're
+pinned to a moment in time.
+
+### Spec references: qualified yes, narrowly
+
+Distinguish **current-truth documents** from **point-in-time records**.
+Architecture docs, the authoritative `prd.md`, format/schema specs, protocol
+contracts are maintained to describe what *is*, so a one-way link from live
+code is legitimate. Story files, correct-course proposals, retrospectives,
+`sprint-status.yaml`, and archived epics are historical records — pointing
+production code at one trains future readers and agents to treat stale intent
+as current spec, which is worse than no pointer.
+
 ## Solver / GRASP
 
 - Regression goldens (Epic 8) must pin the **full explicit param set** they
