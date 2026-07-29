@@ -152,7 +152,7 @@ def _make_lifespan(
         # never pops a stale `running` id and the resume order is deterministic.
         interrupted = store.recover_interrupted()
         if interrupted:
-            logger.info("restart recovery: %d interrupted job(s) → failed", len(interrupted))
+            logger.info("restart recovery: %d interrupted job(s) --> failed", len(interrupted))
         requeued = [r.id for r in store.list() if r.status is JobStatus.QUEUED]
         for job_id in requeued:
             queue.enqueue(job_id)
