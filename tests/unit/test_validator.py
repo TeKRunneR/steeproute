@@ -521,6 +521,22 @@ def test_validate_derives_graph_invariants_once_per_call() -> None:
     )
 
 
+def test_validate_reuses_supplied_solver_segment_map() -> None:
+    """The parent validator accepts the solver's exact precomputed segment map."""
+    edges = [_edge(0, 1), _edge(1, 2)]
+    graph = _graph(edges, super_ids={(0, 1, 0), (1, 2, 0)})
+    solutions = [Solution(edges=tuple(edges), objective=1.0)]
+    supplied = reuse.base_segment_id_map(graph)
+
+    with mock.patch.object(
+        validator, "base_segment_id_map", wraps=reuse.base_segment_id_map
+    ) as segment_map:
+        validated = validate(solutions, graph, _params(), segment_map=supplied)
+
+    assert validated.routes[0].validation.passed is True
+    assert segment_map.call_count == 0
+
+
 def test_validate_matches_per_route_results_without_a_shared_context() -> None:
     """Hoisting the invariants changes no verdict: `validate` == standalone per route.
 

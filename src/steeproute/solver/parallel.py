@@ -84,8 +84,8 @@ from steeproute.models import (
     SolverParams,
 )
 from steeproute.progress import ProgressEvent, throttle
-from steeproute.solver.distinctness import TopNTracker
-from steeproute.solver.grasp import AdjacencyTable, GraspSolver
+from steeproute.solver.distinctness import SegmentMap, TopNTracker
+from steeproute.solver.grasp import GraspSolver, SolverStaticContext
 from steeproute.solver.reuse import base_segment_id_map
 
 __all__ = [
@@ -126,6 +126,7 @@ class ParallelResult(NamedTuple):
     convergence_status: ConvergenceStatus
     convergence_iteration: int
     effective_workers: int
+    segment_map: SegmentMap | None = None
 
 
 class ParallelProgress(NamedTuple):
@@ -268,7 +269,7 @@ _worker_graph: ContractedGraph | None = None
 # rebuilding it every round is pure waste, and it was the dominant per-round stall
 # (~8 s per worker per round at r20, 2026-07-08). Persists across a process's round
 # tasks because the pool reuses its processes.
-_worker_adjacency: AdjacencyTable | None = None
+_worker_static_context: SolverStaticContext | None = None
 
 # The parent's progress queue, handed to each worker once via the pool
 # `initializer` (never per-`submit()`). A plain `multiprocessing.Queue` is
@@ -285,9 +286,10 @@ def _init_worker(
     graph_blob: bytes, progress_queue: MpQueue[tuple[int, int, float]] | None
 ) -> None:  # pragma: no cover
     """Pool initializer: stash the lean graph and progress queue as per-process globals (once)."""
-    global _worker_graph, _worker_progress_queue
+    global _worker_graph, _worker_progress_queue, _worker_static_context
     _worker_graph = pickle.loads(graph_blob)
     _worker_progress_queue = progress_queue
+    _worker_static_context = None
 
 
 def _run_round_worker(  # pragma: no cover
@@ -314,7 +316,7 @@ def _run_round_worker(  # pragma: no cover
     `# pragma: no cover`: executes only inside spawned workers (invisible to
     parent-side coverage); exercised end-to-end by the determinism tests.
     """
-    global _worker_adjacency
+    global _worker_static_context
     graph = _worker_graph
     if graph is None:  # defensive: initializer must have run
         raise RuntimeError("worker graph not initialised")
@@ -335,19 +337,18 @@ def _run_round_worker(  # pragma: no cover
 
         callback = throttle(_emit, progress_interval)
 
-    # Reuse this process's adjacency table across rounds (built on the first round);
-    # see `_worker_adjacency`.
+    # Reuse every graph-derived invariant across rounds, not only adjacency.
     solver = GraspSolver(
         graph,
         worker_params,
         rng,
         progress_callback=callback,
         initial_solutions=elite,
-        adjacency=_worker_adjacency,
+        static_context=_worker_static_context,
     )
     solutions = solver.run()
-    if _worker_adjacency is None:
-        _worker_adjacency = solver.adjacency
+    if _worker_static_context is None:
+        _worker_static_context = solver.static_context
     return _WorkerResult(solutions, solver.convergence_status, solver.convergence_iteration)
 
 
@@ -595,6 +596,6 @@ def run_parallel_grasp(
 
     if interrupted:
         raise ParallelGraspInterrupted(
-            ParallelResult(elite, "interrupted", convergence_iteration, eff_workers)
+            ParallelResult(elite, "interrupted", convergence_iteration, eff_workers, segment_map)
         )
-    return ParallelResult(elite, status, convergence_iteration, eff_workers)
+    return ParallelResult(elite, status, convergence_iteration, eff_workers, segment_map)

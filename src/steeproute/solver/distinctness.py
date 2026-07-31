@@ -32,7 +32,7 @@ from typing import NamedTuple
 
 from steeproute.models import Solution
 
-__all__ = ["TopNTracker", "jaccard_distance"]
+__all__ = ["SegmentMap", "TopNTracker", "jaccard_distance"]
 
 # Directed edge identity `(node_u, node_v, key)` → the undirected base-segment
 # ids it occupies. Built once per graph by `solver.reuse.base_segment_id_map`
@@ -70,11 +70,11 @@ def _jaccard_from_sets(
     cached canonical sets without re-projecting the solutions on every pairwise
     comparison. Same definition: both-empty → `0.0`.
     """
-    union = edges_a | edges_b
-    if not union:
-        return 0.0
     intersection = edges_a & edges_b
-    return 1.0 - len(intersection) / len(union)
+    union_size = len(edges_a) + len(edges_b) - len(intersection)
+    if union_size == 0:
+        return 0.0
+    return 1.0 - len(intersection) / union_size
 
 
 def jaccard_distance(a: Solution, b: Solution, segment_map: SegmentMap | None = None) -> float:
@@ -102,6 +102,7 @@ class _HeldEntry(NamedTuple):
 
     solution: Solution
     canonical: frozenset[tuple[int, int, int]]
+    sort_key: tuple[float, tuple[tuple[int, int, int], ...]]
 
 
 class TopNTracker:
@@ -200,22 +201,45 @@ class TopNTracker:
         # Candidate's canonical set: once per consider() call, not once per
         # held comparison. Held sets were cached at insertion.
         candidate_set = _canonical_edge_set(solution, self._segment_map)
-        overlap_threshold = 1.0 - self._j_max
-        overlapping = [
-            entry
-            for entry in self._held
-            if _jaccard_from_sets(candidate_set, entry.canonical) < overlap_threshold
-        ]
+        if self._j_max == 1.0:
+            # Inclusive endpoint: the overlap threshold is zero, and a Jaccard
+            # distance can never be negative. Skip all pairwise set work.
+            overlapping: list[_HeldEntry] = []
+        elif self._j_max == 0.0:
+            # Inclusive endpoint: only fully-disjoint sets may coexist. Avoid
+            # intersection allocation; both-empty is identical (distance 0),
+            # not disjoint, so it remains an overlap.
+            overlapping = [
+                entry
+                for entry in self._held
+                if (not candidate_set and not entry.canonical)
+                or not candidate_set.isdisjoint(entry.canonical)
+            ]
+        else:
+            overlap_threshold = 1.0 - self._j_max
+            overlapping = [
+                entry
+                for entry in self._held
+                if _jaccard_from_sets(candidate_set, entry.canonical) < overlap_threshold
+            ]
+
+        candidate_entry: _HeldEntry | None = None
+
+        def _entry() -> _HeldEntry:
+            nonlocal candidate_entry
+            if candidate_entry is None:
+                candidate_entry = _HeldEntry(solution, candidate_set, _sort_key(solution))
+            return candidate_entry
 
         if not overlapping:
             if len(self._held) < self._n:
-                self._held.append(_HeldEntry(solution, candidate_set))
+                self._held.append(_entry())
                 return True
             # Capacity reached; evict the worst if the newcomer beats it.
             worst = self._worst_held()
             if solution.objective > worst.solution.objective:
                 self._held.remove(worst)
-                self._held.append(_HeldEntry(solution, candidate_set))
+                self._held.append(_entry())
                 return True
             return False
 
@@ -224,13 +248,13 @@ class TopNTracker:
         if all(solution.objective > entry.solution.objective for entry in overlapping):
             for entry in overlapping:
                 self._held.remove(entry)
-            self._held.append(_HeldEntry(solution, candidate_set))
+            self._held.append(_entry())
             return True
         return False
 
     def current_top(self) -> list[Solution]:
         """Held solutions, objective-descending with deterministic tie-break."""
-        return sorted((entry.solution for entry in self._held), key=_sort_key)
+        return [entry.solution for entry in sorted(self._held, key=lambda entry: entry.sort_key)]
 
     def total_objective(self) -> float:
         """Sum of held objectives — a progress readout. `0.0` on an empty tracker."""
@@ -242,7 +266,7 @@ class TopNTracker:
         `max(items, key=...)` is equivalent to `sorted(items, key=...)[-1]`
         — the worst-in-sort-order is the same as the max-by-sort-key.
         """
-        return max(self._held, key=lambda entry: _sort_key(entry.solution))
+        return max(self._held, key=lambda entry: entry.sort_key)
 
 
 def _sort_key(solution: Solution) -> tuple[float, tuple[tuple[int, int, int], ...]]:

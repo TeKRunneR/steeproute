@@ -1,3 +1,5 @@
+# pyright: reportPrivateUsage=false
+# Reason: `_sort_key` is patched to prove the held-entry cache computes it once.
 """Unit tests for solver.distinctness.
 
 `jaccard_distance` is a pure free function operating on canonical edge-identity
@@ -16,12 +18,14 @@ Coverage map (AC → test):
 from __future__ import annotations
 
 import math
+from unittest import mock
 
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from steeproute.models import Edge, Solution
+from steeproute.solver import distinctness
 from steeproute.solver.distinctness import TopNTracker, jaccard_distance
 
 # Helpers
@@ -170,6 +174,66 @@ def test_current_top_is_objective_descending() -> None:
         tracker.consider(s)
 
     assert tracker.current_top() == [high, mid, low]
+
+
+def test_current_top_ties_use_cached_directed_edge_order() -> None:
+    """Equal objectives retain the established directed-ID lexicographic tie-break."""
+    tracker = TopNTracker(n=3, j_max=1.0)
+    later = _make_solution([(20, 21, 0), (5, 6, 0)], objective=100.0)
+    earlier = _make_solution([(1, 2, 0)], objective=100.0)
+
+    tracker.consider(later)
+    tracker.consider(earlier)
+
+    assert tracker.current_top() == [earlier, later]
+
+
+def test_j_max_one_skips_distinctness_and_allows_identical_routes() -> None:
+    """At the inclusive upper endpoint, even byte-identical routes may coexist."""
+    tracker = TopNTracker(n=2, j_max=1.0)
+    first = _make_solution([(0, 1, 0)], objective=100.0)
+    duplicate = _make_solution([(0, 1, 0)], objective=90.0)
+
+    assert tracker.consider(first) is True
+    assert tracker.consider(duplicate) is True
+    assert tracker.current_top() == [first, duplicate]
+
+
+def test_j_max_zero_requires_disjoint_routes_including_empty_identity() -> None:
+    """At the inclusive lower endpoint, any shared identity is an overlap."""
+    tracker = TopNTracker(n=3, j_max=0.0)
+    incumbent = _make_solution([(0, 1, 0)], objective=100.0)
+    shared = _make_solution([(0, 1, 0), (1, 2, 0)], objective=90.0)
+    disjoint = _make_solution([(10, 11, 0)], objective=80.0)
+
+    assert tracker.consider(incumbent) is True
+    assert tracker.consider(shared) is False
+    assert tracker.consider(disjoint) is True
+    assert tracker.current_top() == [incumbent, disjoint]
+
+    empty_tracker = TopNTracker(n=2, j_max=0.0)
+    weaker_empty = Solution(edges=(), objective=1.0)
+    stronger_empty = Solution(edges=(), objective=2.0)
+    assert empty_tracker.consider(weaker_empty) is True
+    assert empty_tracker.consider(stronger_empty) is True
+    assert empty_tracker.current_top() == [stronger_empty]
+
+
+def test_sort_key_is_computed_once_per_admitted_solution() -> None:
+    """Immutable held entries cache their deterministic ordering key."""
+    tracker = TopNTracker(n=2, j_max=0.30)
+    high = _make_solution([(0, 1, 0)], objective=300.0)
+    low = _make_solution([(10, 11, 0)], objective=200.0)
+    rejected = _make_solution([(20, 21, 0)], objective=100.0)
+
+    with mock.patch.object(distinctness, "_sort_key", wraps=distinctness._sort_key) as sort_key:
+        assert tracker.consider(high) is True
+        assert tracker.consider(low) is True
+        assert tracker.current_top() == [high, low]
+        assert tracker.current_top() == [high, low]
+        assert tracker.consider(rejected) is False
+
+    assert sort_key.call_count == 2
 
 
 def test_total_objective_on_empty_tracker_is_zero() -> None:
@@ -326,6 +390,18 @@ def test_jaccard_distance_of_solution_with_itself_is_zero(a: Solution) -> None:
 def test_jaccard_distance_value_is_in_unit_interval(a: Solution, b: Solution) -> None:
     d = jaccard_distance(a, b)
     assert 0.0 <= d <= 1.0
+
+
+@given(_solution_strategy(), _solution_strategy())
+@settings(max_examples=50)
+def test_jaccard_cardinality_rewrite_matches_union_reference(a: Solution, b: Solution) -> None:
+    """Allocation-free union cardinality is exactly the original set formula."""
+    edges_a = frozenset((e.node_u, e.node_v, e.key) for e in a.edges)
+    edges_b = frozenset((e.node_u, e.node_v, e.key) for e in b.edges)
+    union = edges_a | edges_b
+    reference = 0.0 if not union else 1.0 - len(edges_a & edges_b) / len(union)
+
+    assert jaccard_distance(a, b) == reference
 
 
 def test_jaccard_distance_of_two_empty_solutions_is_zero() -> None:

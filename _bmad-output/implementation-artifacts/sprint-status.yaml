@@ -28,7 +28,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-07-29  # dev-story 16-4 -> done
+last_updated: 2026-07-31  # code-review 16-5 -> done
 
 project: bmad-test
 project_key: NOKEY
@@ -209,6 +209,6 @@ development_status:
   16-2-setup-owned-data-cleanup-and-smoothing-resampling-fusion: done
   16-3-geometry-optional-query-load-and-schema-v3-cache: done
   16-4-osmnx-in-place-component-consume-ingestion-adapter: done
-  16-5-solver-static-context-reuse-and-pure-python-loop-cleanup: backlog
+  16-5-solver-static-context-reuse-and-pure-python-loop-cleanup: done
   16-6-shared-memory-array-solver-state: backlog
   16-7-r20-r50-re-measure-and-what-next-close-out: backlog

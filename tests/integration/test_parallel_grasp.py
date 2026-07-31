@@ -27,16 +27,20 @@ these run the exact pickling + fresh-import path on every OS (not just Windows).
 from __future__ import annotations
 
 import dataclasses
+import operator
+import pickle
 from collections.abc import Iterable, Iterator
 from concurrent.futures import Future
 from concurrent.futures import as_completed as _real_as_completed
+from typing import Any, cast
 
 import numpy as np
 import pytest
 from conftest import make_toy_contracted_graph, make_toy_solver_params
 
 from steeproute.models import ContractedGraph, Solution
-from steeproute.solver.grasp import GraspSolver
+from steeproute.solver import parallel
+from steeproute.solver.grasp import GraspSolver, SolverStaticContext
 from steeproute.solver.parallel import (
     ParallelGraspFailed,
     ParallelGraspInterrupted,
@@ -133,6 +137,121 @@ def test_grasp_reused_adjacency_is_byte_identical() -> None:
 
     assert _edge_id_sequences(from_built) == _edge_id_sequences(from_reused)
     assert [s.objective for s in from_built] == [s.objective for s in from_reused]
+
+
+def test_grasp_static_context_is_reused_and_exactly_compatible() -> None:
+    """All immutable graph-derived state can be reused without changing output."""
+    graph = make_toy_contracted_graph(23)
+    params = make_toy_solver_params(iter_budget=300, seed=42)
+
+    built = GraspSolver(graph, params, np.random.default_rng(42))
+    from_built = built.run()
+    context = built.static_context
+    reused = GraspSolver(
+        graph,
+        params,
+        np.random.default_rng(42),
+        static_context=context,
+    )
+
+    assert isinstance(context, SolverStaticContext)
+    assert reused.static_context is context
+    assert reused.run() == from_built
+    assert reused.static_context.segment_map is context.segment_map
+    assert reused.static_context.non_exempt_ids is context.non_exempt_ids
+    assert reused.static_context.adjacency is context.adjacency
+    assert built.adjacency is context.adjacency
+    with pytest.raises(TypeError):
+        operator.setitem(cast(Any, context.adjacency), -1, ())
+    first_node = next(iter(built.adjacency))
+    with pytest.raises(TypeError):
+        operator.delitem(cast(Any, built.adjacency), first_node)
+    assert first_node in context.adjacency
+    with pytest.raises(TypeError):
+        operator.setitem(cast(Any, context.segment_map), (-1, -1, 0), frozenset())
+
+    incompatible_params = dataclasses.replace(params, difficulty_cap="T2")
+    with pytest.raises(ValueError, match="static context.*difficulty"):
+        GraspSolver(
+            graph,
+            incompatible_params,
+            np.random.default_rng(42),
+            static_context=context,
+        )
+    with pytest.raises(ValueError, match="static context.*graph"):
+        GraspSolver(
+            dataclasses.replace(graph, graph=graph.graph.copy()),
+            params,
+            np.random.default_rng(42),
+            static_context=context,
+        )
+    with pytest.raises(ValueError, match="static_context.*adjacency"):
+        GraspSolver(
+            graph,
+            params,
+            np.random.default_rng(42),
+            adjacency=context.adjacency,
+            static_context=context,
+        )
+
+
+def test_empty_adjacency_is_built_once_and_reused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A completed empty table is cached rather than mistaken for unbuilt state."""
+    graph = make_toy_contracted_graph(23)
+    for _u, _v, _key, data in graph.graph.edges(keys=True, data=True):
+        data["sac_scale"] = "alpine_hiking"
+    params = dataclasses.replace(
+        make_toy_solver_params(iter_budget=1, seed=42), difficulty_cap="T1"
+    )
+    original_build = GraspSolver._build_adjacency
+    build_count = 0
+
+    def counted_build(solver: GraspSolver):  # noqa: ANN202
+        nonlocal build_count
+        build_count += 1
+        return original_build(solver)
+
+    monkeypatch.setattr(GraspSolver, "_build_adjacency", counted_build)
+    owner = GraspSolver(graph, params, np.random.default_rng(42))
+
+    owner.run()
+    context = owner.static_context
+    reused = GraspSolver(graph, params, np.random.default_rng(43), static_context=context)
+    reused.run()
+
+    assert context.adjacency == {}
+    assert build_count == 1
+
+
+def test_worker_reuses_one_static_context_across_migration_rounds() -> None:
+    """A reused worker process derives graph-wide state only in its first round."""
+    graph = make_toy_contracted_graph(37)
+    params = make_toy_solver_params(iter_budget=60, seed=42)
+    parallel._init_worker(pickle.dumps(graph), None)
+
+    first = parallel._run_round_worker(
+        params,
+        np.random.SeedSequence(1),
+        30,
+        [],
+        0,
+        0,
+        None,
+    )
+    first_context = parallel._worker_static_context
+    assert first_context is not None
+
+    parallel._run_round_worker(
+        params,
+        np.random.SeedSequence(2),
+        30,
+        first.solutions,
+        0,
+        30,
+        None,
+    )
+
+    assert parallel._worker_static_context is first_context
 
 
 def test_parallel_deterministic_with_migration() -> None:

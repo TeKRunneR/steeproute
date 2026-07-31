@@ -106,6 +106,9 @@ not a contract across Python / networkx versions:
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import NamedTuple
 
 import numpy as np
@@ -122,14 +125,20 @@ from steeproute.pipeline.graph import is_junction_node
 from steeproute.pipeline.osm import max_sac_rank, parse_difficulty_cap
 from steeproute.progress import ProgressCallback, ProgressEvent, estimate_remaining
 from steeproute.solver.descent import descends_over_cap
-from steeproute.solver.distinctness import TopNTracker
+from steeproute.solver.distinctness import SegmentMap, TopNTracker
 from steeproute.solver.reuse import (
     base_segment_id_map,
     blocking_ids,
     non_exempt_base_segment_ids,
 )
 
-__all__ = ["STAGNATION_ITERS_DEFAULT_PLACEHOLDER", "AdjacencyTable", "GraspSolver", "RCL_SIZE"]
+__all__ = [
+    "STAGNATION_ITERS_DEFAULT_PLACEHOLDER",
+    "AdjacencyTable",
+    "GraspSolver",
+    "RCL_SIZE",
+    "SolverStaticContext",
+]
 
 
 STAGNATION_ITERS_DEFAULT_PLACEHOLDER: int = 200_000
@@ -181,7 +190,7 @@ class _CandidateRecord(NamedTuple):
     blocking: frozenset[tuple[int, int, int]]
 
 
-AdjacencyTable = dict[int, tuple[_CandidateRecord, ...]]
+AdjacencyTable = Mapping[int, tuple[_CandidateRecord, ...]]
 """Per-node pre-built RCL candidate table (`_build_adjacency`'s output).
 
 A pure function of the contracted graph + the SAC/descent filter params, so it is
@@ -189,6 +198,37 @@ identical across a parallel worker's migration rounds and can be built once and
 reused. Exposed as a named type so `solver/parallel.py` can cache and pass it
 back without naming the private `_CandidateRecord`.
 """
+
+
+@dataclass(frozen=True, slots=True)
+class SolverStaticContext:
+    """Read-only graph-derived state reusable across compatible solver runs.
+
+    The contracted graph is immutable for a query. Its node pool, reuse maps,
+    filter snapshot, and adjacency therefore need deriving only once per worker,
+    even when island migration creates a fresh `GraspSolver` each round. Mapping
+    proxies make the public cache read-only without copying its large dicts.
+    """
+
+    graph: ContractedGraph
+    start_at_junction: bool
+    difficulty_cap: str
+    max_descent_slope: float | None
+    nodes: tuple[int, ...]
+    segment_map: Mapping[tuple[int, int, int], frozenset[tuple[int, int, int]]]
+    non_exempt_ids: frozenset[tuple[int, int, int]]
+    adjacency: AdjacencyTable
+
+    def assert_compatible(self, graph: ContractedGraph, params: SolverParams) -> None:
+        """Reject a cache built for any graph/filter configuration mismatch."""
+        if graph is not self.graph:
+            raise ValueError("static context graph is not the exact solver graph object")
+        if params.start_at_junction != self.start_at_junction:
+            raise ValueError("static context start-at-junction parameter is incompatible")
+        if params.difficulty_cap != self.difficulty_cap:
+            raise ValueError("static context difficulty-cap parameter is incompatible")
+        if params.max_descent_slope != self.max_descent_slope:
+            raise ValueError("static context max-descent-slope parameter is incompatible")
 
 
 class GraspSolver:
@@ -217,6 +257,7 @@ class GraspSolver:
         progress_callback: ProgressCallback | None = None,
         initial_solutions: list[Solution] | None = None,
         adjacency: AdjacencyTable | None = None,
+        static_context: SolverStaticContext | None = None,
     ) -> None:
         if params.iter_budget < 1:
             # Fail loud at the boundary, symmetric with `TopNTracker`'s `n >= 1`
@@ -232,13 +273,21 @@ class GraspSolver:
         # `progress.throttle(...)`-wrapped renderer; `None` disables emission
         # (e.g. `--quiet`, or non-CLI callers like the quality-gate tests).
         self._progress_callback: ProgressCallback | None = progress_callback
+        if adjacency is not None and static_context is not None:
+            raise ValueError("static_context and adjacency cannot both be supplied")
+        if static_context is not None:
+            static_context.assert_compatible(graph, params)
         # Undirected base-segment distinctness: the tracker keys Jaccard on the
         # same `base_segment_id` identity the reuse rule uses, so
         # opposite-direction reuse of one trail counts as overlap. Single-sourced
         # with the oracle + validator via `solver/reuse.py`.
-        self._segment_map: dict[tuple[int, int, int], frozenset[tuple[int, int, int]]] = (
-            base_segment_id_map(graph)
-        )
+        if static_context is not None:
+            self._segment_map: SegmentMap = static_context.segment_map
+            self._segment_map_view: SegmentMap = static_context.segment_map
+        else:
+            segment_map = base_segment_id_map(graph)
+            self._segment_map = segment_map
+            self._segment_map_view = MappingProxyType(segment_map)
         self._tracker: TopNTracker = TopNTracker(params.n, params.j_max, self._segment_map)
         # Elite migration (parallel island model): pre-seed the tracker with
         # solutions merged from other workers' previous rounds, so this worker only
@@ -262,12 +311,15 @@ class GraspSolver:
         # `start_at_junction` check on `edges[0].node_u`, which holds whatever the
         # solver does. An empty pool (no junctions) makes `run()` return `[]` via
         # its `if not self._nodes` guard — correct FR12.
-        all_nodes = sorted(graph.graph.nodes)
-        if params.start_at_junction:
-            nodes = [n for n in all_nodes if is_junction_node(graph, n)]
+        if static_context is not None:
+            self._nodes: tuple[int, ...] = static_context.nodes
         else:
-            nodes = all_nodes
-        self._nodes: tuple[int, ...] = tuple(nodes)
+            all_nodes = sorted(graph.graph.nodes)
+            if params.start_at_junction:
+                nodes = [n for n in all_nodes if is_junction_node(graph, n)]
+            else:
+                nodes = all_nodes
+            self._nodes = tuple(nodes)
         self._cap_rank: int = parse_difficulty_cap(params.difficulty_cap)
         # Direction-aware descent cap (FR32). `None` → off; when set, `_build_rcl`
         # drops any descending candidate edge steeper than this, via the
@@ -276,7 +328,11 @@ class GraspSolver:
         # Base-segment ids subject to the once-only reuse rule, computed once per
         # graph. Single-sourced with the oracle + validator via `solver/reuse.py`
         # so all three share one feasible set.
-        self._non_exempt_ids: frozenset[tuple[int, int, int]] = non_exempt_base_segment_ids(graph)
+        self._non_exempt_ids: frozenset[tuple[int, int, int]] = (
+            static_context.non_exempt_ids
+            if static_context is not None
+            else non_exempt_base_segment_ids(graph)
+        )
         # Termination outcome (§Cat 5e). Initialised to the iter-budget outcome so
         # the attribute is always readable/typed — including after the empty-graph
         # early return in `run()` — and set definitively at each termination
@@ -294,16 +350,31 @@ class GraspSolver:
         # Per-node adjacency table of pre-built candidate records. Empty until
         # `run()` builds it once per solve — solver instances are single-run, and
         # building it inside `run()` keeps the (one-off) cost inside the benchmark
-        # suite's measured region.
+        # suite's measured region. Build state is tracked separately because an
+        # empty table is also a valid completed result when every edge is filtered.
         #
         # A caller MAY pass a prebuilt `adjacency`: it is a pure function of the
         # graph + the SAC/descent filter params, so it is identical across a
         # parallel worker's migration rounds. Reusing it skips a ~8 s
         # `_build_adjacency` rebuild each round (r20 area, 2026-07-08) — the
         # dominant per-round cost. The caller is responsible for passing an adjacency
-        # built from the *same* graph + params; `run()` reuses a non-empty table
-        # verbatim, so a mismatched one would silently corrupt results.
-        self._adjacency: AdjacencyTable = adjacency if adjacency is not None else {}
+        # built from the *same* graph + params; `run()` reuses the supplied table
+        # verbatim, including an empty one, so a mismatched table would silently
+        # corrupt results.
+        self._adjacency: AdjacencyTable = (
+            static_context.adjacency
+            if static_context is not None
+            else adjacency
+            if adjacency is not None
+            else {}
+        )
+        self._adjacency_view: AdjacencyTable = (
+            static_context.adjacency
+            if static_context is not None
+            else MappingProxyType(self._adjacency)
+        )
+        self._adjacency_built: bool = static_context is not None or adjacency is not None
+        self._static_context: SolverStaticContext | None = static_context
         # Batched-draw buffer: uniform [0, 1) values, refilled by `_next_uniform`
         # in `_RNG_CHUNK`-sized native calls and held as a plain list (one exact
         # `.tolist()` per refill) so per-draw consumption is a native list index
@@ -319,13 +390,44 @@ class GraspSolver:
 
     @property
     def adjacency(self) -> AdjacencyTable:
-        """The per-node adjacency table (empty until `run()` builds it, or injected).
+        """Read-only adjacency view (empty until `run()` builds it, or injected).
 
-        Exposed so a parallel worker can build it once and pass it back into the
-        next round's solver (see the `adjacency` constructor arg) instead of paying
-        the `_build_adjacency` rebuild every round.
+        Retained as the narrow legacy injection seam. Parallel migration workers
+        reuse `static_context` now, which includes this table plus every other
+        graph-derived invariant.
         """
-        return self._adjacency
+        return self._adjacency_view
+
+    @property
+    def segment_map(self) -> SegmentMap:
+        """Read-only base-segment map, available without building adjacency."""
+        return self._segment_map_view
+
+    def _ensure_adjacency(self) -> None:
+        """Build adjacency at most once, including when the completed table is empty."""
+        if self._adjacency_built:
+            return
+        adjacency = self._build_adjacency()
+        self._adjacency = adjacency
+        self._adjacency_view = MappingProxyType(adjacency)
+        self._adjacency_built = True
+
+    @property
+    def static_context(self) -> SolverStaticContext:
+        """Reusable read-only static state, building adjacency on first access."""
+        if self._static_context is None:
+            self._ensure_adjacency()
+            self._static_context = SolverStaticContext(
+                graph=self._graph,
+                start_at_junction=self._params.start_at_junction,
+                difficulty_cap=self._params.difficulty_cap,
+                max_descent_slope=self._params.max_descent_slope,
+                nodes=self._nodes,
+                segment_map=self._segment_map_view,
+                non_exempt_ids=self._non_exempt_ids,
+                adjacency=self._adjacency_view,
+            )
+        return self._static_context
 
     def run(self) -> list[Solution]:
         """Drive GRASP iterations to the first §Cat 5e termination; return final top-N.
@@ -366,8 +468,7 @@ class GraspSolver:
         # duration of a solve, so every walk-state-independent part of RCL
         # construction is hoisted out of the hot loop here. Skipped when a prebuilt
         # table was injected (island-migration reuse).
-        if not self._adjacency:
-            self._adjacency = self._build_adjacency()
+        self._ensure_adjacency()
         callback = self._progress_callback
         stagnation_iters = self._params.stagnation_iters
         time_budget = self._params.time_budget
@@ -533,9 +634,10 @@ class GraspSolver:
             used_directed.add((chosen.node_u, chosen.node_v, chosen.key))
             used_segments |= chosen_blocking
             current = chosen.node_v
-        # `0.0` (not int `0`) on the empty-walk branch — `Solution.objective` is float.
-        objective = sum((e.d_plus_m + e.d_minus_m for e in path_edges), 0.0)
-        return Solution(edges=tuple(path_edges), objective=objective)
+        # The whole-walk objective was discarded by `run()`: the admitted
+        # candidate is rescored exactly once by `_best_theta_prefix` while it
+        # computes cumulative slope. Keep the temporary shape without the sum.
+        return Solution(edges=tuple(path_edges), objective=0.0)
 
     def _build_adjacency(self) -> dict[int, tuple[_CandidateRecord, ...]]:
         """Per-node adjacency table of pre-built candidate records.

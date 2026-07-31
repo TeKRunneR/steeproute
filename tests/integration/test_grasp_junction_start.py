@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import networkx as nx
 import numpy as np
+import pytest
 from exhaustive_oracle import enumerate_best
 
 from steeproute.models import ContractedGraph, Edge, SolverParams
@@ -157,3 +158,21 @@ def test_flag_on_is_deterministic_under_same_seed() -> None:
     second = _edge_id_sets(GraspSolver(graph, params, np.random.default_rng(params.seed)).run())
 
     assert first == second
+
+
+def test_empty_start_pool_exposes_segment_map_without_building_adjacency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Validation state stays cheap when junction filtering leaves no start nodes."""
+    graph = _build_one_junction_fixture()
+    for node in graph.graph.nodes:
+        graph.graph.nodes[node]["is_road_trail_junction"] = False
+    solver = GraspSolver(graph, _params(start_at_junction=True), np.random.default_rng(42))
+
+    def fail_build(_solver: GraspSolver) -> None:
+        raise AssertionError("adjacency should not be built for an empty start pool")
+
+    monkeypatch.setattr(GraspSolver, "_build_adjacency", fail_build)
+
+    assert solver.run() == []
+    assert solver.segment_map

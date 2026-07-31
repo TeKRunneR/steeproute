@@ -70,8 +70,16 @@ def test_grasp_two_runs_with_same_seed_are_byte_identical(
     """
     params = _params()
     contracted = grenoble_fixture.contracted
-    result_a = GraspSolver(contracted, params, np.random.default_rng(GRENOBLE_SEED)).run()
-    result_b = GraspSolver(contracted, params, np.random.default_rng(GRENOBLE_SEED)).run()
+    context_owner = GraspSolver(contracted, params, np.random.default_rng(GRENOBLE_SEED))
+    result_a = context_owner.run()
+    result_b = GraspSolver(
+        contracted,
+        params,
+        np.random.default_rng(GRENOBLE_SEED),
+        static_context=context_owner.static_context,
+    ).run()
+
+    assert result_a == result_b
 
     assert len(result_a) == len(result_b), (
         f"different result lengths: {len(result_a)} vs {len(result_b)}"

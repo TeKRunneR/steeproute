@@ -89,6 +89,7 @@ from steeproute.pipeline.climbs import detect_climbs
 from steeproute.pipeline.graph import contract_climbs
 from steeproute.pipeline.osm import filter_trails
 from steeproute.progress import ProgressCallback, ProgressEvent, StageProgress, throttle
+from steeproute.solver.distinctness import SegmentMap
 from steeproute.solver.grasp import STAGNATION_ITERS_DEFAULT_PLACEHOLDER, GraspSolver
 from steeproute.solver.parallel import (
     ParallelGraspFailed,
@@ -328,6 +329,7 @@ def cli(
         status: ConvergenceStatus,
         contracted_graph: ContractedGraph,
         convergence_iteration: int,
+        segment_map: SegmentMap | None = None,
     ) -> tuple[ValidatedRouteSet, str | None]:
         """Validate `route_set`, render every route (failed ones too — FR28), return both.
 
@@ -344,7 +346,7 @@ def cli(
         there (a short run isn't a sparse area).
         """
         with stage_progress.stage("validate-render"):
-            validated_set = validate(route_set, contracted_graph, params)
+            validated_set = validate(route_set, contracted_graph, params, segment_map=segment_map)
             degradation = (
                 None if status == "interrupted" else _degradation_message(validated_set, params)
             )
@@ -373,6 +375,7 @@ def cli(
     # `ctx.exit`, which `_invoke_command`'s `SystemExit` capture forwards verbatim.
     contracted: ContractedGraph | None = None
     solver: GraspSolver | None = None
+    validation_segment_map: SegmentMap | None = None
     try:
         with stage_progress.stage("climb-detection"):
             climbs = detect_climbs(
@@ -398,6 +401,7 @@ def cli(
             solutions = solver.run()
             status = solver.convergence_status
             convergence_iteration = solver.convergence_iteration
+            validation_segment_map = solver.segment_map
         else:
             # Parallel GRASP restarts: fan across `workers` processes
             # with island-model elite migration every `--merge-interval` iterations,
@@ -419,6 +423,7 @@ def cli(
                 solutions = parallel.solutions
                 status = parallel.convergence_status
                 convergence_iteration = parallel.convergence_iteration
+                validation_segment_map = parallel.segment_map
             except ParallelGraspFailed as exc:
                 # A worker died (typically OOM — each worker holds its own graph copy,
                 # so memory grows O(workers)). Fall back to a correct single-process
@@ -438,6 +443,7 @@ def cli(
                 solutions = solver.run()
                 status = solver.convergence_status
                 convergence_iteration = solver.convergence_iteration
+                validation_segment_map = solver.segment_map
     except ParallelGraspInterrupted as interrupt:
         # N>1 Ctrl-C (§Cat 5b): render the top-N salvaged from workers that had
         # already returned, tagged `interrupted`, and exit 130. In-flight workers'
@@ -450,7 +456,11 @@ def cli(
             click.echo("interrupted before any solution found", err=True)
             ctx.exit(130)
         _validate_and_render(
-            partial.solutions, "interrupted", contracted, partial.convergence_iteration
+            partial.solutions,
+            "interrupted",
+            contracted,
+            partial.convergence_iteration,
+            partial.segment_map,
         )
         ctx.exit(130)
     except KeyboardInterrupt:
@@ -469,7 +479,11 @@ def cli(
         # per-file atomic writes keep every emitted file and the cache valid (NFR3).
         solver.convergence_status = "interrupted"
         _validate_and_render(
-            solver.best_so_far, "interrupted", contracted, solver.convergence_iteration
+            solver.best_so_far,
+            "interrupted",
+            contracted,
+            solver.convergence_iteration,
+            solver.segment_map,
         )
         ctx.exit(130)
 
@@ -477,7 +491,7 @@ def cli(
     # `budget-exhausted` on iter/time budget; `interrupted` on the Ctrl-C paths
     # above). For N>1 this is the aggregated status from `run_parallel_grasp`.
     validated, degradation = _validate_and_render(
-        solutions, status, contracted, convergence_iteration
+        solutions, status, contracted, convergence_iteration, validation_segment_map
     )
 
     # End-of-run summary on stdout (FR22): printed after render on the

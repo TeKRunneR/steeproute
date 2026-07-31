@@ -90,7 +90,7 @@ from steeproute.models import (
 from steeproute.pipeline.graph import is_junction_node
 from steeproute.pipeline.osm import max_sac_rank, parse_difficulty_cap
 from steeproute.solver.descent import descends_over_cap
-from steeproute.solver.distinctness import jaccard_distance
+from steeproute.solver.distinctness import SegmentMap, jaccard_distance
 from steeproute.solver.reuse import (
     base_segment_id_map,
     blocking_ids,
@@ -116,13 +116,13 @@ class _GraphContext:
     """
 
     non_exempt: frozenset[tuple[int, int, int]]
-    segment_map: dict[tuple[int, int, int], frozenset[tuple[int, int, int]]]
+    segment_map: SegmentMap
 
     @classmethod
-    def of(cls, graph: ContractedGraph) -> _GraphContext:
+    def of(cls, graph: ContractedGraph, *, segment_map: SegmentMap | None = None) -> _GraphContext:
         return cls(
             non_exempt=non_exempt_base_segment_ids(graph),
-            segment_map=base_segment_id_map(graph),
+            segment_map=base_segment_id_map(graph) if segment_map is None else segment_map,
         )
 
 
@@ -187,7 +187,11 @@ def validate_set(
 
 
 def validate(
-    solutions: list[Solution], graph: ContractedGraph, params: SolverParams
+    solutions: list[Solution],
+    graph: ContractedGraph,
+    params: SolverParams,
+    *,
+    segment_map: SegmentMap | None = None,
 ) -> ValidatedRouteSet:
     """Orchestrate validation: `Solution`s → validated `ValidatedRouteSet` (§Cat 6d).
 
@@ -208,7 +212,7 @@ def validate(
     # ~327k-edge scans at r20 for an N-route set. `metrics` is likewise built once
     # here and handed to the per-route check rather than recomputed there for the
     # slope-floor test. Both are pure hoists: same values, same verdicts.
-    context = _GraphContext.of(graph)
+    context = _GraphContext.of(graph, segment_map=segment_map)
     routes: list[Route] = []
     for solution in solutions:
         if not solution.edges:

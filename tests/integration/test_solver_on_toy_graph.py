@@ -73,8 +73,19 @@ def test_grasp_meets_quality_threshold(
     graph = toy_graph_factory(seed)
     params = toy_solver_params
 
-    grasp_result = GraspSolver(graph, params, np.random.default_rng(params.seed)).run()
+    context_owner = GraspSolver(graph, params, np.random.default_rng(params.seed))
+    grasp_result = context_owner.run()
+    context_reused_result = GraspSolver(
+        graph,
+        params,
+        np.random.default_rng(params.seed),
+        static_context=context_owner.static_context,
+    ).run()
     exhaustive_result = enumerate_best(graph, params, params.n)
+
+    # Story 16.5: exact `list[Solution]` equality, not only objective closeness,
+    # across the ordinary and static-context-reuse paths for every quality seed.
+    assert context_reused_result == grasp_result
 
     # Non-empty on both sides — the factory guarantees >= 1 feasible route, so
     # an empty-vs-empty vacuous pass is impossible.
