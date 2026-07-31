@@ -126,6 +126,7 @@ from steeproute.pipeline.osm import max_sac_rank, parse_difficulty_cap
 from steeproute.progress import ProgressCallback, ProgressEvent, estimate_remaining
 from steeproute.solver.descent import descends_over_cap
 from steeproute.solver.distinctness import SegmentMap, TopNTracker
+from steeproute.solver.grasp_core import UniformDrawBuffer, best_theta_prefix
 from steeproute.solver.reuse import (
     base_segment_id_map,
     blocking_ids,
@@ -380,8 +381,7 @@ class GraspSolver:
         # `.tolist()` per refill) so per-draw consumption is a native list index
         # yielding a Python float, not an ndarray scalar. Starts empty
         # (`index == len`) so the first draw triggers a refill.
-        self._draw_buffer: list[float] = []
-        self._draw_index: int = 0
+        self._draws: UniformDrawBuffer = UniformDrawBuffer(rng)
 
     @property
     def best_so_far(self) -> list[Solution]:
@@ -554,26 +554,7 @@ class GraspSolver:
         incidental; by the fold identity the gate always agrees with the
         incremental test.
         """
-        n = len(edges)
-        cum_length = [0.0] * (n + 1)
-        cum_climb = [0.0] * (n + 1)
-        length = 0.0
-        climb = 0.0
-        for i, e in enumerate(edges, start=1):
-            length += e.length_m
-            climb += e.d_plus_m + e.d_minus_m
-            cum_length[i] = length
-            cum_climb[i] = climb
-        theta = self._params.theta
-        for end in range(n, 0, -1):
-            total_length = cum_length[end]
-            gradient = cum_climb[end] / total_length if total_length > 0.0 else 0.0
-            if gradient < theta:
-                continue
-            prefix = edges[:end]
-            if self._route_slope_ok(prefix):
-                return Solution(edges=prefix, objective=cum_climb[end])
-        return None
+        return best_theta_prefix(edges, self._params.theta, self._route_slope_ok)
 
     def _next_uniform(self) -> float:
         """Next uniform `[0, 1)` draw from the chunked buffer.
@@ -587,14 +568,7 @@ class GraspSolver:
         module docstring's Determinism section for the exactness argument and the
         measurement that motivates the batching.
         """
-        i = self._draw_index
-        buf = self._draw_buffer
-        if i == len(buf):
-            buf = self._rng.random(_RNG_CHUNK).tolist()
-            self._draw_buffer = buf
-            i = 0
-        self._draw_index = i + 1
-        return buf[i]
+        return self._draws.next()
 
     def _construct_one(self) -> Solution:
         """Build one GRASP candidate via greedy-randomized walk extension.

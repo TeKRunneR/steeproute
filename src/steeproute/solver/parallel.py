@@ -16,17 +16,13 @@ here; the only per-worker `SolverParams` change is the iteration budget, produce
 by `dataclasses.replace`. `solver/` and `cli/` are not content-hashed at all, so
 this whole module is invisible to the cache key.
 
-**Sending the graph is the bottleneck, not the solve.** The full contracted graph
-pickles to ~204 MB at r20 (2026-07-08) — every edge carries its
-`vertices_resampled` polyline (and `geometry`), which the **solver never reads**
-(only the renderer, in the parent, does). Shipping that to every worker under
-`spawn` dominates wall-clock and erases the speedup. So workers receive a
-`solver_graph_view` — the same graph with those heavy geometry attributes
-stripped (~72 MB at r20), serialized **once** to bytes in the parent and handed to
-each worker as a cheap buffer copy. GRASP output is byte-identical on the lean
-graph (it reads none of the stripped attributes); the parent keeps the full graph
-for validation/render. The per-worker solve then runs concurrently at full
-single-core throughput.
+**One parent-owned solver state.** For N>1 the parent derives the canonical
+`SolverStaticContext` once, flattens its ordered candidates and segment identities
+into one packed shared-memory block, and gives each spawned worker a small validated
+descriptor. Workers retain read-only array views rather than rebuilding a graph,
+segment map, or adjacency. The former lean-object and shared-pickle paths remain
+private regression/benchmark seams; the parent still keeps the full graph for
+validation and rendering.
 
 **Determinism (FR29 / NFR4).** Output is deterministic and reproducible for a
 fixed `(seed, workers)`, but **differs by design from `--workers 1`** (independent
@@ -44,7 +40,7 @@ and the merged elite *seeds* every worker's tracker for the next round (via
 rather than drifting into independent, redundant local optima — this bounds the
 parallel downside (variance) so the merged result reliably matches/beats
 single-process. `merge_interval <= 0` collapses to a single final merge. The lean
-graph is loaded once per worker process (pool `initializer`), never per round.
+shared state is attached once per worker process (pool `initializer`), never per round.
 
 **Windows spawn.** The pool is pinned to the `spawn` start method explicitly (not
 the platform default) so Linux CI exercises the exact pickling/fresh-import path
@@ -54,7 +50,7 @@ console_scripts.
 
 **Progress.** Per-iteration progress can't cross to workers, so each worker pushes
 a throttled `(worker_id, iteration, best_objective)` snapshot onto a
-`multiprocessing.Manager` queue; a parent daemon thread aggregates the latest
+plain `multiprocessing.Queue`; a parent daemon thread aggregates the latest
 per-worker snapshots and calls `on_progress` on the same `--progress-interval`
 cadence. The queue is a pure side-effect (like the single-process progress
 callback) and never touches the RNG or the iteration sequence.
@@ -63,6 +59,7 @@ callback) and never touches the RNG or the iteration sequence.
 from __future__ import annotations
 
 import dataclasses
+import os
 import pickle
 import queue
 import threading
@@ -70,9 +67,10 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
+from dataclasses import dataclass
 from multiprocessing import get_context
 from multiprocessing.queues import Queue as MpQueue
-from typing import NamedTuple
+from typing import Any, Literal, NamedTuple
 
 import numpy as np
 
@@ -87,6 +85,14 @@ from steeproute.progress import ProgressEvent, throttle
 from steeproute.solver.distinctness import SegmentMap, TopNTracker
 from steeproute.solver.grasp import GraspSolver, SolverStaticContext
 from steeproute.solver.reuse import base_segment_id_map
+from steeproute.solver.shared_state import (
+    SharedBlobDescriptor,
+    SharedBlobOwner,
+    SharedSolverDescriptor,
+    SharedSolverOwner,
+    SharedSolverState,
+    load_shared_blob,
+)
 
 __all__ = [
     "HEAVY_EDGE_ATTRS",
@@ -127,6 +133,35 @@ class ParallelResult(NamedTuple):
     convergence_iteration: int
     effective_workers: int
     segment_map: SegmentMap | None = None
+    cleanup: ParallelCleanup | None = None
+    timings: ParallelTimings | None = None
+
+
+@dataclass(slots=True)
+class ParallelTimings:
+    parent_build_s: float = 0.0
+    startup_s: float = 0.0
+    solve_s: float = 0.0
+    pre_return_s: float = 0.0
+    shared_bytes: int = 0
+
+
+class ParallelCleanup:
+    """Awaitable completion signal for deferred worker/resource teardown."""
+
+    def __init__(self) -> None:
+        self._done: threading.Event = threading.Event()
+        self.elapsed_s: float | None = None
+
+    def wait(self, timeout: float | None = None) -> bool:
+        return self._done.wait(timeout)
+
+    @property
+    def done(self) -> bool:
+        return self._done.is_set()
+
+    def finish(self) -> None:
+        self._done.set()
 
 
 class ParallelProgress(NamedTuple):
@@ -167,6 +202,10 @@ class ParallelGraspFailed(RuntimeError):
       solver, so a failure there is not parallel-specific and propagates as-is
       (falling back would just re-hit it).
     """
+
+    def __init__(self, message: str, cleanup: ParallelCleanup | None = None) -> None:
+        super().__init__(message)
+        self.cleanup: ParallelCleanup | None = cleanup
 
 
 class ParallelGraspInterrupted(KeyboardInterrupt):
@@ -270,6 +309,8 @@ _worker_graph: ContractedGraph | None = None
 # (~8 s per worker per round at r20, 2026-07-08). Persists across a process's round
 # tasks because the pool reuses its processes.
 _worker_static_context: SolverStaticContext | None = None
+_worker_array_state: SharedSolverState | None = None
+_worker_backend: Literal["object", "blob", "array"] = "object"
 
 # The parent's progress queue, handed to each worker once via the pool
 # `initializer` (never per-`submit()`). A plain `multiprocessing.Queue` is
@@ -283,13 +324,46 @@ _worker_progress_queue: MpQueue[tuple[int, int, float]] | None = None
 
 
 def _init_worker(
-    graph_blob: bytes, progress_queue: MpQueue[tuple[int, int, float]] | None
+    payload: bytes | SharedBlobDescriptor | SharedSolverDescriptor,
+    progress_queue: MpQueue[tuple[int, int, float]] | None,
+    backend: Literal["object", "blob", "array"] = "object",
+    ready_queue: MpQueue[tuple[int, bool, str]] | None = None,
+    start_event: Any | None = None,
 ) -> None:  # pragma: no cover
-    """Pool initializer: stash the lean graph and progress queue as per-process globals (once)."""
-    global _worker_graph, _worker_progress_queue, _worker_static_context
-    _worker_graph = pickle.loads(graph_blob)
-    _worker_progress_queue = progress_queue
-    _worker_static_context = None
+    """Attach one worker backend and acknowledge readiness exactly once."""
+    global _worker_array_state, _worker_backend, _worker_graph
+    global _worker_progress_queue, _worker_static_context
+    try:
+        _worker_backend = backend
+        _worker_progress_queue = progress_queue
+        _worker_static_context = None
+        _worker_graph = None
+        _worker_array_state = None
+        if backend == "object":
+            if not isinstance(payload, bytes):
+                raise TypeError("object backend requires bytes")
+            _worker_graph = pickle.loads(payload)
+        elif backend == "blob":
+            if not isinstance(payload, SharedBlobDescriptor):
+                raise TypeError("blob backend requires a shared-blob descriptor")
+            graph = load_shared_blob(payload)
+            if not isinstance(graph, ContractedGraph):
+                raise TypeError("shared blob did not contain a ContractedGraph")
+            _worker_graph = graph
+        elif backend == "array":
+            if not isinstance(payload, SharedSolverDescriptor):
+                raise TypeError("array backend requires a shared-solver descriptor")
+            _worker_array_state = SharedSolverState(payload)
+        else:
+            raise ValueError(f"unknown parallel backend {backend!r}")
+    except BaseException as exc:
+        if ready_queue is not None:
+            ready_queue.put((os.getpid(), False, repr(exc)))
+        raise
+    if ready_queue is not None:
+        ready_queue.put((os.getpid(), True, ""))
+    if start_event is not None:
+        start_event.wait()
 
 
 def _run_round_worker(  # pragma: no cover
@@ -317,9 +391,6 @@ def _run_round_worker(  # pragma: no cover
     parent-side coverage); exercised end-to-end by the determinism tests.
     """
     global _worker_static_context
-    graph = _worker_graph
-    if graph is None:  # defensive: initializer must have run
-        raise RuntimeError("worker graph not initialised")
     worker_params = dataclasses.replace(params, iter_budget=round_budget)
     rng = np.random.default_rng(seed_sequence)
 
@@ -337,17 +408,34 @@ def _run_round_worker(  # pragma: no cover
 
         callback = throttle(_emit, progress_interval)
 
-    # Reuse every graph-derived invariant across rounds, not only adjacency.
-    solver = GraspSolver(
-        graph,
-        worker_params,
-        rng,
-        progress_callback=callback,
-        initial_solutions=elite,
-        static_context=_worker_static_context,
-    )
+    if _worker_backend == "array":
+        from steeproute.solver.array_grasp import ArrayGraspSolver
+
+        state = _worker_array_state
+        if state is None:
+            raise RuntimeError("worker shared state not initialised")
+        solver = ArrayGraspSolver(
+            state,
+            worker_params,
+            rng,
+            progress_callback=callback,
+            initial_solutions=elite,
+        )
+    else:
+        graph = _worker_graph
+        if graph is None:
+            raise RuntimeError("worker graph not initialised")
+        solver = GraspSolver(
+            graph,
+            worker_params,
+            rng,
+            progress_callback=callback,
+            initial_solutions=elite,
+            static_context=_worker_static_context,
+        )
     solutions = solver.run()
-    if _worker_static_context is None:
+    if _worker_backend != "array" and _worker_static_context is None:
+        assert isinstance(solver, GraspSolver)
         _worker_static_context = solver.static_context
     return _WorkerResult(solutions, solver.convergence_status, solver.convergence_iteration)
 
@@ -437,6 +525,7 @@ def run_parallel_grasp(
     merge_interval: int = 0,
     progress_interval: float | None = None,
     on_progress: Callable[[ParallelProgress], None] | None = None,
+    _backend: Literal["object", "blob", "array"] = "array",
 ) -> ParallelResult:
     """Fan `GraspSolver` across `workers` processes with island-model elite migration.
 
@@ -469,11 +558,12 @@ def run_parallel_grasp(
     `concurrent.futures`' atexit hook still joins the workers before the process
     exits.
     """
+    call_start = time.monotonic()
+    timings = ParallelTimings()
     rounds = round_count(params.iter_budget, merge_interval, workers)
     plan = round_plan(params.iter_budget, workers, rounds)
     eff_workers = len(plan[0])
     seed_sequences = np.random.SeedSequence(seed).spawn(eff_workers * rounds)
-    segment_map = base_segment_id_map(contracted)
     context = get_context("spawn")
     emit_progress = on_progress is not None and progress_interval is not None
 
@@ -492,13 +582,43 @@ def run_parallel_grasp(
     # handle/semaphore limit. The budget math / `base_segment_id_map` above are shared
     # with the single-process solver, so failures there are not parallel-specific and
     # are left to propagate (falling back would just re-hit them).
+    resource: SharedBlobOwner | SharedSolverOwner | None = None
     try:
         worker_graph = contracted if contracted.lean else solver_graph_view(contracted)
-        graph_blob = pickle.dumps(worker_graph)
+        if _backend == "array":
+            static_context = GraspSolver(
+                worker_graph, params, np.random.default_rng(0)
+            ).static_context
+            segment_map = dict(static_context.segment_map)
+            resource = SharedSolverOwner(static_context)
+            payload: bytes | SharedBlobDescriptor | SharedSolverDescriptor = resource.descriptor
+            del static_context
+        else:
+            segment_map = base_segment_id_map(worker_graph)
+            graph_blob = pickle.dumps(worker_graph)
+            if _backend == "blob":
+                resource = SharedBlobOwner(graph_blob)
+                payload = resource.descriptor
+                del graph_blob
+            elif _backend == "object":
+                payload = graph_blob
+            else:
+                raise ValueError(f"unknown parallel backend {_backend!r}")
+        del worker_graph
         progress_queue: MpQueue[tuple[int, int, float]] | None = (
             context.Queue() if emit_progress else None
         )
+        ready_queue: MpQueue[tuple[int, bool, str]] = context.Queue()
+        start_event = context.Event()
+        timings.parent_build_s = time.monotonic() - call_start
+        timings.shared_bytes = (
+            payload.size
+            if isinstance(payload, (SharedBlobDescriptor, SharedSolverDescriptor))
+            else len(payload)
+        )
     except Exception as exc:
+        if resource is not None:
+            resource.close_unlink()
         raise ParallelGraspFailed(
             f"could not set up the parallel solve ({exc!r}); most likely out of "
             f"memory serializing the graph at workers={eff_workers}"
@@ -519,12 +639,22 @@ def run_parallel_grasp(
     # exit — an ~8 s dead tail at r20 (2026-07-14) between the last collected result
     # and validate/render starting. The `finally` below shuts down `wait=False`
     # instead, overlapping worker teardown with the caller's validation/render.
-    pool = ProcessPoolExecutor(
-        max_workers=eff_workers,
-        mp_context=context,
-        initializer=_init_worker,
-        initargs=(graph_blob, progress_queue),
-    )
+    cleanup = ParallelCleanup()
+    try:
+        pool = ProcessPoolExecutor(
+            max_workers=eff_workers,
+            mp_context=context,
+            initializer=_init_worker,
+            initargs=(payload, progress_queue, _backend, ready_queue, start_event),
+        )
+    except Exception as exc:
+        if resource is not None:
+            resource.close_unlink()
+        ready_queue.close()
+        if progress_queue is not None:
+            progress_queue.close()
+        raise ParallelGraspFailed(f"could not create the parallel executor ({exc!r})") from exc
+    ready = False
     try:
         if progress_queue is not None and on_progress is not None and progress_interval:
             drain_thread = threading.Thread(
@@ -550,6 +680,37 @@ def run_parallel_grasp(
                 ): worker_id
                 for worker_id in range(eff_workers)
             }
+            if not ready:
+                seen: set[int] = set()
+                deadline = time.monotonic() + 60.0
+                while len(seen) < eff_workers:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0.0:
+                        raise ParallelGraspFailed(
+                            "timed out waiting for worker initialization", cleanup
+                        )
+                    try:
+                        pid, success, detail = ready_queue.get(timeout=min(remaining, 1.0))
+                    except queue.Empty:
+                        if any(
+                            future.done() and future.exception() is not None
+                            for future in future_to_id
+                        ):
+                            raise ParallelGraspFailed(
+                                "a worker failed during initialization", cleanup
+                            ) from None
+                        continue
+                    if not success:
+                        raise ParallelGraspFailed(
+                            f"a worker failed during initialization: {detail}", cleanup
+                        )
+                    seen.add(pid)
+                ready = True
+                start_event.set()
+                timings.startup_s = time.monotonic() - call_start - timings.parent_build_s
+                if _backend == "blob" and resource is not None:
+                    resource.close_unlink()
+                    resource = None
             try:
                 for future in as_completed(future_to_id):
                     round_results[future_to_id[future]] = future.result()
@@ -557,7 +718,8 @@ def run_parallel_grasp(
                 # Shutdown happens in the `finally`; the dead pool has nothing to wait on.
                 raise ParallelGraspFailed(
                     f"a worker process died ({exc}); most likely out of memory at "
-                    f"workers={eff_workers}"
+                    f"workers={eff_workers}",
+                    cleanup,
                 ) from exc
             except KeyboardInterrupt:
                 # Salvage: keep whatever this round completed (each was seeded
@@ -577,11 +739,16 @@ def run_parallel_grasp(
             elite, status, convergence_iteration = _merge(segment_map, params, completed)
             for worker_id in range(eff_workers):
                 iteration_base[worker_id] += round_budgets[worker_id]
+        timings.solve_s = max(
+            0.0,
+            time.monotonic() - call_start - timings.parent_build_s - timings.startup_s,
+        )
     finally:
         # Signal the workers to exit but do NOT wait for their interpreter teardown
         # — see the `ProcessPoolExecutor` construction above. `cancel_futures` drops
         # queued never-started tasks on the interrupt/failure paths (a no-op on the
         # success path, where every future was already collected).
+        start_event.set()
         pool.shutdown(wait=False, cancel_futures=True)
         stop.set()
         if drain_thread is not None:
@@ -594,8 +761,42 @@ def run_parallel_grasp(
             progress_queue.cancel_join_thread()
             progress_queue.close()
 
+        owned_resource, resource = resource, None
+
+        def _reap() -> None:
+            cleanup_start = time.monotonic()
+            try:
+                pool.shutdown(wait=True, cancel_futures=True)
+                if owned_resource is not None:
+                    owned_resource.close_unlink()
+                ready_queue.cancel_join_thread()
+                ready_queue.close()
+            finally:
+                cleanup.elapsed_s = time.monotonic() - cleanup_start
+                cleanup.finish()
+
+        threading.Thread(target=_reap, daemon=True).start()
+
+    timings.pre_return_s = time.monotonic() - call_start
+
     if interrupted:
         raise ParallelGraspInterrupted(
-            ParallelResult(elite, "interrupted", convergence_iteration, eff_workers, segment_map)
+            ParallelResult(
+                elite,
+                "interrupted",
+                convergence_iteration,
+                eff_workers,
+                segment_map,
+                cleanup,
+                timings,
+            )
         )
-    return ParallelResult(elite, status, convergence_iteration, eff_workers, segment_map)
+    return ParallelResult(
+        elite,
+        status,
+        convergence_iteration,
+        eff_workers,
+        segment_map,
+        cleanup,
+        timings,
+    )

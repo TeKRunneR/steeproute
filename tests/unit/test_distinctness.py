@@ -244,6 +244,49 @@ def test_total_objective_on_empty_tracker_is_zero() -> None:
     assert tracker.current_top() == []
 
 
+@pytest.mark.parametrize("j_max", (0.0, 0.30, 1.0))
+def test_precanonicalized_admission_uses_the_same_policy(j_max: float) -> None:
+    candidates = [
+        _make_solution([], 1.0),
+        _make_solution([], 2.0),
+        _make_solution([(0, 1, 0), (1, 2, 0)], 10.0),
+        _make_solution([(0, 1, 0), (2, 3, 0)], 11.0),
+        _make_solution([(10, 11, 0)], 9.0),
+        _make_solution([(0, 1, 0), (1, 2, 0)], 12.0),
+    ]
+    identities = sorted({(e.node_u, e.node_v, e.key) for s in candidates for e in s.edges})
+    codes = {identity: index for index, identity in enumerate(identities)}
+
+    def canonicalize(solution: Solution) -> distinctness.CanonicalSet:
+        return frozenset(codes[(e.node_u, e.node_v, e.key)] for e in solution.edges)
+
+    ordinary = TopNTracker(n=3, j_max=j_max)
+    coded = TopNTracker(n=3, j_max=j_max, canonicalizer=canonicalize)
+    for solution in candidates:
+        assert coded.consider_precanonicalized(
+            solution, canonicalize(solution)
+        ) == ordinary.consider(solution)
+        assert coded.current_top() == ordinary.current_top()
+
+
+def test_precanonicalized_admission_rejects_mismatch_and_unknown_edges() -> None:
+    known = _make_solution([(0, 1, 0)], 1.0)
+
+    def canonicalize(solution: Solution) -> distinctness.CanonicalSet:
+        values: set[int] = set()
+        for edge in solution.edges:
+            if (edge.node_u, edge.node_v, edge.key) != (0, 1, 0):
+                raise ValueError("unknown directed edge identity")
+            values.add(7)
+        return frozenset(values)
+
+    tracker = TopNTracker(n=2, j_max=0.3, canonicalizer=canonicalize)
+    with pytest.raises(ValueError, match="does not match"):
+        tracker.consider_precanonicalized(known, frozenset({8}))
+    with pytest.raises(ValueError, match="unknown directed"):
+        tracker.consider(_make_solution([(9, 10, 0)], 2.0))
+
+
 def test_consider_replaces_overlapping_incumbent_when_new_is_better() -> None:
     """Overlap + better-objective newcomer replaces the (single) overlapping incumbent."""
     tracker = TopNTracker(n=3, j_max=0.30)

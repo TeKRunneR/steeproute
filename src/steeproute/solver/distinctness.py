@@ -27,17 +27,18 @@ validator consumes `current_top()`'s output. No CLI / config dependency: `n` and
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import NamedTuple
 
 from steeproute.models import Solution
 
-__all__ = ["SegmentMap", "TopNTracker", "jaccard_distance"]
+__all__ = ["CanonicalSet", "SegmentMap", "TopNTracker", "jaccard_distance"]
 
 # Directed edge identity `(node_u, node_v, key)` → the undirected base-segment
 # ids it occupies. Built once per graph by `solver.reuse.base_segment_id_map`
 # and threaded in so distinctness keys on the same identity as the reuse rule.
 SegmentMap = Mapping[tuple[int, int, int], frozenset[tuple[int, int, int]]]
+CanonicalSet = frozenset[tuple[int, int, int] | int]
 
 
 def _canonical_edge_set(
@@ -61,9 +62,7 @@ def _canonical_edge_set(
     return frozenset(ids)
 
 
-def _jaccard_from_sets(
-    edges_a: frozenset[tuple[int, int, int]], edges_b: frozenset[tuple[int, int, int]]
-) -> float:
+def _jaccard_from_sets(edges_a: CanonicalSet, edges_b: CanonicalSet) -> float:
     """Jaccard distance over two already-canonical identity sets.
 
     The set math of `jaccard_distance`, split out so `TopNTracker` can compare
@@ -101,7 +100,7 @@ class _HeldEntry(NamedTuple):
     """
 
     solution: Solution
-    canonical: frozenset[tuple[int, int, int]]
+    canonical: CanonicalSet
     sort_key: tuple[float, tuple[tuple[int, int, int], ...]]
 
 
@@ -171,17 +170,27 @@ class TopNTracker:
     attributes.
     """
 
-    def __init__(self, n: int, j_max: float, segment_map: SegmentMap | None = None) -> None:
+    def __init__(
+        self,
+        n: int,
+        j_max: float,
+        segment_map: SegmentMap | None = None,
+        *,
+        canonicalizer: Callable[[Solution], CanonicalSet] | None = None,
+    ) -> None:
         if n < 1:
             raise ValueError(f"n must be >= 1, got {n}")
         if not (0.0 <= j_max <= 1.0):
             raise ValueError(f"j_max must be in [0.0, 1.0], got {j_max}")
+        if segment_map is not None and canonicalizer is not None:
+            raise ValueError("segment_map and canonicalizer are mutually exclusive")
         self._n: int = n
         self._j_max: float = j_max
         # `None` → directed `(u, v, key)` distinctness; a map → undirected
         # base-segment distinctness, shared with the reuse rule so admission and
         # the validator's set-level check see one identity.
         self._segment_map: SegmentMap | None = segment_map
+        self._canonicalizer: Callable[[Solution], CanonicalSet] | None = canonicalizer
         self._held: list[_HeldEntry] = []
 
     def consider(self, solution: Solution) -> bool:
@@ -196,11 +205,25 @@ class TopNTracker:
         objectives as finite `D+ + D-` sums, so this only fires on an upstream
         bug.
         """
+        candidate_set: CanonicalSet
+        if self._canonicalizer is None:
+            candidate_set = _canonical_edge_set(solution, self._segment_map)
+        else:
+            candidate_set = self._canonicalizer(solution)
+        return self._consider(solution, candidate_set)
+
+    def consider_precanonicalized(self, solution: Solution, canonical: CanonicalSet) -> bool:
+        """Admit a solution paired with a verified coded canonical identity."""
+        if self._canonicalizer is None:
+            raise ValueError("pre-canonicalized admission requires a canonicalizer")
+        expected = self._canonicalizer(solution)
+        if canonical != expected:
+            raise ValueError("coded canonical identity does not match solution edges")
+        return self._consider(solution, canonical)
+
+    def _consider(self, solution: Solution, candidate_set: CanonicalSet) -> bool:
         if not math.isfinite(solution.objective):
             raise ValueError(f"solution.objective must be finite, got {solution.objective}")
-        # Candidate's canonical set: once per consider() call, not once per
-        # held comparison. Held sets were cached at insertion.
-        candidate_set = _canonical_edge_set(solution, self._segment_map)
         if self._j_max == 1.0:
             # Inclusive endpoint: the overlap threshold is zero, and a Jaccard
             # distance can never be negative. Skip all pairwise set work.
