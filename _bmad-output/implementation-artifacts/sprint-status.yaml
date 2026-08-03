@@ -28,7 +28,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-24
-last_updated: 2026-08-01  # story 16-6 -> done
+last_updated: 2026-08-03  # story 16-7 and epic 16 -> done
 
 project: bmad-test
 project_key: NOKEY
@@ -204,11 +204,11 @@ development_status:
   # win; 16.6 is the design-only structural fix (POC-gated). See
   # sprint-change-proposal-2026-07-24-ownership-oriented-performance.md.
   # ---------------------------------------------------------------------------
-  epic-16: in-progress    # Ownership-Oriented Performance Pass
+  epic-16: done           # Ownership-Oriented Performance Pass
   16-1-query-orchestration-owned-filter-lean-contracted-graph-validation-context: done
   16-2-setup-owned-data-cleanup-and-smoothing-resampling-fusion: done
   16-3-geometry-optional-query-load-and-schema-v3-cache: done
   16-4-osmnx-in-place-component-consume-ingestion-adapter: done
   16-5-solver-static-context-reuse-and-pure-python-loop-cleanup: done
   16-6-shared-memory-array-solver-state: done
-  16-7-r20-r50-re-measure-and-what-next-close-out: backlog
+  16-7-r20-r50-re-measure-and-what-next-close-out: done

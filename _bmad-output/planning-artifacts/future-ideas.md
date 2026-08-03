@@ -62,6 +62,16 @@ Epic 16 (this review does not cover them): the **S5-deep custom Overpass→graph
 **per-stage multiprocess pipeline parallelization** — each still routes through a future
 correct-course, now scoped from Epic 16's Story 16.7 residuals rather than 14.6.
 
+**Decided 2026-08-03 (Epic 16 close-out):** the first full r50 setup and immediate query succeeded
+on 15 GiB RAM + 4 GiB swap, but setup peaked at 13,393,268 KiB and graph build still took 258.96 s.
+The evidence supports a focused, POC-gated correct-course proposal for the **S5-deep custom
+Overpass-JSON→graph parser**; no follow-on is authorized here. Generic **per-stage multiprocessing**
+remains deferred because the r50 stage residuals do not yet establish a memory-safe transfer design.
+The stages 6–7 flat-data rider stays available only as input to a named query-stage investigation,
+and the separate consuming/vendored `simplify_graph` fork is stopped. Full provenance, r20/r50 phase
+tables, and the non-additive Epic 16 ledger are in
+`research/steeproute-ownership-performance-closeout-2026-08-03.md`.
+
 ## App
 Make a thin web UI over the two existing CLIs (setup + solver): pick a center
 point + radius on a map, run the pipeline, view result routes, browse old runs.

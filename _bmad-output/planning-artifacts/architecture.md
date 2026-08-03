@@ -236,7 +236,7 @@ Exact file names within `pipeline/` and `solver/` are placeholders; adjust durin
 **Decision summary:**
 
 - **3a**: Pure-function pipeline with a thin orchestrator in `pipeline/__init__.py`.
-- **3b**: `steeproute-setup` runs stages 1–7 (parameter-independent); `steeproute` runs stages 8–9 + solver (parameter-dependent).
+- **3b**: `steeproute-setup` runs stages 1–5 (parameter-independent); `steeproute` runs stages 6–9 + solver (parameter-dependent).
 - **3c**: Primary data structure is `networkx.MultiDiGraph` with a documented edge-attribute contract; structured stage I/O uses dataclasses from `models.py`.
 
 **Pipeline stages:**
@@ -381,7 +381,7 @@ Structured stage inputs/outputs (beyond simple tuples) use dataclasses declared 
 └── areas/
     └── <cache-key-hash>/
         ├── manifest.json          # full entry metadata (written LAST, atomically)
-        ├── graph.pkl              # networkx MultiDiGraph (stages 1–7 output)
+        ├── graph.pkl              # networkx MultiDiGraph (stages 1–5 output, raw elevations)
         └── bounds.geojson         # area polygon, for debug viz + diagnostics
 ```
 
@@ -486,13 +486,13 @@ rotated-rectangle generalization (Epic 15) touches none of Category 5. No
 
 **Parallelism realized (Story 14.4):** `--workers N` (default 4 as of 2026-07-28, `spec-cli-defaults-and-setup-radius-cap.md`; was 1) fans independent GRASP restarts across processes. It is plumbed **entirely at the CLI/orchestration layer** (`solver/parallel.py` + `cli/query.py`) and deliberately does **not** enter `SolverParams`/`models.py` — `models.py` is content-hashed (`_PIPELINE_CONTENT_GLOBS`), so a `workers` field would invalidate every prepared cache for a knob the solver never reads. The only per-worker `SolverParams` change is a smaller `iter_budget` via `dataclasses.replace`. Contract:
 
-- **`--workers 1` is byte-identical to pre-14.4** — the CLI keeps the unchanged single-process `GraspSolver(...).run()` path (goldens + NFR4 untouched, no rebake); the parallel machinery is never entered at the default.
+- **`--workers 1` is byte-identical to pre-14.4** — an explicit single-worker invocation keeps the unchanged single-process `GraspSolver(...).run()` path (goldens + NFR4 untouched, no rebake); the parallel machinery is never entered on that path.
 - **N>1**: a `ProcessPoolExecutor` pinned to the **spawn** start method (Windows-safe; spawn forced everywhere so Linux CI runs the same pickling/fresh-import path) gives each worker a **lean graph view** (see below), `iter_budget // N` (+ remainder to worker 0, clamped so no worker gets 0), and an RNG from `np.random.SeedSequence(seed).spawn(N)[i]`. Results merge through one fresh `TopNTracker(n, j_max, segment_map)` in **worker-id order** (collected into id-indexed slots, never completion order — the tracker is order-sensitive under overlaps) then each worker's returned `current_top()` order.
 - **Worker graph payload (the thing that makes it actually faster)**: a contracted graph carrying every edge's `vertices_resampled` polyline + shapely `geometry` is ~204 MB at r20 — pure rendering payloads the **solver never reads**. Shipping that to each worker under spawn erased the speedup (measured: zero gain, the ~204 MB pickle/unpickle × N swamped the solve). The payload is therefore the lean graph (`HEAVY_EDGE_ATTRS = {vertices_resampled, geometry}` absent, ~72 MB at r20), serialized **once** to bytes in the parent and handed to each worker as a cheap buffer copy. GRASP output is byte-identical either way (it reads none of those attrs).
   - **Since Story 16.1 the leanness is produced at stage 9, not rebuilt here.** `contract_climbs` never attaches the heavy attrs (`lean=True`), so `run_parallel_grasp` pickles the contracted graph as-is; `solver_graph_view` still exists and is applied to any `ContractedGraph` that does *not* advertise the contract (a test fixture, an external caller — the conservative default). This removed a full ~327k-edge graph rebuild per r20 run and is most of that story's peak-RSS reduction (2.43 → 1.83 GB measured).
 - **Shared array state (Story 16.6).** The lean-graph object payload remains available only through private object/shared-blob regression seams. The N>1 production backend builds one current `SolverStaticContext` in the parent, then packs its already-filtered and already-sorted candidates into one versioned shared-memory block: an all-node dense domain, a separate junction-filtered start pool, candidate columns and offsets, blocking-segment CSR, full base-segment CSR, and a directed-edge lookup permutation. Spawned workers attach read-only NumPy views and construct ordinary Python `Edge` values only for selected walks; they do not receive a graph, build adjacency, or retain a tuple-key segment map. Integer-space Jaccard admission delegates to the same `TopNTracker` replacement policy as the object solver, and both representations share the buffered RNG and prefix-finalization implementations. Exact committed vectors pin every `Solution`/`Edge` field and float bit across object, shared-blob, and array backends before this path is promoted.
 - **Shared-memory lifecycle (Story 16.6).** Every initializer sends one PID-unique readiness ACK only after attach and validation. The parent remains the sole unlink owner until every worker can read; blob workers close their attachment immediately after unpickling, while array workers retain their handle for ndarray-view lifetime. `shutdown(wait=False)` still preserves the non-blocking validation/render handoff. Ownership transfers at that point to one daemon reaper, which waits for process termination before idempotent close/unlink. `ParallelResult.cleanup` is an awaitable test/benchmark seam; production does not await it. Allocation, executor, initializer, broken-pool, normal, and interrupt exits all translate parallel-specific failures through `ParallelGraspFailed` and leave cleanup with exactly one owner.
-- **Shared-state measurements (Story 16.6, 2026-07-31).** On the committed Grenoble benchmark graph, the lean object/shared-blob payload was 451,158 bytes and the packed CSR block 239,656 bytes. At workers 2/4/8, process-tree private memory (KiB) was object 232,472/321,028/497,836, shared blob 231,656/319,280/494,240, and array 220,184/298,356/454,688; PSS and RSS were recorded alongside private memory in `test_parallel_speedup.py` so shared pages are not mistaken for owned copies. The component run measured blob copy 1.96 ms, attach+unpickle 23.09 ms, CSR build 95.81 ms, and CSR attach 1.44 ms. A real retained-cache r20 query with the full explicit 1M-iteration workload completed in 58.75 s internally / 71.73 s externally at 1,810,692 KiB peak RSS, returned objective 20,768.0, and had zero validation failures; the Story 16.5 object-worker reference was 55.38 s internally / 69.64 s externally at 1,882,640 KiB, within this machine's recorded wall-time variance while the array path reduced peak RSS by 71,948 KiB. A fresh-data setup immediately followed by query measured 187.11 + 62.28 = 249.39 s internal and 211.28 + 75.54 = 286.82 s external, with 3,944,404 KiB setup peak and 1,815,284 KiB query peak. The r50 setup was not launched on this 15 GiB RAM + 4 GiB swap machine: the maintained r50 DEM contract alone requires about 1.6 GB and the previously measured r20 setup already peaks near 4 GB before the roughly sixfold graph-area increase, so an OOM probe would not be operationally safe.
+- **Shared-state measurements (Story 16.6, 2026-07-31; active-call review record).** On the committed Grenoble benchmark graph, the lean pickle was 451,114 bytes and the packed CSR block 239,656 bytes. At workers 2/4/8, process-tree RSS/PSS/private memory (KiB) was object 311,900/253,215/230,724, 433,024/334,922/313,412, and 705,752/513,300/490,648; shared blob 293,660/242,436/222,268, 418,568/326,526/306,492, and 700,252/508,118/485,496; array 288,564/236,271/215,296, 413,816/314,819/292,924, and 670,968/472,809/449,432. Each case sampled only while that backend owned its active workers and excluded descendants left briefly visible by the preceding executor, superseding the earlier pre-review 451,158-byte and private-memory figures. PSS and private memory accompany RSS so multiply counted shared pages are not mislabeled as owned copies. The component run measured blob copy 1.96 ms, attach+unpickle 23.09 ms, CSR build 95.81 ms, and CSR attach 1.44 ms. A retained-cache r20 query with the full explicit 1M-iteration workload completed in 58.75 s internally / 71.73 s externally at 1,810,692 KiB peak RSS, returned objective 20,768.0, and had zero validation failures; the Story 16.5 object-worker reference was 55.38 s internally / 69.64 s externally at 1,882,640 KiB, within this machine's recorded wall-time variance while the array path reduced peak RSS by 71,948 KiB. Story 16.6's fresh-data setup followed by query measured 187.11 + 62.28 = 249.39 s internal and 211.28 + 75.54 = 286.82 s external, with 3,944,404 KiB setup peak and 1,815,284 KiB query peak. Story 16.7's later one-shot scale trace on the same 15 GiB RAM + 4 GiB swap machine established that r50 fits, narrowly: setup completed in 1,597.37 s internally / 1,750.66 s externally at 13,393,268 KiB peak RSS with no swap, and its immediate query completed in 110.29 s / 138.82 s at 5,332,724 KiB, returning 10/10 valid routes. Setup's 13 GiB-class peak is the measured operational boundary; it must not be inferred from the much lower query peak.
   - **The parent no longer holds a heavy contracted graph at all.** Validation reads only metrics/tags, and `output.render` resolves geometry off the **operational** graph via `super_edge_to_base` — so nothing needs geometry on the contracted graph. (Superseded wording: this bullet previously said "the parent keeps the full graph for validation/render".)
 - **Island-model elite migration (`--merge-interval`, default 250 000 total iters)**: `iter_budget` is split into rounds of ~`merge-interval` iterations; after each round the workers' top-Ns are merged and the merged elite **seeds every worker's tracker** for the next round (`GraspSolver(initial_solutions=...)`), so workers cooperate toward one shared top-N instead of drifting into independent, redundant local optima. This **bounds the parallel downside (variance)** so the merged result reliably matches/beats single-process — measured r20/1M: single 20991, independent-islands (no migration) 20540, migration (4 rounds) **21100** (beats single). `--merge-interval 0` disables migration (one final merge). Construction is memoryless random-restart, so seeding the elite changes only what a worker *keeps*, never what it generates — FR29-safe.
 - **Per-round static context (Story 16.5).** The `_merge` itself is ~2 ms and the parent already builds its base-segment map once. Each worker now derives one frozen `SolverStaticContext` on its first round — sorted/optionally-junction-filtered node pool, base-segment map, non-exempt IDs, and adjacency — then reuses that exact object for later migration rounds. Compatibility is fail-closed on contracted-graph identity plus the three parameters that shape the derived values (`start_at_junction`, `difficulty_cap`, `max_descent_slope`); its maps are exposed through read-only proxies. This supersedes the narrower `GraspSolver(adjacency=...)` / `_worker_adjacency` cache: the public/default construction path remains available, but workers cache `_worker_static_context`. The parent passes its existing segment map through `ParallelResult` to validation, eliminating one more full graph scan without passing worker state across processes. The lean graph is still loaded once per worker process (pool `initializer`), never per round; shared graph/CSR ownership remains Story 16.6.
@@ -953,7 +953,7 @@ steeproute/                              # repo root (currently `bmad-test/`; re
 │       │   ├── setup.py                 # `steeproute-setup` entry point
 │       │   └── _shared.py               # shared click decorators, run_entry_point wrapper
 │       ├── pipeline/
-│       │   ├── __init__.py              # orchestrator: wires stages 1–7 (setup) and 8–9 (query)
+│       │   ├── __init__.py              # orchestrator: wires stages 1–5 (setup) and 6–9 (query)
 │       │   ├── osm.py                   # stages 1–2
 │       │   ├── smoothing.py             # stages 3–4, 6
 │       │   ├── dem.py                   # stage 5
@@ -1068,8 +1068,8 @@ steeproute/                              # repo root (currently `bmad-test/`; re
 ```
 cli/query.py::main
   → cli/_shared.py (parse area, flags, seed)
-  → cache.py (load_for_area) ── returns prepared graph (stages 1–7 output)
-  → pipeline.__init__ (run_query_stages 8–9) ── returns contracted climb-graph
+  → cache.py (load_for_area) ── returns prepared graph (stages 1–5 output, raw elevations)
+  → pipeline.__init__ (run_query_stages 6–9) ── returns contracted climb-graph
   → solver/grasp.py (GraspSolver.run) ── returns list[Solution]   [may raise KeyboardInterrupt]
   → validator.py (validate) ── returns ValidatedRouteSet
   → output.py (render) ── writes HTML + JSON per route, atomic
@@ -1081,13 +1081,11 @@ cli/query.py::main
 ```
 cli/setup.py::main
   → cli/_shared.py (parse area, flags)
-  → pipeline.__init__ (run_setup_stages 1–7) ── builds MultiDiGraph with per-edge attributes
+  → pipeline.__init__ (run_setup_stages 1–5) ── builds MultiDiGraph with raw sampled elevations
       ↳ pipeline/osm.py       (stages 1–2: OSM load + filter)
       ↳ pipeline/smoothing.py (stage 3: polyline smoothing)
       ↳ pipeline/smoothing.py (stage 4: resample)
       ↳ pipeline/dem.py       (stage 5: DEM sample)
-      ↳ pipeline/smoothing.py (stage 6: elevation smoothing)
-      ↳ pipeline/climbs.py    (stage 7: per-edge metrics)
   → cache.py (write_entry) ── atomic write of graph.pkl + manifest + index update
   → cli/setup.py (summary)
 ```
@@ -1203,7 +1201,7 @@ Re-runs the solver on the named fixture(s), writes new goldens to disk. Updates 
 All decisions cross-reference consistently. Spot-checked couplings:
 
 - `cli/_shared.py`'s `run_entry_point` wrapper is referenced by Category 2, Category 5b, and Category 10 with consistent semantics.
-- Category 3's pipeline split (`setup` = stages 1–7, `query` = 8–9) aligns with Category 4's cache scope.
+- Category 3's pipeline split (`setup` = stages 1–5, `query` = 6–9) aligns with Category 4's cache scope.
 - Category 4's `pipeline_content_hash` covers exactly the modules Category 3 assigns to setup stages.
 - Category 5's `convergence_status` three-value contract feeds Category 9's HTML metadata.
 - Category 6's `ValidatedRouteSet` feeds Category 9's renderer and Category 10's exit-code computation.
