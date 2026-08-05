@@ -7,8 +7,7 @@ GRASP optimizer for distinct routes that maximize sustained steepness, writing e
 self-contained HTML report with an interactive map and elevation profile.
 
 The routes are point-to-point **exploration aids, not ready-to-run loops** — they show
-*where the vertical lives* in an area (often with awkward trailheads or long chained
-climbs), and you sketch your actual outing from them.
+*where the vertical lives* in an area, and you sketch your actual outing from them.
 
 **Coverage:** trail data comes from OpenStreetMap (available for most of the world);
 elevation is downloaded from the IGN RGE ALTI service, which covers **France**. There is
@@ -34,8 +33,7 @@ anywhere in France. It is a personal project.
   gallery runs (radius 16–20 km) with `--workers 4` peaked in the 3–3.5 GB range.
   Developed on a 32 GB laptop; if memory is tight, lower `--workers` or shrink the area —
   both cut peak.
-- **Platform.** Developed and tested on Windows. Linux is expected to work but is not
-  actively tested.
+- **Platform.** Developed and tested on Windows and WSL2.
 
 ## Quickstart
 
@@ -148,16 +146,6 @@ lists the exact commands to reproduce them.
 
 > The reports are self-contained HTML — GitHub shows the source, so download and open
 > them locally (or clone the repo) for the interactive map and hover-linked profile.
-
-* * *
-
-## Project Docs
-
-For how to install uv and Python, see [installation.md](docs/installation.md).
-
-For development workflows, see [development.md](docs/development.md).
-
-For instructions on publishing to PyPI, see [publishing.md](docs/publishing.md).
 
 * * *
 
