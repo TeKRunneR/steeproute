@@ -12,7 +12,8 @@ The routes are point-to-point **exploration aids, not ready-to-run loops** — t
 **Coverage:** trail data comes from OpenStreetMap (available for most of the world);
 elevation is downloaded from the IGN RGE ALTI service, which covers **France**. There is
 no option to supply a different elevation source yet, so in practice the tool works
-anywhere in France. It is a personal project.
+anywhere in France. It is a personal project, developed with Claude Code and Codex using
+the [BMAD method](https://github.com/bmad-code-org/BMAD-METHOD).
 
 ## Known Limitations
 
